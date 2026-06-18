@@ -24,7 +24,33 @@ RUN npm install --omit=dev
 RUN node <<'NODE'
 const fs = require('fs');
 let s = fs.readFileSync('runner.js', 'utf8');
+const canvasHotfixMarker = "  page = context.pages()[0] || await context.newPage();";
+const canvasHotfixPatch = [
+  "  page = context.pages()[0] || await context.newPage();",
+  "  // ALPS_CANVAS_RGBAA_HOTFIX: repair invalid rgbaa(...) chart colors before page scripts run.",
+  "  await page.addInitScript(() => {",
+  "    const nativeAddColorStop = CanvasGradient.prototype.addColorStop;",
+  "    CanvasGradient.prototype.addColorStop = function(offset, color) {",
+  "      if (typeof color === 'string') {",
+  "        let c = color.trim();",
+  "        if (c.startsWith('rgbaa(')) {",
+  "          const inside = c.slice(6, -1).split(',').map(x => x.trim());",
+  "          if (inside.length >= 5) c = 'rgba(' + inside[0] + ',' + inside[1] + ',' + inside[2] + ',' + inside[4] + ')';",
+  "          else c = c.replace(/^rgbaa\\(/, 'rgba(');",
+  "        }",
+  "        color = c;",
+  "      }",
+  "      return nativeAddColorStop.call(this, offset, color);",
+  "    };",
+  "  });"
+].join('\\n');
 
+if (s.includes(canvasHotfixMarker)) {
+  s = s.replace(canvasHotfixMarker, canvasHotfixPatch);
+  console.log('Patch applied: canvas rgbaa color hotfix');
+} else {
+  console.log('Patch skipped: canvas rgbaa marker not found');
+}
 function patchOnce(marker, replacement, label) {
   if (!s.includes(marker)) {
     console.log('Patch skipped, marker not found:', label);
