@@ -1,0 +1,17 @@
+{
+  "name": "alps-server-runner",
+  "version": "9.1.7-ahi-core-render-fixed",
+  "private": true,
+  "description": "ALPS AHI Core Render/Playwright server runner - fixed standalone Docker build",
+  "main": "runner.js",
+  "scripts": {
+    "start": "node runner.js"
+  },
+  "dependencies": {
+    "express": "4.19.2",
+    "playwright": "1.48.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
