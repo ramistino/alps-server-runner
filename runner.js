@@ -38,13 +38,14 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v1.0.0-runner-recovery-ledger';
+const RECOVERY_PATCH_VERSION = 'v1.1.0-safe-boot-recovery-runner';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const FORWARD_STALE_MS = Number(process.env.ALPS_FORWARD_STALE_MS || 90 * 60 * 1000);
 const MAX_SNAPSHOT_HISTORY = Number(process.env.ALPS_SNAPSHOT_HISTORY_LIMIT || 500);
 const AUTO_RELOAD_STALE_FORWARD = String(process.env.ALPS_AUTO_RELOAD_STALE_FORWARD || '1') !== '0';
 const STALE_RECOVERY_COOLDOWN_MS = Number(process.env.ALPS_STALE_RECOVERY_COOLDOWN_MS || 30 * 60 * 1000);
+const RESET_PROFILE_ON_LAUNCH_ERROR = String(process.env.ALPS_RESET_PROFILE_ON_LAUNCH_ERROR || '1') !== '0';
 
 
 let staticBaseUrl = '';
@@ -76,6 +77,8 @@ let lastNotifyCounts = { paperSignals: 0, closedTrades: 0, openPositions: 0 };
 let tickBusy = false;
 let recoveryState = null;
 let lastStaleRecoveryAt = 0;
+let lastLaunchError = null;
+let launchAttempts = 0;
 
 
 const MIME = {
@@ -94,6 +97,37 @@ const MIME = {
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
+}
+
+function errorInfo(err) {
+  if (!err) return { name: 'UnknownError', message: 'Unknown error', stack: '' };
+  const message = String(err.message || err.toString?.() || 'No message provided by thrown error');
+  return {
+    name: String(err.name || 'Error'),
+    message,
+    stack: String(err.stack || '').slice(0, 4000),
+    code: err.code || undefined
+  };
+}
+
+async function closeBrowserContextSafe() {
+  try { if (context) await context.close(); } catch (_) {}
+  context = null;
+  page = null;
+}
+
+async function resetChromiumProfile(reason) {
+  try {
+    await closeBrowserContextSafe();
+    const backup = `${PROFILE_DIR}.bad.${Date.now()}`;
+    await fsp.rename(PROFILE_DIR, backup).catch(() => null);
+    await fsp.mkdir(PROFILE_DIR, { recursive: true });
+    log(`Chromium profile reset after ${reason}. Backup=${backup}`);
+    return true;
+  } catch (e) {
+    log('Chromium profile reset failed:', errorInfo(e));
+    return false;
+  }
 }
 
 function isAuthed(req) {
@@ -497,10 +531,11 @@ async function createServer() {
   return server;
 }
 
-async function launchAppPage() {
+async function launchAppPage(options = {}) {
   const appUrl = APP_URL_ENV || `${staticBaseUrl}/index.html`;
   lastHealth.appUrl = appUrl;
-  context = await chromium.launchPersistentContext(PROFILE_DIR, {
+  const allowProfileReset = options.allowProfileReset !== false;
+  const launchArgs = {
     headless: HEADLESS,
     viewport: { width: 430, height: 920 },
     ignoreHTTPSErrors: true,
@@ -514,20 +549,53 @@ async function launchAppPage() {
       '--disable-features=CalculateNativeWinOcclusion,BackForwardCache,IntensiveWakeUpThrottling',
       '--autoplay-policy=no-user-gesture-required'
     ]
-  });
-  page = context.pages()[0] || await context.newPage();
-  page.on('console', msg => {
-    const text = msg.text();
-    if (/ALPS|PAPER SIGNAL|Runner|error|failed|Wake|catch-up/i.test(text)) log('[page]', text.slice(0, 500));
-  });
-  page.on('pageerror', err => {
-    lastHealth.lastError = err.message;
-    log('[pageerror]', err.message);
-  });
-  await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
-  await page.waitForLoadState('load', { timeout: 120_000 }).catch(() => null);
-  await page.waitForFunction(() => typeof buildRunReportObject === 'function' || typeof startWatch === 'function', null, { timeout: 120_000 }).catch(() => null);
-  log(`ALPS app loaded: ${appUrl}`);
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    launchAttempts += 1;
+    try {
+      await closeBrowserContextSafe();
+      log(`Launching ALPS Chromium context. attempt=${attempt} profile=${PROFILE_DIR}`);
+      context = await chromium.launchPersistentContext(PROFILE_DIR, launchArgs);
+      page = context.pages()[0] || await context.newPage();
+      page.on('console', msg => {
+        const text = msg.text();
+        if (/ALPS|PAPER SIGNAL|Runner|error|failed|Wake|catch-up/i.test(text)) log('[page]', text.slice(0, 500));
+      });
+      page.on('pageerror', err => {
+        const info = errorInfo(err);
+        lastHealth.lastError = info.message;
+        log('[pageerror]', info.message);
+      });
+      await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+      await page.waitForLoadState('load', { timeout: 120_000 }).catch(() => null);
+      await page.waitForFunction(() => typeof buildRunReportObject === 'function' || typeof startWatch === 'function', null, { timeout: 120_000 }).catch(() => null);
+      lastLaunchError = null;
+      delete lastHealth.pageLaunchError;
+      Object.assign(lastHealth, { status: 'PAGE_LOADED', lastError: '', pageReady: true, launchAttempts });
+      log(`ALPS app loaded: ${appUrl}`);
+      return true;
+    } catch (e) {
+      const info = errorInfo(e);
+      lastLaunchError = info;
+      Object.assign(lastHealth, {
+        status: 'PAGE_LAUNCH_FAILED',
+        pageReady: false,
+        launchAttempts,
+        lastError: `PAGE_LAUNCH_FAILED: ${info.name}: ${info.message}`,
+        pageLaunchError: info
+      });
+      log('ALPS page launch failed:', JSON.stringify(info, null, 2));
+      await closeBrowserContextSafe();
+      if (attempt === 1 && allowProfileReset && RESET_PROFILE_ON_LAUNCH_ERROR) {
+        await resetChromiumProfile('page launch failure');
+        continue;
+      }
+      await recordSnapshot(snapshotFromMetrics(lastHealth, 'page-launch-failed')).catch(() => null);
+      return false;
+    }
+  }
+  return false;
 }
 
 async function pageEval(fn, arg) {
@@ -597,7 +665,13 @@ async function runnerTick(reason = 'server-runner tick') {
   if (tickBusy) return { ok: true, skipped: 'tick already running' };
   tickBusy = true;
   try {
-    if (!page || page.isClosed()) await launchAppPage();
+    if (!page || page.isClosed()) {
+      const launched = await launchAppPage();
+      if (!launched) {
+        await recordSnapshot(snapshotFromMetrics(lastHealth, 'tick-page-launch-failed')).catch(() => null);
+        return { ok: false, error: lastHealth.lastError || 'PAGE_LAUNCH_FAILED', health: lastHealth, recovery: buildRecoveryView() };
+      }
+    }
     await ensureRuntimeStarted();
     const before = enhanceHealth(await getPageHealth());
 
@@ -738,9 +812,13 @@ async function main() {
   await ensureDirs();
   await loadRecoveryState();
   await createServer();
-  await launchAppPage();
-  await runnerTick('startup');
-  setInterval(() => runnerTick('server-runner interval').catch(e => log(e.message)), TICK_MS);
+  const launched = await launchAppPage();
+  if (launched) {
+    await runnerTick('startup');
+  } else {
+    log('ALPS web API is online in recovery-only mode because the browser page could not launch. Open /runner/health and /runner/recovery for details.');
+  }
+  setInterval(() => runnerTick('server-runner interval').catch(e => log('Interval tick failed:', errorInfo(e))), TICK_MS);
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   log('ALPS Server Runner is active. Health:', `http://127.0.0.1:${PORT}/runner/health`);
@@ -755,6 +833,7 @@ async function shutdown() {
 }
 
 main().catch(err => {
-  console.error(err);
+  const info = errorInfo(err);
+  console.error('Fatal ALPS runner boot error:', JSON.stringify(info, null, 2));
   process.exit(1);
 });

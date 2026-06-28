@@ -56,3 +56,7 @@ https://alps-server-runner.onrender.com/runner/recovery
 ## مهم
 
 هذا التصحيح لا يفتح صفقات حقيقية، لا يضيف قيود، ولا يوقف البحث. هو طبقة مراقبة وحفظ واستمرارية فقط.
+
+
+## v1.1 Safe Boot
+إذا فشل تشغيل Chromium، لن يسقط Render بالكامل. ستبقى روابط /runner/health و /runner/recovery تعمل وتعرض PAGE_LAUNCH_FAILED مع تفاصيل الخطأ.

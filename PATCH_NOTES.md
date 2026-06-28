@@ -1,14 +1,3 @@
-# ALPS Recovery Patch v1 — Patch Notes
+# ALPS Recovery Patch v1.1
 
-## Fixed
-- Health no longer says only `RUNNING` when paper-forward is stale.
-- Adds explicit `STALE_FORWARD` status when `lastForwardRefresh` is older than `ALPS_FORWARD_STALE_MS`.
-- Adds persistent recovery snapshots.
-- Adds previous ledger seed from the last known non-zero report.
-- Adds recovery endpoints and report markdown section.
-
-## Not changed
-- Strategy engine.
-- AHI/ARI decision logic.
-- Paper-only mode.
-- No real execution controls.
+Safe-boot recovery runner. This patch keeps the Render web service online even if Playwright/Chromium cannot launch, exposes `/runner/health` and `/runner/recovery`, records the page launch error, and retries with a clean Chromium profile. It does not change ALPS strategy logic.
