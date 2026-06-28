@@ -1,0 +1,11 @@
+{
+  "source": "manual_seed_from_previous_alps_report",
+  "paperSignals": 2294,
+  "openPositions": 1166,
+  "closedTrades": 1128,
+  "wins": 455,
+  "losses": 673,
+  "winRate": 40.33687943262411,
+  "results": 15299,
+  "note": "Recovered previous non-zero paper ledger so reports do not show old results as lost."
+}
