@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: alps-server-runner
+    env: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: ALPS_APP_URL
+        value: "https://clever-duckanoo-f102c0.netlify.app/?renderRunner=1&v=917-ahi-core-render"
+      - key: ALPS_AUTO_START_WATCH
+        value: "1"
+      - key: ALPS_AUTO_START_LAB
+        value: "0"
+      - key: ALPS_HEADLESS
+        value: "1"
+      - key: ALPS_TICK_MS
+        value: "60000"
+      - key: ALPS_REPORT_EVERY_MS
+        value: "60000"
+      - key: ALPS_FORWARD_STALE_MS
+        value: "5400000"
+      - key: ALPS_AUTO_RELOAD_STALE_FORWARD
+        value: "1"
+      - key: ALPS_RUNNER_TOKEN
+        generateValue: true

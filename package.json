@@ -1,15 +1,14 @@
 {
-  "name": "alps-server-runner",
-  "version": "9.1.7-ahi-core-render-fixed",
-  "private": true,
-  "description": "ALPS AHI Core Render/Playwright server runner - fixed standalone Docker build",
+  "name": "alps-server-runner-recovery-v1",
+  "version": "9.1.8-recovery-v1",
+  "description": "ALPS Server Runner Recovery Patch v1: stale-forward detection, persistent paper ledger snapshots, recovery endpoints.",
   "main": "runner.js",
   "scripts": {
-    "start": "node runner.js"
+    "start": "node runner.js",
+    "check": "node --check runner.js"
   },
   "dependencies": {
-    "express": "4.19.2",
-    "playwright": "1.48.2"
+    "playwright": "^1.48.2"
   },
   "engines": {
     "node": ">=18"
