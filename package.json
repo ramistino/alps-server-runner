@@ -1,14 +1,15 @@
 {
-  "name": "alps-server-runner-recovery-v1-1",
-  "version": "9.1.8-recovery-v1.1",
-  "description": "ALPS Server Runner Recovery Patch v1.1: stale-forward detection, persistent paper ledger snapshots, recovery endpoints.",
+  "name": "alps-server-runner-trade-export",
+  "version": "9.1.8-recovery-v1.2-trade-export",
+  "description": "ALPS Server Runner Recovery + QuantEdge trade export: exposes openTrades/closedTrades for live sync.",
   "main": "runner.js",
   "scripts": {
     "start": "node runner.js",
-    "check": "node --check runner.js"
+    "check": "node --check runner.js",
+    "check:trade-export": "node --check runner.js && node --check alpsTradeExport.js"
   },
   "dependencies": {
-    "playwright":  "1.61.1"
+    "playwright": "1.61.1"
   },
   "engines": {
     "node": ">=18"

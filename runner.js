@@ -20,6 +20,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const { chromium } = require('playwright');
+const { buildTradeExport, buildTradesMarkdown } = require('./alpsTradeExport');
 
 const ROOT_DIR = path.resolve(process.env.ALPS_APP_DIR || path.join(__dirname, '..'));
 const DATA_DIR = path.resolve(process.env.ALPS_DATA_DIR || path.join(__dirname, 'data'));
@@ -73,6 +74,7 @@ let lastHealth = {
 };
 let lastReport = null;
 let lastReportMarkdown = '';
+let lastTradeExport = buildTradeExport({ openTrades: [], closedTrades: [] });
 let lastNotifyCounts = { paperSignals: 0, closedTrades: 0, openPositions: 0 };
 let tickBusy = false;
 let recoveryState = null;
@@ -502,6 +504,16 @@ async function createServer() {
         await collectReport().catch(() => null);
         return send(res, 200, lastReportMarkdown || '# ALPS Server Runner\nNo report yet.', 'text/markdown; charset=utf-8');
       }
+      if (url.pathname === '/runner/trades.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await collectReport().catch(() => null);
+        return send(res, 200, lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] }));
+      }
+      if (url.pathname === '/runner/trades.md') {
+        if (!isAuthed(req)) return send(res, 401, 'Unauthorized', 'text/plain; charset=utf-8');
+        await collectReport().catch(() => null);
+        return send(res, 200, buildTradesMarkdown(lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] })), 'text/markdown; charset=utf-8');
+      }
       if (url.pathname === '/runner/import') return send(res, 200, importPageHtml(), 'text/html; charset=utf-8');
       if (url.pathname === '/runner/import-backup' && req.method === 'POST') {
         if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
@@ -634,6 +646,118 @@ async function getPageHealth() {
   });
 }
 
+
+async function collectPageTradeLedgers() {
+  if (!page || page.isClosed()) return { openTrades: [], closedTrades: [], sourceStats: { reason: 'page-not-ready' } };
+  return pageEval(async () => {
+    function clone(value) {
+      try { return JSON.parse(JSON.stringify(value || [])); } catch (_) { return []; }
+    }
+    function arrFromGlobal(name) {
+      try {
+        const value = globalThis[name];
+        return Array.isArray(value) ? clone(value) : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    function collectNamedArrays(obj, out, seen, path) {
+      if (!obj || typeof obj !== 'object' || seen.has(obj)) return;
+      seen.add(obj);
+      if (Array.isArray(obj)) return;
+      for (const [key, value] of Object.entries(obj)) {
+        const nextPath = path ? `${path}.${key}` : key;
+        if (Array.isArray(value)) {
+          const lower = key.toLowerCase();
+          if (/openpositions|opentrades|activepositions|activetrades|paperopen/.test(lower)) {
+            out.open.push({ source: nextPath, rows: clone(value).slice(0, 500) });
+          }
+          if (/closedtrades|closedpositions|tradelog|paperclosed|completedtrades/.test(lower)) {
+            out.closed.push({ source: nextPath, rows: clone(value).slice(0, 1000) });
+          }
+        } else if (value && typeof value === 'object' && nextPath.split('.').length < 5) {
+          collectNamedArrays(value, out, seen, nextPath);
+        }
+      }
+    }
+
+    const out = { open: [], closed: [] };
+
+    const openNames = [
+      'openPositions',
+      'openTrades',
+      'activePositions',
+      'activeTrades',
+      'paperOpenTrades',
+      'fwOpenPositions',
+      'forwardOpenPositions'
+    ];
+
+    const closedNames = [
+      'closedTrades',
+      'closedPositions',
+      'tradeLog',
+      'paperClosedTrades',
+      'completedTrades',
+      'fwClosedTrades',
+      'forwardClosedTrades'
+    ];
+
+    for (const name of openNames) {
+      const rows = arrFromGlobal(name);
+      if (rows.length) out.open.push({ source: `global.${name}`, rows: rows.slice(0, 500) });
+    }
+
+    for (const name of closedNames) {
+      const rows = arrFromGlobal(name);
+      if (rows.length) out.closed.push({ source: `global.${name}`, rows: rows.slice(0, 1000) });
+    }
+
+    try {
+      const report = typeof buildRunReportObject === 'function' ? await buildRunReportObject() : null;
+      if (report && typeof report === 'object') collectNamedArrays(report, out, new Set(), 'report');
+    } catch (_) {}
+
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (!/alps|runtime|snapshot|ledger|trade|position|paper|forward/i.test(key || '')) continue;
+        const raw = localStorage.getItem(key);
+        if (!raw || raw.length > 5_000_000) continue;
+        try {
+          const parsed = JSON.parse(raw);
+          collectNamedArrays(parsed, out, new Set(), `localStorage.${key}`);
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    function flatten(groups) {
+      const rows = [];
+      const seen = new Set();
+      for (const group of groups) {
+        for (const item of group.rows || []) {
+          if (!item || typeof item !== 'object') continue;
+          const copy = { ...item, __alpsSource: group.source };
+          const key = JSON.stringify(copy).slice(0, 1200);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          rows.push(copy);
+        }
+      }
+      return rows;
+    }
+
+    return {
+      openTrades: flatten(out.open),
+      closedTrades: flatten(out.closed),
+      sourceStats: {
+        openSources: out.open.map(x => ({ source: x.source, count: x.rows.length })),
+        closedSources: out.closed.map(x => ({ source: x.source, count: x.rows.length }))
+      }
+    };
+  });
+}
+
 async function ensureRuntimeStarted() {
   const h = await getPageHealth();
   Object.assign(lastHealth, enhanceHealth(h), { status: enhanceHealth(h).forwardStale ? 'STALE_FORWARD' : 'LOADED', lastError: '' });
@@ -714,6 +838,16 @@ async function collectReport() {
     };
     return r;
   });
+
+  const rawTradeLedgers = await collectPageTradeLedgers().catch(e => ({
+    openTrades: [],
+    closedTrades: [],
+    sourceStats: { error: e.message }
+  }));
+
+  lastTradeExport = buildTradeExport(rawTradeLedgers);
+  report.quantEdgeTradeExport = lastTradeExport;
+
   let md = '';
   try {
     md = await pageEval(r => {
@@ -728,11 +862,13 @@ async function collectReport() {
   }
   lastReport = report;
   await recordSnapshot(snapshotFromReport(report, 'report'));
+  md = `${md}\n\n${buildTradesMarkdown(lastTradeExport)}`;
   md = appendRecoveryMarkdown(md);
   lastReportMarkdown = md;
   lastHealth.lastReportAt = Date.now();
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-report.json'), JSON.stringify(report, null, 2));
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-report.md'), md);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;

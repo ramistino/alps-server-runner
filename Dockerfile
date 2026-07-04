@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json /app/package.json
 RUN npm install --omit=dev
 COPY runner.js /app/runner.js
+COPY alpsTradeExport.js /app/alpsTradeExport.js
 COPY recovery /app/recovery
 ENV HOST=0.0.0.0
 ENV PORT=8787
