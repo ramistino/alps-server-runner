@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — Recovery Patch v1
+ * ALPS Server Runner — Recovery Patch v1.2.1
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -38,10 +38,84 @@ const HEADLESS = String(process.env.ALPS_HEADLESS || '1') !== '0';
 const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
-// ALPS Recovery Patch v1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v1.1.0-safe-boot-recovery-runner';
+// ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
+const RECOVERY_PATCH_VERSION = 'v1.2.1-ledger-continuity-vault';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
+const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
+const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
+const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
+  "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
+  "note": "Previous known ALPS paper-forward trades before QuantEdge export sync. Historical continuity only; not current positions.",
+  "export": {
+    "schema": "quantedge.alps.tradeExport.v1",
+    "generatedAt": "2026-07-03T09:18:58.866Z",
+    "openTrades": [
+      {
+        "tradeId": "1783065637747_BTCUSDT_4h_HA_POC_R15",
+        "pair": "BTCUSDT",
+        "timeframe": "4h",
+        "direction": "LONG",
+        "strategy": "HA + POC Filter",
+        "entry": 61750.47,
+        "current": null,
+        "stop": 60321.12,
+        "target": 63894.495,
+        "pnlPct": null,
+        "status": "OPEN",
+        "openedAt": 1783065637747,
+        "mfeBps": 0,
+        "maeBps": 0,
+        "ariAction": "EXPLORE",
+        "ariConfidence": 70,
+        "regime": "MIXED / HIGH_VOL / IN_VALUE_AREA",
+        "freshness": "FRESH",
+        "source": "seed.from.ALPS_AHI_Command_Report_2026-07-03_13-18"
+      },
+      {
+        "tradeId": "1783036835549_BTCUSDT_4h_HA_POC_R15",
+        "pair": "BTCUSDT",
+        "timeframe": "4h",
+        "direction": "LONG",
+        "strategy": "HA + POC Filter",
+        "entry": 61560,
+        "current": null,
+        "stop": 60136.061,
+        "target": 63695.9085,
+        "pnlPct": null,
+        "status": "OPEN",
+        "openedAt": 1783036835549,
+        "mfeBps": 0,
+        "maeBps": 0,
+        "ariAction": "EXPLORE",
+        "ariConfidence": 70,
+        "regime": "MIXED / HIGH_VOL / IN_VALUE_AREA",
+        "freshness": "FRESH",
+        "source": "seed.from.ALPS_AHI_Command_Report_2026-07-03_13-18"
+      }
+    ],
+    "closedTrades": [],
+    "stats": {
+      "openTrades": 2,
+      "closedTrades": 0,
+      "sourceStats": {
+        "openSources": [
+          {
+            "source": "seed.previous.report.forwardWatch.recentSignals",
+            "count": 2
+          }
+        ],
+        "closedSources": [
+          {
+            "source": "seed.previous.report.forwardWatch.recentSignals",
+            "count": 0
+          }
+        ]
+      }
+    },
+    "note": "Seeded from previous ALPS report; historical continuity only. Fingerprints are not treated as executable live trades."
+  }
+};
 const FORWARD_STALE_MS = Number(process.env.ALPS_FORWARD_STALE_MS || 90 * 60 * 1000);
 const MAX_SNAPSHOT_HISTORY = Number(process.env.ALPS_SNAPSHOT_HISTORY_LIMIT || 500);
 const AUTO_RELOAD_STALE_FORWARD = String(process.env.ALPS_AUTO_RELOAD_STALE_FORWARD || '1') !== '0';
@@ -75,6 +149,7 @@ let lastHealth = {
 let lastReport = null;
 let lastReportMarkdown = '';
 let lastTradeExport = buildTradeExport({ openTrades: [], closedTrades: [] });
+let tradeVaultState = null;
 let lastNotifyCounts = { paperSignals: 0, closedTrades: 0, openPositions: 0 };
 let tickBusy = false;
 let recoveryState = null;
@@ -274,6 +349,168 @@ async function saveRecoveryState() {
   recoveryState.updatedAt = new Date().toISOString();
   await fsp.writeFile(RECOVERY_STATE_FILE, JSON.stringify(recoveryState, null, 2)).catch(e => log('Recovery state save failed:', e.message));
 }
+
+function emptyTradeVaultState() {
+  return {
+    schema: 'alps.runner.tradeContinuityVault.v1',
+    version: 'v1.2.1-ledger-continuity-vault',
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+    current: null,
+    lastNonZero: null,
+    history: [],
+    notes: []
+  };
+}
+
+function tradeExportCounts(exported) {
+  const open = Array.isArray(exported?.openTrades) ? exported.openTrades.length : 0;
+  const closed = Array.isArray(exported?.closedTrades) ? exported.closedTrades.length : 0;
+  return { open, closed, total: open + closed };
+}
+
+function sameTradeExport(a, b) {
+  try {
+    return JSON.stringify(a?.export || a) === JSON.stringify(b?.export || b);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function loadTradeVaultState() {
+  if (tradeVaultState) return tradeVaultState;
+  await ensureDirs();
+  try {
+    tradeVaultState = JSON.parse(await fsp.readFile(TRADE_VAULT_FILE, 'utf8'));
+  } catch (_) {
+    tradeVaultState = emptyTradeVaultState();
+  }
+
+  if (!tradeVaultState.lastNonZero) {
+    try {
+      let seed = null;
+      try {
+        seed = JSON.parse(await fsp.readFile(TRADE_VAULT_SEED_FILE, 'utf8'));
+      } catch (_) {
+        seed = EMBEDDED_PREVIOUS_TRADE_VAULT_SEED;
+      }
+      const exported = seed.export || seed;
+      const counts = tradeExportCounts(exported);
+      if (counts.total > 0) {
+        const entry = {
+          id: `${Date.now()}_previous-trade-vault-seed`,
+          capturedAt: new Date().toISOString(),
+          source: seed.source || 'embedded-previous-trade-vault-seed',
+          note: seed.note || 'Imported previous known ALPS paper-forward trades as historical snapshot only.',
+          counts,
+          export: exported
+        };
+        tradeVaultState.lastNonZero = entry;
+        tradeVaultState.history.push(entry);
+        tradeVaultState.notes.push(`Trade vault seed imported from ${entry.source} at ${entry.capturedAt}`);
+      }
+    } catch (_) {}
+  }
+
+  await saveTradeVaultState();
+  return tradeVaultState;
+}
+
+async function saveTradeVaultState() {
+  if (!tradeVaultState) return;
+  tradeVaultState.updatedAt = new Date().toISOString();
+  await fsp.writeFile(TRADE_VAULT_FILE, JSON.stringify(tradeVaultState, null, 2)).catch(e => log('Trade vault save failed:', e.message));
+}
+
+async function updateTradeVault(exported, source = 'report') {
+  await loadTradeVaultState();
+  const counts = tradeExportCounts(exported);
+  const entry = {
+    id: `${Date.now()}_${source}`,
+    capturedAt: new Date().toISOString(),
+    source,
+    note: counts.total ? 'Current ALPS trade export contains live paper-forward rows.' : 'Current ALPS trade export is empty; lastNonZero is preserved separately.',
+    counts,
+    export: exported || buildTradeExport({ openTrades: [], closedTrades: [] })
+  };
+
+  const last = tradeVaultState.history[tradeVaultState.history.length - 1];
+  tradeVaultState.current = entry;
+  if (counts.total > 0) tradeVaultState.lastNonZero = entry;
+
+  if (!last || counts.total > 0 || !sameTradeExport(last, entry)) {
+    tradeVaultState.history.push(entry);
+    while (tradeVaultState.history.length > 200) tradeVaultState.history.shift();
+  }
+  await saveTradeVaultState();
+  return tradeVaultState;
+}
+
+function buildTradeVaultView() {
+  const current = lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] });
+  const counts = tradeExportCounts(current);
+  const lastKnown = tradeVaultState?.lastNonZero || null;
+  return {
+    schema: 'alps.runner.tradeContinuityVault.view.v1',
+    generatedAt: new Date().toISOString(),
+    current,
+    currentCounts: counts,
+    currentEmpty: counts.total === 0,
+    lastNonZero: lastKnown,
+    historyCount: tradeVaultState?.history?.length || 0,
+    note: counts.total === 0 && lastKnown
+      ? 'Current live ALPS ledger is empty. Previous known trades are preserved as historical snapshot only, not counted as current open/closed trades.'
+      : 'Current live ALPS trade export is available.'
+  };
+}
+
+function mdCell(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/\|/g, '/');
+}
+
+function buildTradeVaultMarkdown() {
+  const view = buildTradeVaultView();
+  const last = view.lastNonZero;
+  const lines = [
+    '',
+    '## ALPS Trade Continuity Vault',
+    `- Current export empty: ${view.currentEmpty ? 'YES' : 'NO'}`,
+    `- Current open/closed: ${view.currentCounts.open}/${view.currentCounts.closed}`,
+    `- History snapshots: ${view.historyCount}`,
+    `- Note: ${view.note}`
+  ];
+
+  if (!last || !last.export) {
+    lines.push('- Previous known non-zero trade snapshot: N/A');
+    return lines.join('\n');
+  }
+
+  const exp = last.export || {};
+  lines.push(
+    '',
+    '### Previous Known Non-Zero Trade Snapshot',
+    `- Captured At: ${last.capturedAt || ''}`,
+    `- Source: ${last.source || ''}`,
+    `- Open Trades: ${(exp.openTrades || []).length}`,
+    `- Closed Trades: ${(exp.closedTrades || []).length}`,
+    '',
+    '> These rows are historical continuity evidence only. They are not treated as current open positions unless the live ALPS report exports them again.',
+    '',
+    '#### Previous Open Trades',
+    '| Trade ID | Pair | TF | Direction | Strategy | Entry | Stop | Target | Status |',
+    '|---|---|---|---|---|---:|---:|---:|---|'
+  );
+
+  const open = exp.openTrades || [];
+  if (!open.length) lines.push('|  |  |  |  | No previous open trades |  |  |  |  |');
+  else for (const t of open) {
+    lines.push(`| ${mdCell(t.tradeId)} | ${mdCell(t.pair)} | ${mdCell(t.timeframe)} | ${mdCell(t.direction)} | ${mdCell(t.strategy)} | ${mdCell(t.entry)} | ${mdCell(t.stop)} | ${mdCell(t.target)} | ${mdCell(t.status)} |`);
+  }
+  return lines.join('\n');
+}
+
+
 
 function snapshotFromMetrics(metrics = {}, source = 'unknown', extra = {}) {
   const closedTrades = n(metrics.closedTrades ?? metrics.closed ?? metrics.closedTradeLedger, 0);
@@ -481,7 +718,7 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView() }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 } }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/export-recovery-state') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -509,10 +746,17 @@ async function createServer() {
         await collectReport().catch(() => null);
         return send(res, 200, lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] }));
       }
+      if (url.pathname === '/runner/trades-vault.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await loadTradeVaultState();
+        await collectReport().catch(() => null);
+        return send(res, 200, buildTradeVaultView());
+      }
       if (url.pathname === '/runner/trades.md') {
         if (!isAuthed(req)) return send(res, 401, 'Unauthorized', 'text/plain; charset=utf-8');
+        await loadTradeVaultState();
         await collectReport().catch(() => null);
-        return send(res, 200, buildTradesMarkdown(lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] })), 'text/markdown; charset=utf-8');
+        return send(res, 200, `${buildTradesMarkdown(lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] }))}\n\n${buildTradeVaultMarkdown()}`, 'text/markdown; charset=utf-8');
       }
       if (url.pathname === '/runner/import') return send(res, 200, importPageHtml(), 'text/html; charset=utf-8');
       if (url.pathname === '/runner/import-backup' && req.method === 'POST') {
@@ -715,7 +959,20 @@ async function collectPageTradeLedgers() {
 
     try {
       const report = typeof buildRunReportObject === 'function' ? await buildRunReportObject() : null;
-      if (report && typeof report === 'object') collectNamedArrays(report, out, new Set(), 'report');
+      if (report && typeof report === 'object') {
+        const recentSignals = Array.isArray(report?.forwardWatch?.recentSignals) ? report.forwardWatch.recentSignals : [];
+        if (recentSignals.length) {
+          out.open.push({
+            source: 'report.forwardWatch.recentSignals.OPEN',
+            rows: recentSignals.filter(s => String(s?.outcome || '').toUpperCase() === 'OPEN')
+          });
+          out.closed.push({
+            source: 'report.forwardWatch.recentSignals.CLOSED',
+            rows: recentSignals.filter(s => String(s?.outcome || '').toUpperCase() !== 'OPEN')
+          });
+        }
+        collectNamedArrays(report, out, new Set(), 'report');
+      }
     } catch (_) {}
 
     try {
@@ -846,7 +1103,9 @@ async function collectReport() {
   }));
 
   lastTradeExport = buildTradeExport(rawTradeLedgers);
+  await updateTradeVault(lastTradeExport, 'report');
   report.quantEdgeTradeExport = lastTradeExport;
+  report.alpsTradeContinuityVault = buildTradeVaultView();
 
   let md = '';
   try {
@@ -862,13 +1121,14 @@ async function collectReport() {
   }
   lastReport = report;
   await recordSnapshot(snapshotFromReport(report, 'report'));
-  md = `${md}\n\n${buildTradesMarkdown(lastTradeExport)}`;
+  md = `${md}\n\n${buildTradesMarkdown(lastTradeExport)}\n\n${buildTradeVaultMarkdown()}`;
   md = appendRecoveryMarkdown(md);
   lastReportMarkdown = md;
   lastHealth.lastReportAt = Date.now();
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-report.json'), JSON.stringify(report, null, 2));
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-report.md'), md);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;

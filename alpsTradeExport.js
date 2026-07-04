@@ -29,7 +29,33 @@ function normalizeDirection(value) {
 }
 
 function normalizePair(value) {
-  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const raw = String(value || '').toUpperCase().trim();
+  // ALPS often stores symbol as BTCUSDT_4h. Pair must stay BTCUSDT, not BTCUSDT4H.
+  const withoutFrame = raw.split('_')[0].split('|')[0];
+  return withoutFrame.replace(/[^A-Z0-9]/g, '');
+}
+
+function inferTimeframe(trade) {
+  const explicit = String(firstValue(trade, ['timeframe', 'tf', 'frame']) || '').trim();
+  if (explicit) return explicit;
+  const raw = String(firstValue(trade, ['key', 'sym', 'symbol', 'market']) || '');
+  const m = raw.match(/(?:_|\|)(5m|15m|30m|1h|4h|1d)$/i);
+  return m ? m[1] : '';
+}
+
+function normalizeTimestamp(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const n = Number(value);
+  if (Number.isFinite(n) && n > 10_000_000_000) return new Date(n).toISOString();
+  if (Number.isFinite(n) && n > 1_000_000_000) return new Date(n * 1000).toISOString();
+  return String(value);
+}
+
+function safePct(trade, names, bpsNames) {
+  const direct = safeNumber(firstValue(trade, names));
+  if (direct !== null) return direct;
+  const bps = safeNumber(firstValue(trade, bpsNames || []));
+  return bps === null ? null : bps / 100;
 }
 
 function buildId(parts) {
@@ -37,17 +63,17 @@ function buildId(parts) {
 }
 
 function normalizeOpenTrade(trade, index = 0) {
-  const pair = normalizePair(firstValue(trade, ['pair', 'symbol', 'market', 'asset']));
-  const timeframe = String(firstValue(trade, ['timeframe', 'tf', 'frame']) || '').trim();
+  const pair = normalizePair(firstValue(trade, ['pair', 'baseSymbol', 'symbol', 'sym', 'market', 'asset']));
+  const timeframe = inferTimeframe(trade);
   const direction = normalizeDirection(firstValue(trade, ['direction', 'dir', 'side', 'bias']));
-  const strategy = String(firstValue(trade, ['strategy', 'setup', 'name', 'label', 'hypothesis']) || '');
+  const strategy = String(firstValue(trade, ['strategy', 'stratName', 'rootStrategy', 'setup', 'name', 'label', 'hypothesis']) || firstValue(trade?.fingerprint || {}, ['cleanName', 'rootName']) || '');
   const entry = safeNumber(firstValue(trade, ['entry', 'entryPrice', 'open', 'openPrice', 'signalPrice', 'price']));
   const current = safeNumber(firstValue(trade, ['current', 'markPrice', 'last', 'lastPrice', 'currentPrice']));
   const stop = safeNumber(firstValue(trade, ['stop', 'sl', 'stopLoss']));
   const target = safeNumber(firstValue(trade, ['target', 'tp', 'takeProfit', 'targetPrice']));
-  const pnlPct = safeNumber(firstValue(trade, ['pnlPct', 'pnl', 'returnPct', 'profitPct', 'unrealizedPnlPct']));
-  const openedAt = firstValue(trade, ['openedAt', 'openTime', 'timestamp', 'date', 'createdAt', 'signalTime']) || '';
-  const statusRaw = String(firstValue(trade, ['status', 'state']) || 'OPEN').toUpperCase();
+  const pnlPct = safePct(trade, ['pnlPct', 'returnPct', 'profitPct', 'unrealizedPnlPct'], ['pnlBps', 'unrealizedPnlBps']);
+  const openedAt = normalizeTimestamp(firstValue(trade, ['openedAt', 'openTime', 'timestamp', 'date', 'createdAt', 'signalTime', 'generatedAt', 'ts']));
+  const statusRaw = String(firstValue(trade, ['status', 'state', 'outcome']) || 'OPEN').toUpperCase();
   const status = statusRaw.includes('CLOSE') ? 'CLOSED' : 'OPEN';
 
   if (!pair || !direction || entry === null) return null;
@@ -66,21 +92,27 @@ function normalizeOpenTrade(trade, index = 0) {
     pnlPct,
     status,
     openedAt,
+    mfeBps: safeNumber(firstValue(trade, ['mfeBps'])),
+    maeBps: safeNumber(firstValue(trade, ['maeBps'])),
+    ariAction: firstValue(trade, ['ariAction']) || firstValue(trade?.ariDecision || {}, ['action']),
+    ariConfidence: safeNumber(firstValue(trade, ['ariConfidence']) || firstValue(trade?.ariDecision || {}, ['confidence'])),
+    regime: firstValue(trade, ['marketRegime', 'regimeSummary']) || firstValue(trade?.regime || {}, ['regime']),
+    freshness: firstValue(trade, ['freshnessStatus']),
     source: trade.__alpsSource || 'ALPS_OPEN_LEDGER'
   };
 }
 
 function normalizeClosedTrade(trade, index = 0) {
-  const pair = normalizePair(firstValue(trade, ['pair', 'symbol', 'market', 'asset']));
-  const timeframe = String(firstValue(trade, ['timeframe', 'tf', 'frame']) || '').trim();
+  const pair = normalizePair(firstValue(trade, ['pair', 'baseSymbol', 'symbol', 'sym', 'market', 'asset']));
+  const timeframe = inferTimeframe(trade);
   const direction = normalizeDirection(firstValue(trade, ['direction', 'dir', 'side', 'bias']));
-  const strategy = String(firstValue(trade, ['strategy', 'setup', 'name', 'label', 'hypothesis']) || '');
+  const strategy = String(firstValue(trade, ['strategy', 'stratName', 'rootStrategy', 'setup', 'name', 'label', 'hypothesis']) || firstValue(trade?.fingerprint || {}, ['cleanName', 'rootName']) || '');
   const entry = safeNumber(firstValue(trade, ['entry', 'entryPrice', 'open', 'openPrice', 'signalPrice', 'price']));
   const exit = safeNumber(firstValue(trade, ['exit', 'exitPrice', 'close', 'closePrice', 'finalPrice']));
-  const pnlPct = safeNumber(firstValue(trade, ['pnlPct', 'pnl', 'returnPct', 'profitPct', 'realizedPnlPct']));
+  const pnlPct = safePct(trade, ['pnlPct', 'returnPct', 'profitPct', 'realizedPnlPct'], ['pnlBps', 'realizedPnlBps']);
   const bars = safeNumber(firstValue(trade, ['bars', 'durationBars', 'holdBars']));
-  const openedAt = firstValue(trade, ['openedAt', 'openTime', 'timestamp', 'date', 'createdAt', 'signalTime']) || '';
-  const closedAt = firstValue(trade, ['closedAt', 'closeTime', 'exitTime', 'completedAt']) || openedAt || '';
+  const openedAt = normalizeTimestamp(firstValue(trade, ['openedAt', 'openTime', 'timestamp', 'date', 'createdAt', 'signalTime', 'generatedAt', 'ts']));
+  const closedAt = normalizeTimestamp(firstValue(trade, ['closedAt', 'closeTime', 'exitTime', 'completedAt', 'exitTs'])) || openedAt || '';
   const result = String(firstValue(trade, ['result', 'outcome']) || (pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : ''));
 
   if (!pair || !direction || entry === null) return null;
@@ -100,6 +132,13 @@ function normalizeClosedTrade(trade, index = 0) {
     status: 'CLOSED',
     openedAt,
     closedAt,
+    mfeBps: safeNumber(firstValue(trade, ['mfeBps'])),
+    maeBps: safeNumber(firstValue(trade, ['maeBps'])),
+    exitReason: firstValue(trade, ['exitReason']),
+    ariAction: firstValue(trade, ['ariAction']) || firstValue(trade?.ariDecision || {}, ['action']),
+    ariConfidence: safeNumber(firstValue(trade, ['ariConfidence']) || firstValue(trade?.ariDecision || {}, ['confidence'])),
+    regime: firstValue(trade, ['marketRegime', 'regimeSummary']) || firstValue(trade?.regime || {}, ['regime']),
+    freshness: firstValue(trade, ['freshnessStatus']),
     source: trade.__alpsSource || 'ALPS_CLOSED_LEDGER'
   };
 }
