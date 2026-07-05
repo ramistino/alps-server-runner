@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — Recovery Patch v1.2.1
+ * ALPS Server Runner — v9.2 Stage 1 Cognition Shadow Core
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -17,6 +17,7 @@
 
 const http = require('http');
 const fs = require('fs');
+const crypto = require('crypto');
 const fsp = require('fs/promises');
 const path = require('path');
 const { chromium } = require('playwright');
@@ -39,11 +40,14 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v1.2.1-ledger-continuity-vault';
+const RECOVERY_PATCH_VERSION = 'v9.2-stage1-cognition-shadow-core';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
+const COGNITION_PATCH_VERSION = 'v9.2-stage1-cognition-shadow-core';
+const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
+const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
 const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
   "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
   "note": "Previous known ALPS paper-forward trades before QuantEdge export sync. Historical continuity only; not current positions.",
@@ -150,6 +154,8 @@ let lastReport = null;
 let lastReportMarkdown = '';
 let lastTradeExport = buildTradeExport({ openTrades: [], closedTrades: [] });
 let tradeVaultState = null;
+let cognitionState = null;
+let lastCognitionView = null;
 let lastNotifyCounts = { paperSignals: 0, closedTrades: 0, openPositions: 0 };
 let tickBusy = false;
 let recoveryState = null;
@@ -353,7 +359,7 @@ async function saveRecoveryState() {
 function emptyTradeVaultState() {
   return {
     schema: 'alps.runner.tradeContinuityVault.v1',
-    version: 'v1.2.1-ledger-continuity-vault',
+    version: 'v9.2-stage1-cognition-shadow-core',
     createdAt: new Date().toISOString(),
     updatedAt: null,
     current: null,
@@ -507,6 +513,414 @@ function buildTradeVaultMarkdown() {
   else for (const t of open) {
     lines.push(`| ${mdCell(t.tradeId)} | ${mdCell(t.pair)} | ${mdCell(t.timeframe)} | ${mdCell(t.direction)} | ${mdCell(t.strategy)} | ${mdCell(t.entry)} | ${mdCell(t.stop)} | ${mdCell(t.target)} | ${mdCell(t.status)} |`);
   }
+  return lines.join('\n');
+}
+
+
+
+// ===== ALPS v9.2 Stage 1 — Cognition Shadow Core =====
+// Deterministic, auditable, no LLM, no execution changes.
+// This layer reads ALPS paper-forward evidence and writes only shadow recommendations.
+function stableStringify(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+  return '{' + Object.keys(value).sort().map(k => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') + '}';
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+function emptyCognitionState() {
+  return {
+    schema: 'alps.cognition.state.v1',
+    version: COGNITION_PATCH_VERSION,
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+    seq: 0,
+    prevHash: 'GENESIS',
+    seenDecisionKeys: [],
+    lastView: null
+  };
+}
+
+async function loadCognitionState() {
+  if (cognitionState) return cognitionState;
+  await ensureDirs();
+  try {
+    cognitionState = JSON.parse(await fsp.readFile(COGNITION_STATE_FILE, 'utf8'));
+  } catch (_) {
+    cognitionState = emptyCognitionState();
+  }
+  if (!Array.isArray(cognitionState.seenDecisionKeys)) cognitionState.seenDecisionKeys = [];
+  if (!cognitionState.prevHash) cognitionState.prevHash = 'GENESIS';
+  if (!Number.isFinite(Number(cognitionState.seq))) cognitionState.seq = 0;
+  return cognitionState;
+}
+
+async function saveCognitionState() {
+  if (!cognitionState) return;
+  cognitionState.updatedAt = new Date().toISOString();
+  await fsp.writeFile(COGNITION_STATE_FILE, JSON.stringify(cognitionState, null, 2)).catch(e => log('Cognition state save failed:', e.message));
+}
+
+function cogNum(value, fallback = null) {
+  if (value === null || value === undefined || value === '') return fallback;
+  const n = Number(String(value).replace(/[,%$≈]/g, '').trim());
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function cogRound(value, dp = 2) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const f = 10 ** dp;
+  return Math.round(n * f) / f;
+}
+
+function cogText(value) {
+  return String(value || '').trim();
+}
+
+function cogRootStrategy(strategy) {
+  const s = cogText(strategy).toUpperCase();
+  if (/HA\s*\+\s*POC|HA_POC/.test(s)) return 'HA_POC';
+  if (/EMA\s+TREND|EMA_TREND/.test(s)) return 'EMA_TREND';
+  if (/VAH\/VAL|VAH_VAL/.test(s)) return 'VAH_VAL';
+  if (/BB\s+SQUEEZE|BB_SQUEEZE/.test(s)) return 'BB_SQUEEZE';
+  if (/BOLLINGER/.test(s)) return 'BOLLINGER';
+  return s.replace(/G\d+\s+/g, '').replace(/\s*\+\s*NO EXTRA FILTER/g, '').slice(0, 80) || 'UNKNOWN_STRATEGY';
+}
+
+function cogRegime(trade) {
+  return cogText(trade?.regime || trade?.marketRegime || trade?.regimeSummary || 'UNKNOWN_REGIME').split('/').slice(0, 3).map(x => x.trim()).join(' / ') || 'UNKNOWN_REGIME';
+}
+
+function cogTradeTs(trade) {
+  const raw = trade?.openedAt || trade?.closedAt || trade?.ts || trade?.generatedAt || '';
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 10_000_000_000) return n;
+  if (Number.isFinite(n) && n > 1_000_000_000) return n * 1000;
+  const p = Date.parse(String(raw));
+  return Number.isFinite(p) ? p : 0;
+}
+
+function cogTfMs(tf) {
+  const s = String(tf || '').toLowerCase();
+  if (s === '5m') return 5 * 60 * 1000;
+  if (s === '15m') return 15 * 60 * 1000;
+  if (s === '30m') return 30 * 60 * 1000;
+  if (s === '1h') return 60 * 60 * 1000;
+  if (s === '4h') return 4 * 60 * 60 * 1000;
+  return 60 * 60 * 1000;
+}
+
+function cogPnlBps(trade) {
+  const direct = cogNum(trade?.pnlBps, null);
+  if (direct !== null) return direct;
+  const pctVal = cogNum(trade?.pnlPct, null);
+  if (pctVal !== null) return pctVal * 100;
+  return null;
+}
+
+function cogTradeFamilyKey(trade) {
+  return [
+    cogText(trade?.pair).toUpperCase(),
+    cogText(trade?.timeframe),
+    cogRootStrategy(trade?.strategy),
+    cogText(trade?.direction).toUpperCase(),
+    cogRegime(trade)
+  ].join('||');
+}
+
+function cogTradeSubject(trade) {
+  return [cogText(trade?.pair).toUpperCase(), cogText(trade?.timeframe), cogRootStrategy(trade?.strategy), cogRegime(trade)].join(' | ');
+}
+
+function cogNearDuplicate(a, b) {
+  if (!a || !b) return false;
+  if (cogTradeFamilyKey(a) !== cogTradeFamilyKey(b)) return false;
+  const ea = cogNum(a.entry, null), eb = cogNum(b.entry, null);
+  if (ea === null || eb === null) return false;
+  const relDiff = Math.abs(ea - eb) / Math.max(1e-9, (Math.abs(ea) + Math.abs(eb)) / 2);
+  const priceOk = relDiff <= 0.006; // 0.6% keeps same-candle close variants together while avoiding broad merging.
+  const ta = cogTradeTs(a), tb = cogTradeTs(b);
+  const tfWindow = cogTfMs(a.timeframe || b.timeframe) * 1.25;
+  const timeOk = !ta || !tb || Math.abs(ta - tb) <= tfWindow;
+  return priceOk && timeOk;
+}
+
+function cogClusterTrades(trades = []) {
+  const clusters = [];
+  for (const t of trades || []) {
+    if (!t || typeof t !== 'object') continue;
+    let placed = false;
+    for (const c of clusters) {
+      if (cogNearDuplicate(t, c.rep)) {
+        c.members.push(t);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) clusters.push({ rep: t, members: [t] });
+  }
+  return clusters.map((c, idx) => {
+    const pnls = c.members.map(cogPnlBps).filter(x => Number.isFinite(x));
+    const pnlAvg = pnls.length ? pnls.reduce((a,b)=>a+b,0) / pnls.length : null;
+    const wins = c.members.filter(t => String(t.result || '').toUpperCase() === 'WIN' || cogPnlBps(t) > 0).length;
+    const losses = c.members.filter(t => String(t.result || '').toUpperCase() === 'LOSS' || cogPnlBps(t) < 0).length;
+    const stopCount = c.members.filter(t => /STOP/i.test(String(t.exitReason || ''))).length;
+    return {
+      clusterId: `${cogTradeFamilyKey(c.rep)}::C${idx + 1}`,
+      subject: cogTradeSubject(c.rep),
+      familyKey: cogTradeFamilyKey(c.rep),
+      size: c.members.length,
+      effectiveWeight: 1,
+      pair: cogText(c.rep.pair).toUpperCase(),
+      timeframe: cogText(c.rep.timeframe),
+      root: cogRootStrategy(c.rep.strategy),
+      direction: cogText(c.rep.direction).toUpperCase(),
+      regime: cogRegime(c.rep),
+      entryAvg: cogRound(c.members.map(t => cogNum(t.entry, 0)).reduce((a,b)=>a+b,0) / Math.max(1, c.members.length), 6),
+      pnlBpsAvg: cogRound(pnlAvg, 2),
+      wins,
+      losses,
+      stopCount,
+      tradeIds: c.members.map(t => t.tradeId || t.id).filter(Boolean).slice(0, 12)
+    };
+  });
+}
+
+function cogGroupByFamily(trades = []) {
+  const map = new Map();
+  for (const t of trades || []) {
+    const key = cogTradeFamilyKey(t);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(t);
+  }
+  return Array.from(map.entries()).map(([key, rows]) => ({ key, rows }));
+}
+
+function cogBetaBeliefFromClusters(clusters = []) {
+  let w = 0, l = 0;
+  for (const c of clusters) {
+    if (c.wins > c.losses) w += 1;
+    else if (c.losses > c.wins) l += 1;
+  }
+  const alpha = 1 + w;
+  const beta = 1 + l;
+  return { alpha, beta, winsEff: w, lossesEff: l, nEff: w + l, mean: cogRound(alpha / (alpha + beta), 4) };
+}
+
+function cognitionAnalyse(exported = {}, report = {}) {
+  const openTrades = Array.isArray(exported?.openTrades) ? exported.openTrades : [];
+  const closedTrades = Array.isArray(exported?.closedTrades) ? exported.closedTrades : [];
+  const allTrades = [...openTrades, ...closedTrades];
+  const openClusters = cogClusterTrades(openTrades);
+  const closedClusters = cogClusterTrades(closedTrades);
+  const allClusters = cogClusterTrades(allTrades);
+
+  const families = [];
+  const familyKeys = new Set([...cogGroupByFamily(allTrades).map(g => g.key)]);
+  for (const key of familyKeys) {
+    const openRows = openTrades.filter(t => cogTradeFamilyKey(t) === key);
+    const closedRows = closedTrades.filter(t => cogTradeFamilyKey(t) === key);
+    const oc = cogClusterTrades(openRows);
+    const cc = cogClusterTrades(closedRows);
+    const belief = cogBetaBeliefFromClusters(cc);
+    const rawWins = closedRows.filter(t => String(t.result || '').toUpperCase() === 'WIN' || cogPnlBps(t) > 0).length;
+    const rawLosses = closedRows.filter(t => String(t.result || '').toUpperCase() === 'LOSS' || cogPnlBps(t) < 0).length;
+    const stopLosses = closedRows.filter(t => /STOP/i.test(String(t.exitReason || ''))).length;
+    const maeVals = closedRows.map(t => cogNum(t.maeBps, null)).filter(x => Number.isFinite(x));
+    const mfeVals = closedRows.map(t => cogNum(t.mfeBps, null)).filter(x => Number.isFinite(x));
+    const pnlVals = closedRows.map(cogPnlBps).filter(x => Number.isFinite(x));
+    const rep = allTrades.find(t => cogTradeFamilyKey(t) === key) || {};
+    families.push({
+      key,
+      subject: cogTradeSubject(rep),
+      pair: cogText(rep.pair).toUpperCase(),
+      timeframe: cogText(rep.timeframe),
+      root: cogRootStrategy(rep.strategy),
+      direction: cogText(rep.direction).toUpperCase(),
+      regime: cogRegime(rep),
+      rawOpen: openRows.length,
+      rawClosed: closedRows.length,
+      rawWins,
+      rawLosses,
+      stopLosses,
+      nEffOpen: oc.length,
+      nEffClosed: cc.length,
+      duplicateCompressionOpen: openRows.length - oc.length,
+      duplicateCompressionClosed: closedRows.length - cc.length,
+      avgPnlBps: cogRound(pnlVals.length ? pnlVals.reduce((a,b)=>a+b,0) / pnlVals.length : null, 2),
+      avgMaeBps: cogRound(maeVals.length ? maeVals.reduce((a,b)=>a+b,0) / maeVals.length : null, 2),
+      avgMfeBps: cogRound(mfeVals.length ? mfeVals.reduce((a,b)=>a+b,0) / mfeVals.length : null, 2),
+      betaBelief: belief,
+      lifecycleShadow: belief.nEff < 5 ? 'WAIT_N_EFF' : (belief.lossesEff > belief.winsEff ? 'SHADOW_REVIEW' : 'MONITOR'),
+      closedClusters: cc,
+      openClusters: oc
+    });
+  }
+
+  families.sort((a,b) => (b.rawClosed + b.rawOpen) - (a.rawClosed + a.rawOpen));
+
+  const decisions = [];
+  function pushDecision(action, trigger, subject, evidence, reason, severity = 'INFO') {
+    const key = `${action}::${trigger}::${subject}::${stableStringify(evidence).slice(0, 500)}`;
+    decisions.push({ key, action, trigger, subject, severity, evidence, reason, reversible: true });
+  }
+
+  if (allTrades.length > allClusters.length) {
+    pushDecision(
+      'DEDUP_SAMPLE_WEIGHT',
+      'DUPLICATE_CLUSTER_DETECTED',
+      'GLOBAL_FORWARD_LEDGER',
+      { rawTrades: allTrades.length, effectiveClusters: allClusters.length, compression: allTrades.length - allClusters.length },
+      `Detected correlated trade clusters. Raw count ${allTrades.length} is treated as ${allClusters.length} effective samples for judgement only; no trade execution is changed.`,
+      'HIGH'
+    );
+  }
+
+  for (const f of families) {
+    if (f.rawClosed > 0 && f.rawClosed > f.nEffClosed) {
+      pushDecision(
+        'COUNT_CLOSED_AS_EFFECTIVE_SAMPLE',
+        'CORRELATED_CLOSED_TRADES',
+        f.subject,
+        { rawClosed: f.rawClosed, nEffClosed: f.nEffClosed, compression: f.duplicateCompressionClosed, rawLosses: f.rawLosses, rawWins: f.rawWins },
+        `${f.subject}: ${f.rawClosed} closed trades compress to ${f.nEffClosed} effective samples. Strategy judgement must use nEff, not raw count.`,
+        'HIGH'
+      );
+    }
+    if (f.rawClosed > 0 && f.nEffClosed < 5) {
+      pushDecision(
+        'WAIT_FOR_EFFECTIVE_SAMPLE',
+        'MIN_SAMPLE_NOT_MET',
+        f.subject,
+        { rawClosed: f.rawClosed, nEffClosed: f.nEffClosed, required: 5, betaMean: f.betaBelief.mean },
+        `${f.subject}: forward evidence remains low-sample after deduplication. Keep learning in Shadow/WAITING_RESULTS until nEff >= 5.`,
+        'MEDIUM'
+      );
+    }
+    if (f.rawClosed > 0 && f.rawLosses === f.rawClosed && f.stopLosses / Math.max(1, f.rawClosed) >= 0.8) {
+      pushDecision(
+        'SHADOW_ENTRY_STOP_REVIEW',
+        'STOP_CLUSTER_BEFORE_THESIS',
+        f.subject,
+        { rawClosed: f.rawClosed, nEffClosed: f.nEffClosed, stopLosses: f.stopLosses, avgMfeBps: f.avgMfeBps, avgMaeBps: f.avgMaeBps, avgPnlBps: f.avgPnlBps },
+        `${f.subject}: losses are stop-driven. Stage 1 only recommends Entry Timing / Stop ATR review in Shadow; no live stop widening is applied.`,
+        'HIGH'
+      );
+    }
+    if (f.rawOpen > f.nEffOpen && f.rawOpen >= 2) {
+      pushDecision(
+        'OPEN_EXPOSURE_DEDUP_VIEW',
+        'CORRELATED_OPEN_TRADES',
+        f.subject,
+        { rawOpen: f.rawOpen, nEffOpen: f.nEffOpen, compression: f.duplicateCompressionOpen },
+        `${f.subject}: ${f.rawOpen} open trades are approximately ${f.nEffOpen} independent open hypotheses. Keep current ARI exposure limits; report nEff separately.`,
+        'MEDIUM'
+      );
+    }
+  }
+
+  const summary = {
+    rawOpen: openTrades.length,
+    rawClosed: closedTrades.length,
+    rawTotal: allTrades.length,
+    nEffOpen: openClusters.length,
+    nEffClosed: closedClusters.length,
+    nEffTotal: allClusters.length,
+    duplicateCompression: allTrades.length - allClusters.length,
+    families: families.length,
+    shadowDecisions: decisions.length,
+    noExecutionChanges: true,
+    mode: 'SHADOW_ONLY'
+  };
+
+  return {
+    schema: 'alps.cognition.view.v1',
+    version: COGNITION_PATCH_VERSION,
+    generatedAt: new Date().toISOString(),
+    summary,
+    families,
+    clusters: { open: openClusters, closed: closedClusters, all: allClusters },
+    shadowDecisions: decisions,
+    note: 'Stage 1 reads evidence, deduplicates correlated samples, logs decisions, and emits shadow recommendations only. It never opens/closes/modifies trades.'
+  };
+}
+
+async function appendCognitionDecision(decision) {
+  await loadCognitionState();
+  if (cognitionState.seenDecisionKeys.includes(decision.key)) return null;
+  cognitionState.seq += 1;
+  const payload = {
+    seq: cognitionState.seq,
+    decisionId: sha256(`${decision.key}::${cognitionState.seq}`).slice(0, 24),
+    ts: new Date().toISOString(),
+    version: COGNITION_PATCH_VERSION,
+    ...decision,
+    prevHash: cognitionState.prevHash
+  };
+  const currHash = sha256(stableStringify(payload) + cognitionState.prevHash);
+  const record = { ...payload, currHash };
+  await fsp.appendFile(COGNITION_LEDGER_FILE, JSON.stringify(record) + '\n').catch(e => log('Cognition ledger append failed:', e.message));
+  cognitionState.prevHash = currHash;
+  cognitionState.seenDecisionKeys.push(decision.key);
+  while (cognitionState.seenDecisionKeys.length > 1000) cognitionState.seenDecisionKeys.shift();
+  return record;
+}
+
+async function updateCognitionState(report, exported) {
+  await loadCognitionState();
+  const view = cognitionAnalyse(exported || {}, report || {});
+  const appended = [];
+  for (const d of view.shadowDecisions) {
+    const rec = await appendCognitionDecision(d);
+    if (rec) appended.push(rec);
+  }
+  view.ledger = {
+    seq: cognitionState.seq,
+    prevHash: cognitionState.prevHash,
+    appendedThisRun: appended.length,
+    path: COGNITION_LEDGER_FILE,
+    tamperEvident: true
+  };
+  cognitionState.lastView = view;
+  lastCognitionView = view;
+  await saveCognitionState();
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-cognition.json'), JSON.stringify(view, null, 2)).catch(() => null);
+  return view;
+}
+
+function buildCognitionMarkdown(view = lastCognitionView) {
+  if (!view) return '## ALPS v9.2 Cognition Shadow Core\n- No cognition view yet.';
+  const s = view.summary || {};
+  const lines = [
+    '',
+    '## ALPS v9.2 Cognition Shadow Core',
+    `- Version: ${view.version}`,
+    `- Mode: ${s.mode || 'SHADOW_ONLY'}`,
+    `- No execution changes: ${s.noExecutionChanges ? 'YES' : 'NO'}`,
+    `- Raw open/closed: ${s.rawOpen}/${s.rawClosed}`,
+    `- Effective open/closed: ${s.nEffOpen}/${s.nEffClosed}`,
+    `- Duplicate compression: ${s.duplicateCompression}`,
+    `- Families tracked: ${s.families}`,
+    `- Shadow decisions: ${s.shadowDecisions}`,
+    `- Decision ledger seq: ${view.ledger?.seq ?? 0}`,
+    `- Hash chain head: ${view.ledger?.prevHash || 'GENESIS'}`,
+    '',
+    '### Family Effective Sample Summary',
+    '| Subject | Raw Open | Eff Open | Raw Closed | Eff Closed | W/L | Avg PnL bps | Avg MFE/MAE | Shadow Lifecycle |',
+    '|---|---:|---:|---:|---:|---:|---:|---:|---|'
+  ];
+  for (const f of (view.families || []).slice(0, 16)) {
+    lines.push(`| ${mdCell(f.subject)} | ${f.rawOpen} | ${f.nEffOpen} | ${f.rawClosed} | ${f.nEffClosed} | ${f.rawWins}/${f.rawLosses} | ${mdCell(f.avgPnlBps ?? '')} | ${mdCell((f.avgMfeBps ?? '—') + '/' + (f.avgMaeBps ?? '—'))} | ${mdCell(f.lifecycleShadow)} |`);
+  }
+  lines.push('', '### Shadow Recommendations / Decision Reasons', '| Action | Severity | Subject | Reason |', '|---|---|---|---|');
+  for (const d of (view.shadowDecisions || []).slice(0, 20)) {
+    lines.push(`| ${mdCell(d.action)} | ${mdCell(d.severity)} | ${mdCell(d.subject)} | ${mdCell(d.reason)} |`);
+  }
+  lines.push('', '> Cognition note: Stage 1 only changes interpretation and logging. It does not widen stops, ban patterns, open trades, close trades, or alter AHI/ARI execution.');
   return lines.join('\n');
 }
 
@@ -718,7 +1132,7 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 } }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' } }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/export-recovery-state') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -751,6 +1165,25 @@ async function createServer() {
         await loadTradeVaultState();
         await collectReport().catch(() => null);
         return send(res, 200, buildTradeVaultView());
+      }
+      if (url.pathname === '/runner/cognition.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await loadCognitionState();
+        await collectReport().catch(() => null);
+        return send(res, 200, lastCognitionView || cognitionState.lastView || { error: 'No cognition view yet' });
+      }
+      if (url.pathname === '/runner/cognition.md') {
+        if (!isAuthed(req)) return send(res, 401, 'Unauthorized', 'text/plain; charset=utf-8');
+        await loadCognitionState();
+        await collectReport().catch(() => null);
+        return send(res, 200, buildCognitionMarkdown(lastCognitionView || cognitionState.lastView), 'text/markdown; charset=utf-8');
+      }
+      if (url.pathname === '/runner/cognition-ledger.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await loadCognitionState();
+        const raw = await fsp.readFile(COGNITION_LEDGER_FILE, 'utf8').catch(() => '');
+        const rows = raw.split('\n').filter(Boolean).slice(-200).map(line => { try { return JSON.parse(line); } catch (_) { return { raw: line }; } });
+        return send(res, 200, { schema: 'alps.cognition.ledger.tail.v1', version: COGNITION_PATCH_VERSION, seq: cognitionState.seq, hashHead: cognitionState.prevHash, rows });
       }
       if (url.pathname === '/runner/trades.md') {
         if (!isAuthed(req)) return send(res, 401, 'Unauthorized', 'text/plain; charset=utf-8');
@@ -1106,6 +1539,7 @@ async function collectReport() {
   await updateTradeVault(lastTradeExport, 'report');
   report.quantEdgeTradeExport = lastTradeExport;
   report.alpsTradeContinuityVault = buildTradeVaultView();
+  report.alpsCognition = await updateCognitionState(report, lastTradeExport);
 
   let md = '';
   try {
@@ -1173,6 +1607,7 @@ async function runCommand(command, args = {}) {
     return { ok: true, health: await getPageHealth() };
   }
   if (command === 'report') return { ok: true, report: await collectReport() };
+  if (command === 'cognition') { await collectReport().catch(() => null); return { ok: true, cognition: lastCognitionView || cognitionState?.lastView || null }; }
   if (command === 'recovery') { await loadRecoveryState(); return { ok: true, recovery: buildRecoveryView(), state: recoveryState }; }
   if (command === 'recover-forward') { lastHealth = enhanceHealth({ ...lastHealth, forwardStale: true }); await maybeRecoverStaleForward(); return { ok: true, health: lastHealth, recovery: buildRecoveryView() }; }
   if (command === 'reload') {

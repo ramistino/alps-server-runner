@@ -1,5 +1,5 @@
 /**
- * ALPS Runner Trade Export v1.0
+ * ALPS Runner Trade Export v1.1
  *
  * Exposes real paper-forward open/closed trades for QuantEdge.
  * This module does not change strategy logic and does not open live execution.
@@ -72,6 +72,7 @@ function normalizeOpenTrade(trade, index = 0) {
   const stop = safeNumber(firstValue(trade, ['stop', 'sl', 'stopLoss']));
   const target = safeNumber(firstValue(trade, ['target', 'tp', 'takeProfit', 'targetPrice']));
   const pnlPct = safePct(trade, ['pnlPct', 'returnPct', 'profitPct', 'unrealizedPnlPct'], ['pnlBps', 'unrealizedPnlBps']);
+  const pnlBps = safeNumber(firstValue(trade, ['pnlBps', 'unrealizedPnlBps', 'pnl']));
   const openedAt = normalizeTimestamp(firstValue(trade, ['openedAt', 'openTime', 'timestamp', 'date', 'createdAt', 'signalTime', 'generatedAt', 'ts']));
   const statusRaw = String(firstValue(trade, ['status', 'state', 'outcome']) || 'OPEN').toUpperCase();
   const status = statusRaw.includes('CLOSE') ? 'CLOSED' : 'OPEN';
@@ -90,6 +91,7 @@ function normalizeOpenTrade(trade, index = 0) {
     stop,
     target,
     pnlPct,
+    pnlBps,
     status,
     openedAt,
     mfeBps: safeNumber(firstValue(trade, ['mfeBps'])),
@@ -110,10 +112,12 @@ function normalizeClosedTrade(trade, index = 0) {
   const entry = safeNumber(firstValue(trade, ['entry', 'entryPrice', 'open', 'openPrice', 'signalPrice', 'price']));
   const exit = safeNumber(firstValue(trade, ['exit', 'exitPrice', 'close', 'closePrice', 'finalPrice']));
   const pnlPct = safePct(trade, ['pnlPct', 'returnPct', 'profitPct', 'realizedPnlPct'], ['pnlBps', 'realizedPnlBps']);
+  const pnlBps = safeNumber(firstValue(trade, ['pnlBps', 'realizedPnlBps', 'pnl']));
   const bars = safeNumber(firstValue(trade, ['bars', 'durationBars', 'holdBars']));
   const openedAt = normalizeTimestamp(firstValue(trade, ['openedAt', 'openTime', 'timestamp', 'date', 'createdAt', 'signalTime', 'generatedAt', 'ts']));
   const closedAt = normalizeTimestamp(firstValue(trade, ['closedAt', 'closeTime', 'exitTime', 'completedAt', 'exitTs'])) || openedAt || '';
-  const result = String(firstValue(trade, ['result', 'outcome']) || (pnlPct > 0 ? 'WIN' : pnlPct < 0 ? 'LOSS' : ''));
+  const resultSignal = pnlBps !== null ? pnlBps : (pnlPct !== null ? pnlPct * 100 : null);
+  const result = String(firstValue(trade, ['result', 'outcome']) || (resultSignal > 0 ? 'WIN' : resultSignal < 0 ? 'LOSS' : ''));
 
   if (!pair || !direction || entry === null) return null;
 
@@ -127,6 +131,7 @@ function normalizeClosedTrade(trade, index = 0) {
     entry,
     exit,
     pnlPct,
+    pnlBps,
     bars,
     result,
     status: 'CLOSED',
@@ -194,11 +199,11 @@ function buildTradesMarkdown(exported) {
   const stats = exported?.stats || {};
 
   const openRows = open.map(t =>
-    `| ${mdCell(t.tradeId)} | ${mdCell(t.pair)} | ${mdCell(t.timeframe)} | ${mdCell(t.direction)} | ${mdCell(t.strategy)} | ${mdCell(t.entry)} | ${mdCell(t.current)} | ${mdCell(t.stop)} | ${mdCell(t.target)} | ${mdCell(t.pnlPct)} | ${mdCell(t.status)} |`
+    `| ${mdCell(t.tradeId)} | ${mdCell(t.pair)} | ${mdCell(t.timeframe)} | ${mdCell(t.direction)} | ${mdCell(t.strategy)} | ${mdCell(t.entry)} | ${mdCell(t.current)} | ${mdCell(t.stop)} | ${mdCell(t.target)} | ${mdCell(t.pnlBps ?? t.pnlPct)} | ${mdCell(t.status)} |`
   ).join('\n');
 
   const closedRows = closed.map(t =>
-    `| ${mdCell(t.tradeId)} | ${mdCell(t.closedAt || t.openedAt)} | ${mdCell(t.pair)} | ${mdCell(t.timeframe)} | ${mdCell(t.direction)} | ${mdCell(t.strategy)} | ${mdCell(t.entry)} | ${mdCell(t.exit)} | ${mdCell(t.pnlPct)} | ${mdCell(t.bars)} | ${mdCell(t.result)} | ${mdCell(t.status)} |`
+    `| ${mdCell(t.tradeId)} | ${mdCell(t.closedAt || t.openedAt)} | ${mdCell(t.pair)} | ${mdCell(t.timeframe)} | ${mdCell(t.direction)} | ${mdCell(t.strategy)} | ${mdCell(t.entry)} | ${mdCell(t.exit)} | ${mdCell(t.pnlBps ?? t.pnlPct)} | ${mdCell(t.bars)} | ${mdCell(t.result)} | ${mdCell(t.status)} |`
   ).join('\n');
 
   return [
@@ -214,7 +219,7 @@ function buildTradesMarkdown(exported) {
     `- Closed Trades: ${mdCell(stats.closedTrades ?? closed.length)}`,
     '',
     '## Open Trades',
-    '| Trade ID | Pair | TF | Direction | Strategy | Entry | Current | Stop | Target | PnL% | Status |',
+    '| Trade ID | Pair | TF | Direction | Strategy | Entry | Current | Stop | Target | PnL bps/% | Status |',
     '|---|---|---|---|---|---:|---:|---:|---:|---:|---|',
     openRows || '|  |  |  |  | No open trades exported |  |  |  |  |  |  |',
     '',
