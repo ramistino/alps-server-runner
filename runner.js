@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.4.2 Dedup Integrity Fix (on v9.4.1 Live Paper Evidence Collector)
+ * ALPS Server Runner — v9.4.3 Boot Race Fix (on v9.4.2 Dedup Integrity Fix)
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.4.2-dedup-integrity-fix';
+const RECOVERY_PATCH_VERSION = 'v9.4.3-boot-race-fix';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.4.2-dedup-integrity-fix';
+const COGNITION_PATCH_VERSION = 'v9.4.3-boot-race-fix';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.4.2-dedup-integrity-fix';
+const AUTONOMY_PATCH_VERSION = 'v9.4.3-boot-race-fix';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -344,7 +344,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.4.1 Live Paper Evidence Collector
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.4.2-dedup-integrity-fix';
+const FINAL_V930_VERSION = 'v9.4.3-boot-race-fix';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -696,14 +696,24 @@ function v94ForwardEligibleCountFromView(view = lastNativeForwardPoolView || {})
 function v941ExperimentalCountFromView(view = lastNativeForwardPoolView || {}) { return n(view.experimentalForward, 0); }
 function v941IsForwardTier(tier = '') { return /^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(textValue(tier)); }
 function v94BuildRecoveryForwardCoreView(report = {}) {
-  const bridge = report.oosEvidenceBridge || lastOOSEvidenceBridgeView || {};
-  const pool = report.nativeForwardPool || lastNativeForwardPoolView || {};
+  // v9.4.3 boot-race fix: prefer the freshest non-empty view. A stale report snapshot taken mid-boot
+  // (e.g. pairFrames 30/35, zero strategies) must not override the live pool that already has candidates.
+  const reportPool = report.nativeForwardPool || {};
+  const livePool = lastNativeForwardPoolView || {};
+  const reportPoolCount = n(reportPool.totalCandidates, 0);
+  const livePoolCount = n(livePool.totalCandidates, 0);
+  const pool = reportPoolCount >= livePoolCount ? reportPool : livePool;
+  const reportBridge = report.oosEvidenceBridge || {};
+  const liveBridge = lastOOSEvidenceBridgeView || {};
+  const bridge = n(reportBridge.evidenceRows, 0) >= n(liveBridge.evidenceRows, 0) ? reportBridge : liveBridge;
   const eligible = v94ForwardEligibleCountFromView(pool);
   const experimental = v941ExperimentalCountFromView(pool);
   const verified = n(pool.fullAutonomyForward, 0) + n(pool.watchForward, 0);
   const data = report.data || {};
-  const rawStrategies = n(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || 0, 0);
-  const pairFrames = n(data.pairFrames || report.dataPairFrames || lastHealth?.dataPairFrames || 0, 0);
+  // v9.4.3: fall back to live health for research/data progress so a mid-boot snapshot cannot report 0/30 while the live app is at full readiness.
+  const liveRawStrategies = n(lastHealth?.rawResearchStrategies ?? lastHealth?.bootDiagnostics?.researchStrategies, 0);
+  const rawStrategies = Math.max(n(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || 0, 0), liveRawStrategies);
+  const pairFrames = Math.max(n(data.pairFrames || report.dataPairFrames || 0, 0), n(lastHealth?.dataPairFrames, 0));
   const noEvidence = pairFrames >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && rawStrategies > 0 && eligible === 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0;
   const forwardDecision = verified > 0 ? 'START_VERIFIED_FORWARD_WHEN_FRESH'
     : experimental > 0 ? 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE'
@@ -2634,6 +2644,10 @@ function isBootOrLabStuckCandidate(h = {}) {
   const incompleteData = pairFrames > 0 && pairFrames < BOOT_WATCHDOG_TARGET_PAIRFRAMES;
   const noResearchProgress = rawStrategies === 0 && cycles === 0 && monitored === 0 && generated === 0;
   const pausedRunner = String(h.runnerStateStatus || d.runnerStateStatus || '').toLowerCase() === 'paused';
+  // v9.4.3 boot-race fix: active research (lab running with strategies/cycles/monitored growing) is progress,
+  // not stuckness — incomplete pairFrames alone must never trigger a Chromium relaunch that resets that progress.
+  const researchActivelyProgressing = !!h.labRunning && (rawStrategies > 0 || cycles > 0 || monitored > 0 || generated > 0);
+  if (researchActivelyProgressing && !pausedRunner) return false;
   return AUTO_BOOT_WATCHDOG && hasPartialData && noForwardStarted && (incompleteData || noResearchProgress || pausedRunner);
 }
 
@@ -3653,9 +3667,29 @@ async function startForwardIfEligible(reason = 'live-paper-evidence-collector') 
   const pool = lastNativeForwardPoolView || lastHealth?.nativeForwardPool || {}; const eligible = v94ForwardEligibleCountFromView(pool);
   if (!eligible || !page || page.isClosed()) return false;
   const h = await getPageHealth().catch(() => lastHealth || {}); if (h?.fwRunning || h?.emergencyStopActive) return !!h?.fwRunning;
-  log(`Live Paper Evidence Collector starting Browser Runner. eligibleForward=${eligible} reason=${reason}`);
+  // v9.4.3 boot-race fix: never start forward on incomplete data. Full pairFrames readiness is required so
+  // experimental paper trades only ever see complete closed-candle data (data-integrity guard, not a strategy gate).
+  const pairFramesNow = Math.max(n(h?.dataPairFrames, 0), n(lastHealth?.dataPairFrames, 0));
+  if (pairFramesNow < BOOT_WATCHDOG_TARGET_PAIRFRAMES) {
+    log(`Live Paper Evidence Collector holding forward start: data not complete yet (pairFrames=${pairFramesNow}/${BOOT_WATCHDOG_TARGET_PAIRFRAMES}). eligibleForward=${eligible} reason=${reason}`);
+    return false;
+  }
+  log(`Live Paper Evidence Collector starting Browser Runner. eligibleForward=${eligible} pairFrames=${pairFramesNow}/${BOOT_WATCHDOG_TARGET_PAIRFRAMES} reason=${reason}`);
   await pageEval(async reasonText => { try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {} try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {} try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {} try { if (typeof startWatch === 'function') await startWatch(); } catch (_) {} try { if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText || 'live-paper-evidence-collector'); } catch (_) {} try { if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false); } catch (_) {} try { if (typeof renderAll === 'function') renderAll(); } catch (_) {} return true; }, reason).catch(e => log('Live Paper Evidence Collector startWatch failed:', e.message));
-  return true;
+  // v9.4.3: verify the start actually took effect and inform the watchdog, so it never counts a
+  // successfully-started forward as boot stuckness (the phantom-stuckness half of the boot race).
+  await new Promise(resolve => setTimeout(resolve, 4000));
+  const after = enhanceHealth(await getPageHealth().catch(() => lastHealth || {}));
+  if (after?.fwRunning || n(after?.lastForwardRefresh, 0) > 0) {
+    Object.assign(lastHealth, after, { status: 'RUNNING', lastTickAt: Date.now(), lastError: '' });
+    updateBootProgress(lastHealth);
+    lastRunnerWatchdogView = { ...buildRunnerWatchdogView(lastHealth), state: 'FORWARD_RUNNING_AFTER_ACTION', lastAction: 'START_FORWARD_RUNNER_PROACTIVE' };
+    log(`Live Paper Evidence Collector forward start confirmed: fwRunning=${!!after.fwRunning} lastForwardRefresh=${n(after.lastForwardRefresh, 0)} reason=${reason}`);
+    await recordSnapshot(snapshotFromMetrics(lastHealth, 'proactive-forward-start')).catch(() => null);
+    return true;
+  }
+  log(`Live Paper Evidence Collector forward start attempted but fwRunning is still false; will retry on next tick. reason=${reason}`);
+  return false;
 }
 
 
