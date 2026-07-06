@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.3.1.3 Watchdog Action Executor
+ * ALPS Server Runner — v9.4.0 Recovery Forward Core
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.3.1.3-watchdog-action-executor';
+const RECOVERY_PATCH_VERSION = 'v9.4.0-recovery-forward-core';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.3.1.3-watchdog-action-executor';
+const COGNITION_PATCH_VERSION = 'v9.4.0-recovery-forward-core';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.3.1.3-watchdog-action-executor';
+const AUTONOMY_PATCH_VERSION = 'v9.4.0-recovery-forward-core';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -337,11 +337,14 @@ let lastBootWatchdogAt = 0;
 let bootWatchdogRestarts = 0;
 let watchdogActionBusy = false;
 let lastRunnerWatchdogView = null;
+let lastOOSEvidenceBridgeView = null;
+let lastOOSEvidenceRows = [];
+let lastRecoveryForwardCoreView = null;
 
 
-// ALPS v9.3.1.3 Watchdog Action Executor
+// ALPS v9.4.0 Recovery Forward Core
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.3.1.3-watchdog-action-executor';
+const FINAL_V930_VERSION = 'v9.4.0-recovery-forward-core';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -544,7 +547,7 @@ function buildChartView(report = {}) {
 }
 
 
-// ALPS v9.3.1.3 Watchdog Action Executor
+// ALPS v9.4.0 Recovery Forward Core
 // Adds three decision-layer controls above the stable v9.3.0 runtime:
 // 1) minimum-evidence gate BEFORE cluster dedup, 2) cluster dedup before the forward pool,
 // 3) quantitative FULL_AUTONOMY_FORWARD promotion, 4) mutation stagnation governor that moves selection budget to exploration.
@@ -629,6 +632,62 @@ function v931EvidenceTier(c = {}) {
   if (m.promote) return 'QUANT_PASS';
   if (v931HasMinimumEvidence(c)) return 'EVIDENCE_READY';
   return 'NO_OOS_EVIDENCE';
+}
+
+function v94CanonicalPair(value) { return textValue(value).toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function v94CanonicalTf(value) { const raw = textValue(value).toLowerCase().trim(); return raw.replace('minutes','m').replace('minute','m').replace('hours','h').replace('hour','h').replace(/\s+/g, ''); }
+function v94CandidateBridgeKey(c = {}) { return [v94CanonicalPair(c.pair || c.baseSymbol || c.symbol || c.sym || ''), v94CanonicalTf(c.timeframe || c.tf || c.frame || ''), v931StrategyRoot(c), v931ExitRoot(c)].join('|'); }
+function v94CandidateLooseKey(c = {}) { return [v94CanonicalPair(c.pair || c.baseSymbol || c.symbol || c.sym || ''), v94CanonicalTf(c.timeframe || c.tf || c.frame || ''), v931StrategyRoot(c)].join('|'); }
+function v94PickNumber(obj = {}, names = []) { for (const name of names) { const numv = v931Num(obj?.[name], null); if (numv != null) return numv; } return null; }
+function v94ExtractEvidenceCandidate(obj = {}, source = 'unknown') {
+  if (!obj || typeof obj !== 'object') return null;
+  const pair = obj.pair || obj.baseSymbol || obj.symbol || obj.sym || obj.market || '';
+  const timeframe = obj.timeframe || obj.tf || obj.frame || obj.interval || '';
+  const strategy = obj.strategy || obj.stratName || obj.name || obj.setup || obj.pattern || '';
+  const exit = obj.exit || obj.exitName || obj.targetType || obj.exitRule || '';
+  const oosPF = v94PickNumber(obj, ['oosPF','oosPf','oosProfitFactor','outOfSamplePF','outSamplePF','validationPF','forwardPF','testPF','pfOOS']);
+  const oosTrades = v94PickNumber(obj, ['oosTrades','outOfSampleTrades','outSampleTrades','validationTrades','forwardTrades','testTrades','oosN','nOOS','oosCount']);
+  if (!(oosPF > 0) || !(oosTrades >= 10)) return null;
+  const row = { source, pair: v94CanonicalPair(pair), timeframe: v94CanonicalTf(timeframe), strategy: textValue(strategy), exit: textValue(exit), root: v931StrategyRoot({ strategy, stratName: strategy, name: strategy }), exitRoot: v931ExitRoot({ exit, exitName: exit }), oosPF, oosTrades, totalTrades: v94PickNumber(obj, ['totalTrades','trades','nTrades','sampleTrades']) ?? oosTrades, rollingMinPF: v94PickNumber(obj, ['rollingMinPF','rollingPF','robustnessRolling','walkForwardMinPF']), stress5: v94PickNumber(obj, ['stress5','stressPF5','robustnessStress5','monteCarloPF5']), oosDD: v94PickNumber(obj, ['oosDD','ddBps','maxDD','drawdown','oosDrawdown']), score: v94PickNumber(obj, ['score','rankScore','fitness']) ?? 0 };
+  row.key = [row.pair, row.timeframe, row.root, row.exitRoot].join('|');
+  row.looseKey = [row.pair, row.timeframe, row.root].join('|');
+  return row;
+}
+function v94ScanEvidenceObjects(root, source = 'report', limit = 5000) {
+  const out = [], stack = [{ value: root, path: source }], seen = new Set();
+  while (stack.length && out.length < limit) {
+    const item = stack.pop(), value = item.value;
+    if (!value || typeof value !== 'object' || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) { for (let i = 0; i < Math.min(value.length, 3000); i += 1) stack.push({ value: value[i], path: `${item.path}[${i}]` }); continue; }
+    const ev = v94ExtractEvidenceCandidate(value, item.path); if (ev) out.push(ev);
+    for (const [k, v] of Object.entries(value)) { if (!v || typeof v !== 'object') continue; if (/candles|ohlc|featureRows|recentLogs|logs/i.test(k)) continue; stack.push({ value: v, path: `${item.path}.${k}` }); }
+  }
+  const best = new Map();
+  for (const row of out) { const cur = best.get(row.key); const score = (row.oosTrades || 0) * Math.max(0, row.oosPF || 0); const curScore = cur ? (cur.oosTrades || 0) * Math.max(0, cur.oosPF || 0) : -1; if (!cur || score > curScore) best.set(row.key, row); }
+  return [...best.values()];
+}
+function v94BuildEvidenceBridge(report = {}, candidateRows = []) {
+  const candidates = safeArray(candidateRows).filter(Boolean);
+  const evidenceRows = v94ScanEvidenceObjects(report, 'report');
+  const byKey = new Map(evidenceRows.map(r => [r.key, r]));
+  const byLoose = new Map(); for (const row of evidenceRows) if (!byLoose.has(row.looseKey)) byLoose.set(row.looseKey, row);
+  let matchedRows = 0, candidateRowsWithEvidence = 0; const matchedKeys = [];
+  for (const c of candidates) { const ev = byKey.get(v94CandidateBridgeKey(c)) || byLoose.get(v94CandidateLooseKey(c)); if (ev) { matchedRows += 1; matchedKeys.push(v94CandidateBridgeKey(c)); } if (v931HasMinimumEvidence(c)) candidateRowsWithEvidence += 1; }
+  const view = { schema: 'alps.oosEvidenceBridge.view.v1', version: FINAL_V930_VERSION, installed: true, realEvidenceOnly: true, source: 'report/deep-scan + existing candidate fields', candidateRows: candidates.length, evidenceRows: evidenceRows.length, matchedRows, candidateRowsWithEvidence, unmatchedRows: Math.max(0, candidates.length - matchedRows - candidateRowsWithEvidence), matchedKeys: [...new Set(matchedKeys)].slice(0, 20), noEvidenceAvailable: candidates.length > 0 && matchedRows === 0 && candidateRowsWithEvidence === 0, rule: 'Only rows with real oosPF > 0 and oosTrades >= 10 are mapped. No synthetic OOS metrics are created.' };
+  lastOOSEvidenceBridgeView = view; lastOOSEvidenceRows = evidenceRows; return { view, evidenceRows };
+}
+function v94ApplyOosEvidenceToRows(rows = [], evidenceRows = []) {
+  const byKey = new Map(safeArray(evidenceRows).map(r => [r.key, r]));
+  const byLoose = new Map(); for (const row of safeArray(evidenceRows)) if (!byLoose.has(row.looseKey)) byLoose.set(row.looseKey, row);
+  return safeArray(rows).map(row => { if (!row || typeof row !== 'object' || v931HasMinimumEvidence(row)) return row; const ev = byKey.get(v94CandidateBridgeKey(row)) || byLoose.get(v94CandidateLooseKey(row)); if (!ev) return row; row.oosPF = ev.oosPF; row.oosTrades = ev.oosTrades; if (row.totalTrades == null) row.totalTrades = ev.totalTrades; if (row.rollingMinPF == null && ev.rollingMinPF != null) row.rollingMinPF = ev.rollingMinPF; if (row.stress5 == null && ev.stress5 != null) row.stress5 = ev.stress5; if (row.oosDD == null && ev.oosDD != null) row.oosDD = ev.oosDD; row.__alpsOosEvidenceMatched = true; row.__alpsOosEvidenceSource = ev.source; row.forwardEligible = true; row.forwardBlockReason = ''; row.blockReason = ''; if (!/WATCHLIST|FORWARD/i.test(textValue(row.promotionTier))) row.promotionTier = 'WATCHLIST_OOS_EVIDENCE_BRIDGE'; return row; });
+}
+function v94ForwardEligibleCountFromView(view = lastNativeForwardPoolView || {}) { return n(view.fullAutonomyForward, 0) + n(view.watchForward, 0); }
+function v94BuildRecoveryForwardCoreView(report = {}) {
+  const bridge = report.oosEvidenceBridge || lastOOSEvidenceBridgeView || {}; const pool = report.nativeForwardPool || lastNativeForwardPoolView || {}; const eligible = v94ForwardEligibleCountFromView(pool); const data = report.data || {}; const rawStrategies = n(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || 0, 0); const pairFrames = n(data.pairFrames || report.dataPairFrames || lastHealth?.dataPairFrames || 0, 0);
+  const noEvidence = pairFrames >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && rawStrategies > 0 && eligible === 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0;
+  const view = { schema: 'alps.recoveryForwardCore.view.v1', version: FINAL_V930_VERSION, installed: true, bootChain: 'DATA_LOAD -> RESEARCH -> OOS_EVIDENCE_BRIDGE -> FORWARD_START', pairFrames, rawResearchStrategies: rawStrategies, eligibleForwardCandidates: eligible, oosEvidenceBridge: bridge, forwardDecision: eligible > 0 ? 'START_FORWARD_WHEN_FRESH' : (noEvidence ? 'NO_EVIDENCE_AVAILABLE' : 'WAITING_FOR_BOOT_OR_EVIDENCE'), honestFailure: noEvidence, paperOnly: true, liveCapitalExecution: false };
+  lastRecoveryForwardCoreView = view; return view;
 }
 function v931RankCandidate(c = {}) {
   const m = v931EvidenceMetrics(c);
@@ -716,6 +775,7 @@ function classifyCandidateV930(c = {}, routes = []) {
   const suspended = routes.find(r => String(r.action || '').toUpperCase().includes('SHADOW') && autonomyRouteMatchesCandidate(r, c));
   if (suspended) return { tier: 'COGNITION_SUSPENDED', safetyReason: '', evidenceLabels: qLabels.concat(['COGNITION_ROUTE']), routeKey: suspended.routeKey || '', quantitative: metrics };
   if (metrics.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['PROMOTED_BY_AUTONOMY']), quantitative: metrics };
+  if (hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS','OOS_EVIDENCE_READY']), quantitative: metrics };
   if ((c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS']), quantitative: metrics };
   if ((c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) && !hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['FORWARD_HELD_NO_OOS']), quantitative: metrics };
   if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|')) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS']), quantitative: metrics };
@@ -725,8 +785,10 @@ function classifyCandidateV930(c = {}, routes = []) {
 }
 function buildNativeForwardPoolView(report = {}, routes = []) {
   const top = safeArray(report?.research?.topStrategies);
+  const bridgeBundle = v94BuildEvidenceBridge(report, top);
+  const bridgedTop = v94ApplyOosEvidenceToRows(top, bridgeBundle.evidenceRows);
   const mutationGovernor = v931BuildMutationGovernor(report);
-  const deduped = v931DedupCandidates(top, report, FINAL_V930_TECHNICAL_CAP);
+  const deduped = v931DedupCandidates(bridgedTop, report, FINAL_V930_TECHNICAL_CAP);
   const selected = [];
   const seen = new Set();
   const quotas = mutationGovernor.active
@@ -789,10 +851,11 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
       thresholds: { nEffOOS: 25, posteriorPFgt1: 0.90, rollingMinPF: 0.60, fallbackPF: 1.80, fallbackStress5: 1.20 }
     },
     duplicateCompression: deduped.stats,
+    oosEvidenceBridge: bridgeBundle.view,
     mutationGovernor,
     evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
     candidates: selected.slice(0, 50),
-    note: 'v9.3.1.3: minimum OOS evidence is required before WATCH_FORWARD, and the runner watchdog executes stuck boot/loading/paused-forward recovery actions. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; dedup then selects cluster representatives; quantitative promotion is explicit.'
+    note: 'v9.4.0: Recovery Forward Core maps real OOS evidence into candidates before classification. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; no evidence now reports NO_EVIDENCE_AVAILABLE instead of silent paused forward.'
   };
 }
 function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
@@ -836,16 +899,20 @@ function enrichReportV930(report = {}, pageStatus = null) {
   const chart = buildChartView(report);
   report.nativeForwardPool = nativeView;
   report.fullAutonomyNativeForwardPool = nativeView;
+  report.oosEvidenceBridge = nativeView?.oosEvidenceBridge || lastOOSEvidenceBridgeView || null;
+  report.recoveryForwardCore = v94BuildRecoveryForwardCoreView(report);
   report.fullAutonomy = fullAutonomy;
   report.engineHook = engineHook;
   report.counterfactual = counterfactual;
   report.mutationGovernor = mutationGovernor;
-  report.decisionIntelligence = { schema: 'alps.decisionIntelligence.view.v1', version: FINAL_V930_VERSION, duplicateCompression: nativeView?.duplicateCompression || null, quantitativePromotion: nativeView?.quantitativePromotion || null, mutationGovernor };
+  report.decisionIntelligence = { schema: 'alps.decisionIntelligence.view.v1', version: FINAL_V930_VERSION, duplicateCompression: nativeView?.duplicateCompression || null, quantitativePromotion: nativeView?.quantitativePromotion || null, oosEvidenceBridge: report.oosEvidenceBridge || null, mutationGovernor };
   report.circuitBreaker = circuitBreaker;
   report.chart = chart;
   report.v930 = { version: FINAL_V930_VERSION, dataSource: 'LIVE SNAPSHOT', liveCapitalExecution: false, appStableBase: 'v9.2.2-persistent-autonomous-memory' };
   report.runnerWatchdog = buildRunnerWatchdogView(lastHealth || {});
   lastNativeForwardPoolView = nativeView;
+  lastOOSEvidenceBridgeView = report.oosEvidenceBridge || lastOOSEvidenceBridgeView;
+  lastRecoveryForwardCoreView = report.recoveryForwardCore || lastRecoveryForwardCoreView;
   lastFullAutonomyView = fullAutonomy;
   lastEngineHookView = engineHook;
   lastCounterfactualView = counterfactual;
@@ -861,7 +928,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1.3 Watchdog Action Executor\n`;
+  let md = `## ALPS v9.4.0 Recovery Forward Core\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -903,7 +970,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1.3 Watchdog Action Executor\n`;
+  let md = `## ALPS v9.4.0 Recovery Forward Core\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -949,7 +1016,7 @@ function buildV930Markdown(report = {}) {
   md += line('Progress age', `${rw.progressAgeMin ?? 0} min / threshold ${rw.bootWatchdogMin ?? Math.round(BOOT_WATCHDOG_MS/60000)} min`) + '\n';
   md += line('Target pair-frames', rw.targetPairFrames ?? BOOT_WATCHDOG_TARGET_PAIRFRAMES) + '\n';
   md += line('Last action', rw.lastAction || '—') + '\n';
-  md += `\n> v9.3.1.3 note: Runner Watchdog now executes the recovery action when RESTART_DUE is reached. It first starts the forward watcher if candidates already exist; otherwise it safely relaunches Chromium and restarts research. It does not fabricate trades, force entries, or bypass closed-candle/freshness safety.\n`;
+  md += `\n> v9.4.0 note: Recovery Forward Core starts the forward watcher only when real OOS evidence produces WATCH_FORWARD/FULL_AUTONOMY_FORWARD. If no evidence exists, it reports NO_EVIDENCE_AVAILABLE clearly. It does not fabricate OOS, force entries, or bypass closed-candle/freshness safety.\n`;
   return md;
 }
 
@@ -2423,7 +2490,19 @@ function enhanceHealth(h = {}) {
   if (!out.engineHook && lastEngineHookView) out.engineHook = lastEngineHookView;
   if (!out.circuitBreaker && lastCircuitBreakerView) out.circuitBreaker = lastCircuitBreakerView;
   if (!out.chart && lastChartView) out.chart = lastChartView;
+  if (!out.oosEvidenceBridge && lastOOSEvidenceBridgeView) out.oosEvidenceBridge = lastOOSEvidenceBridgeView;
+  if (!out.recoveryForwardCore && lastRecoveryForwardCoreView) out.recoveryForwardCore = lastRecoveryForwardCoreView;
+  const eligibleForward = v94ForwardEligibleCountFromView(out.nativeForwardPool || lastNativeForwardPoolView || {});
+  const bridge = out.oosEvidenceBridge || lastOOSEvidenceBridgeView || {};
+  const pairFrames = n(out.dataPairFrames ?? out.bootDiagnostics?.pairFrames, 0);
+  const rawStrategies = n(out.rawResearchStrategies ?? out.bootDiagnostics?.researchStrategies, 0);
+  const monitored = n(out.candidatesMonitored ?? out.bootDiagnostics?.candidatesMonitored ?? out.candidates, 0);
   if (forward.forwardStale) out.status = 'STALE_FORWARD';
+  if (!out.fwRunning && pairFrames >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && rawStrategies > 0 && monitored > 0 && eligibleForward === 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0) {
+    out.forwardStatus = 'NO_EVIDENCE_AVAILABLE';
+    out.noEvidenceAvailable = true;
+    out.status = 'NO_EVIDENCE_AVAILABLE';
+  }
   out.runnerWatchdog = lastRunnerWatchdogView || buildRunnerWatchdogView(out);
   return out;
 }
@@ -2507,7 +2586,7 @@ function buildRunnerWatchdogView(h = lastHealth || {}) {
       proxyOK: h.proxyOK ?? d.proxyOK ?? null,
       recentLogs: d.recentLogs || []
     },
-    rule: 'If Chromium remains LOADED/LAB_RUNNING with partial data, fwRunning=false, lastForwardRefresh=0, and no research/forward progress for the threshold window, reload the page and restart research safely. It never fabricates trades or bypasses closed-candle/freshness safety.'
+    rule: 'If Chromium remains LOADED/LAB_RUNNING with partial data, fwRunning=false, lastForwardRefresh=0, and no research/forward progress for the threshold window, Recovery Forward Core starts forward only for OOS-evidence candidates; otherwise it declares NO_EVIDENCE_AVAILABLE. It never fabricates trades or bypasses closed-candle/freshness safety.'
   };
 }
 
@@ -2529,9 +2608,18 @@ async function maybeRecoverStuckBoot(h = lastHealth || {}, options = {}) {
   bootWatchdogRestarts += 1;
   const actionSource = String(options.source || 'watchdog-loop');
   const diag = view.diagnostics || {};
-  const hasReadyResearch = n(diag.candidatesMonitored, 0) > 0 || n(h.candidates, 0) > 0 || n(h.officialCandidates, 0) > 0 || n(diag.rawResearchStrategies, 0) > 0;
+  const eligibleForward = v94ForwardEligibleCountFromView(h.nativeForwardPool || lastNativeForwardPoolView || {});
+  const bridge = h.oosEvidenceBridge || lastOOSEvidenceBridgeView || {};
+  const noEvidenceAvailable = n(diag.pairFrames, 0) >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && n(diag.rawResearchStrategies, 0) > 0 && (n(diag.candidatesMonitored, 0) > 0 || n(h.candidates, 0) > 0) && eligibleForward <= 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0;
+  if (noEvidenceAvailable) {
+    lastRunnerWatchdogView = { ...view, state: 'NO_EVIDENCE_AVAILABLE', lastAction: 'HOLD_FORWARD_NO_OOS_EVIDENCE', actionSource, restarts: bootWatchdogRestarts };
+    lastRecoveryForwardCoreView = { ...(lastRecoveryForwardCoreView || {}), installed: true, version: FINAL_V930_VERSION, forwardDecision: 'NO_EVIDENCE_AVAILABLE', honestFailure: true, eligibleForwardCandidates: 0, oosEvidenceBridge: bridge, paperOnly: true, liveCapitalExecution: false };
+    log(`Recovery Forward Core honest hold: no real OOS evidence for forward candidates. pairFrames=${diag.pairFrames} rawStrategies=${diag.rawResearchStrategies} candidates=${n(h.candidates,0)}`);
+    return false;
+  }
+  const hasReadyResearch = eligibleForward > 0;
   lastRunnerWatchdogView = { ...view, state: 'EXECUTING_ACTION', lastAction: hasReadyResearch ? 'START_FORWARD_RUNNER' : 'RELOAD_STUCK_BOOT_OR_LAB', actionSource, restarts: bootWatchdogRestarts };
-  log(`Runner watchdog action executor: source=${actionSource} pairFrames=${diag.pairFrames}/${BOOT_WATCHDOG_TARGET_PAIRFRAMES} candles=${diag.candlesLoaded} rawStrategies=${diag.rawResearchStrategies} monitored=${diag.candidatesMonitored} candidates=${n(h.candidates, 0)} action=${lastRunnerWatchdogView.lastAction}`);
+  log(`Runner watchdog action executor: source=${actionSource} pairFrames=${diag.pairFrames}/${BOOT_WATCHDOG_TARGET_PAIRFRAMES} candles=${diag.candlesLoaded} rawStrategies=${diag.rawResearchStrategies} monitored=${diag.candidatesMonitored} candidates=${n(h.candidates, 0)} eligibleForward=${eligibleForward} action=${lastRunnerWatchdogView.lastAction}`);
 
   try {
     // First rescue path: if discovery has produced candidates/results but the Browser Runner is still paused,
@@ -2689,7 +2777,7 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message)); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}) }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message)); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}) }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -3392,6 +3480,8 @@ async function getPageHealth() {
       chart: val(() => window.__ALPS_FINAL_V930__?.chart || null, null),
       mutationGovernor: val(() => window.__ALPS_FINAL_V930__?.mutationGovernor || null, null),
       decisionIntelligence: val(() => window.__ALPS_FINAL_V930__?.decisionIntelligence || null, null),
+      oosEvidenceBridge: val(() => window.__ALPS_FINAL_V930__?.oosEvidenceBridge || null, null),
+      recoveryForwardCore: val(() => window.__ALPS_FINAL_V930__?.recoveryForwardCore || null, null),
       dataSource: 'LIVE SNAPSHOT',
       candlesLoaded: num(data.candlesLoaded, 0),
       dataPairFrames: num(data.pairFrames, 0),
@@ -3420,6 +3510,54 @@ async function getPageHealth() {
       }
     };
   });
+}
+
+
+async function syncOosEvidenceBridgeFromPage(reason = 'sync') {
+  if (!page || page.isClosed()) return lastOOSEvidenceBridgeView;
+  try {
+    const report = await pageEval(async () => { try { return typeof buildRunReportObject === 'function' ? await buildRunReportObject() : null; } catch (_) { return null; } });
+    if (report && typeof report === 'object') { const rows = safeArray(report?.research?.topStrategies); const bundle = v94BuildEvidenceBridge(report, rows); lastOOSEvidenceBridgeView = bundle.view; lastOOSEvidenceRows = bundle.evidenceRows; return bundle.view; }
+  } catch (e) { log(`OOS evidence bridge sync skipped (${reason}):`, e.message); }
+  return lastOOSEvidenceBridgeView;
+}
+
+async function applyOosEvidenceBridgeToPage(reason = 'apply') {
+  if (!page || page.isClosed()) return { mutated: 0, reason: 'page-not-ready' };
+  const evidence = safeArray(lastOOSEvidenceRows).slice(0, 2000);
+  if (!evidence.length) return { mutated: 0, reason: 'no-evidence-rows' };
+  try {
+    const result = await pageEval(evidenceRows => {
+      function text(v) { return String(v == null ? '' : v); }
+      function pairOf(c) { return text(c.pair || c.baseSymbol || c.symbol || c.sym || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+      function tfOf(c) { return text(c.timeframe || c.tf || c.frame || '').toLowerCase().replace(/\s+/g, ''); }
+      function rootOf(c) { const raw = text(c.strategy || c.stratName || c.name || '').toUpperCase(); if (/HA|HEIKIN/.test(raw) && /POC/.test(raw)) return 'HA_POC'; if (/BB|BOLLINGER|SQUEEZE/.test(raw)) return /REVERSAL/.test(raw) ? 'BOLLINGER_REVERSAL' : 'BB_SQUEEZE'; if (/EMA|TREND 20|20\/50|TREND/.test(raw)) return 'EMA_TREND'; if (/VAH|VAL|VALUE/.test(raw)) return 'VAH_VAL'; if (/POC/.test(raw)) return 'POC'; if (/HEIKIN|ASHI/.test(raw)) return 'HA'; if (/RSI|DIVERGENCE/.test(raw)) return 'RSI_DIVERGENCE_ZONE'; return raw.replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'UNKNOWN'; }
+      function exitOf(c) { const raw = text(c.exit || c.exitName || '').toUpperCase(); if (/ATR/.test(raw)) return 'ATR_TRAIL'; if (/POC/.test(raw)) return 'POC_TARGET'; if (/OPP|OPPOSITE/.test(raw) && /HA|HEIKIN/.test(raw)) return 'OPP_HA'; if (/TIME.*12|12H/.test(raw)) return 'TIME_12H'; const rr = raw.match(/([0-9]+(?:\.[0-9]+)?)\s*R/); if (rr) return `${rr[1]}R_FIXED`.replace('.', '_'); return raw.replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'UNKNOWN_EXIT'; }
+      function hasEvidence(c) { return Number(c.oosPF || 0) > 0 && Number(c.oosTrades || 0) >= 10; }
+      const byKey = new Map(), byLoose = new Map();
+      for (const e of Array.isArray(evidenceRows) ? evidenceRows : []) { if (!e || !e.key) continue; byKey.set(e.key, e); if (e.looseKey && !byLoose.has(e.looseKey)) byLoose.set(e.looseKey, e); }
+      const stores = [];
+      try { if (Array.isArray(globalThis.results)) stores.push(globalThis.results); } catch (_) {}
+      try { if (Array.isArray(globalThis.allResults)) stores.push(globalThis.allResults); } catch (_) {}
+      try { if (Array.isArray(globalThis.discoveryResults)) stores.push(globalThis.discoveryResults); } catch (_) {}
+      let mutated = 0;
+      for (const arr of stores) for (const c of arr) { if (!c || typeof c !== 'object' || hasEvidence(c)) continue; const k = [pairOf(c), tfOf(c), rootOf(c), exitOf(c)].join('|'); const lk = [pairOf(c), tfOf(c), rootOf(c)].join('|'); const ev = byKey.get(k) || byLoose.get(lk); if (!ev) continue; c.oosPF = ev.oosPF; c.oosTrades = ev.oosTrades; if (c.totalTrades == null) c.totalTrades = ev.totalTrades; if (c.rollingMinPF == null && ev.rollingMinPF != null) c.rollingMinPF = ev.rollingMinPF; if (c.stress5 == null && ev.stress5 != null) c.stress5 = ev.stress5; if (c.oosDD == null && ev.oosDD != null) c.oosDD = ev.oosDD; c.__alpsOosEvidenceMatched = true; c.__alpsOosEvidenceSource = ev.source; c.forwardEligible = true; c.forwardBlockReason = ''; c.blockReason = ''; if (!/WATCHLIST|FORWARD/i.test(text(c.promotionTier))) c.promotionTier = 'WATCHLIST_OOS_EVIDENCE_BRIDGE'; mutated += 1; }
+      try { globalThis.__ALPS_OOS_EVIDENCE_BRIDGE_APPLIED__ = { mutated, at: Date.now() }; } catch (_) {}
+      try { if (typeof renderAll === 'function') renderAll(); } catch (_) {}
+      return { mutated };
+    }, evidence);
+    if (result?.mutated) log(`OOS Evidence Bridge applied to page: mutated=${result.mutated} reason=${reason}`);
+    return result || { mutated: 0 };
+  } catch (e) { log(`OOS evidence bridge page apply failed (${reason}):`, e.message); return { mutated: 0, error: e.message }; }
+}
+
+async function startForwardIfEligible(reason = 'recovery-forward-core') {
+  const pool = lastNativeForwardPoolView || lastHealth?.nativeForwardPool || {}; const eligible = v94ForwardEligibleCountFromView(pool);
+  if (!eligible || !page || page.isClosed()) return false;
+  const h = await getPageHealth().catch(() => lastHealth || {}); if (h?.fwRunning || h?.emergencyStopActive) return !!h?.fwRunning;
+  log(`Recovery Forward Core starting Browser Runner. eligibleForward=${eligible} reason=${reason}`);
+  await pageEval(async reasonText => { try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {} try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {} try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {} try { if (typeof startWatch === 'function') await startWatch(); } catch (_) {} try { if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText || 'recovery-forward-core'); } catch (_) {} try { if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false); } catch (_) {} try { if (typeof renderAll === 'function') renderAll(); } catch (_) {} return true; }, reason).catch(e => log('Recovery Forward Core startWatch failed:', e.message));
+  return true;
 }
 
 
@@ -3560,6 +3698,8 @@ async function ensureRuntimeStarted() {
     }).catch(e => { throw new Error('Runtime prepare failed: ' + e.message); });
   }
 
+  await syncOosEvidenceBridgeFromPage('ensure-runtime').catch(() => null);
+  await applyOosEvidenceBridgeToPage('ensure-runtime').catch(() => null);
   const refreshed = await getPageHealth();
   Object.assign(lastHealth, enhanceHealth(refreshed));
 
@@ -3569,9 +3709,11 @@ async function ensureRuntimeStarted() {
     return;
   }
 
-  if (AUTO_START_WATCH && refreshed.candidates && !refreshed.fwRunning && !refreshed.emergencyStopActive) {
-    log(`Starting Browser Runner inside server Chromium. candidates=${refreshed.candidates}`);
-    await pageEval(async () => { if (typeof startWatch === 'function') await startWatch(); return true; });
+  const eligibleForward = v94ForwardEligibleCountFromView(lastHealth.nativeForwardPool || refreshed.nativeForwardPool || {});
+  if (AUTO_START_WATCH && eligibleForward > 0 && !refreshed.fwRunning && !refreshed.emergencyStopActive) {
+    await startForwardIfEligible('ensure-runtime-eligible-forward');
+  } else if (AUTO_START_WATCH && refreshed.candidates && eligibleForward <= 0) {
+    log(`Recovery Forward Core holding forward start: candidates=${refreshed.candidates}, eligibleForward=${eligibleForward}. No PFNA/OOSNA rows are admitted.`);
   }
 }
 
@@ -3590,7 +3732,10 @@ async function runnerTick(reason = 'server-runner tick') {
     await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install before catch-up failed:', e.message));
     const before = enhanceHealth(await getPageHealth());
     await installAutonomousBridgeInPage().catch(e => log('Autonomous bridge install before catch-up failed:', e.message));
-    await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy reinstall after bridge failed:', e.message));
+    await syncOosEvidenceBridgeFromPage('runner-tick').catch(() => null);
+    await applyOosEvidenceBridgeToPage('runner-tick').catch(() => null);
+    await installV930StableAutonomyInPage().catch(e => log('v9.4 recovery forward core reinstall after bridge failed:', e.message));
+    await startForwardIfEligible('runner-tick-eligible-forward').catch(() => null);
 
     if (before.fwRunning && !before.fwRefreshRunning) {
       await pageEval(async reasonText => {
@@ -3633,8 +3778,11 @@ async function collectReport() {
     return r;
   });
 
+  await syncOosEvidenceBridgeFromPage('collect-report-pre-enrich').catch(() => null);
+  await applyOosEvidenceBridgeToPage('collect-report-pre-enrich').catch(() => null);
   const pageV930Status = await installV930StableAutonomyInPage().catch(e => ({ installed: false, safe: true, lastError: e.message, fallbackActive: true, wrappedFunctions: [] }));
   report = enrichReportV930(report, pageV930Status);
+  await startForwardIfEligible('collect-report-eligible-forward').catch(() => null);
 
   const rawTradeLedgers = await collectPageTradeLedgers().catch(e => ({
     openTrades: [],
@@ -3684,7 +3832,7 @@ async function collectReport() {
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
-  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual }, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
