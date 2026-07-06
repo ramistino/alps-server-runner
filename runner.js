@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.3.1.2 Runner Watchdog
+ * ALPS Server Runner — v9.3.1.3 Watchdog Action Executor
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.3.1.2-runner-watchdog';
+const RECOVERY_PATCH_VERSION = 'v9.3.1.3-watchdog-action-executor';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.3.1.2-runner-watchdog';
+const COGNITION_PATCH_VERSION = 'v9.3.1.3-watchdog-action-executor';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.3.1.2-runner-watchdog';
+const AUTONOMY_PATCH_VERSION = 'v9.3.1.3-watchdog-action-executor';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -335,12 +335,13 @@ let lastBootProgressSignature = '';
 let lastBootProgressAt = Date.now();
 let lastBootWatchdogAt = 0;
 let bootWatchdogRestarts = 0;
+let watchdogActionBusy = false;
 let lastRunnerWatchdogView = null;
 
 
-// ALPS v9.3.1.2 Runner Watchdog
+// ALPS v9.3.1.3 Watchdog Action Executor
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.3.1.2-runner-watchdog';
+const FINAL_V930_VERSION = 'v9.3.1.3-watchdog-action-executor';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -543,7 +544,7 @@ function buildChartView(report = {}) {
 }
 
 
-// ALPS v9.3.1.2 Runner Watchdog
+// ALPS v9.3.1.3 Watchdog Action Executor
 // Adds three decision-layer controls above the stable v9.3.0 runtime:
 // 1) minimum-evidence gate BEFORE cluster dedup, 2) cluster dedup before the forward pool,
 // 3) quantitative FULL_AUTONOMY_FORWARD promotion, 4) mutation stagnation governor that moves selection budget to exploration.
@@ -791,7 +792,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     mutationGovernor,
     evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
     candidates: selected.slice(0, 50),
-    note: 'v9.3.1.2: minimum OOS evidence is required before WATCH_FORWARD, and the runner watchdog restarts stuck Chromium boot/loading sessions. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; dedup then selects cluster representatives; quantitative promotion is explicit.'
+    note: 'v9.3.1.3: minimum OOS evidence is required before WATCH_FORWARD, and the runner watchdog executes stuck boot/loading/paused-forward recovery actions. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; dedup then selects cluster representatives; quantitative promotion is explicit.'
   };
 }
 function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
@@ -860,7 +861,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1.2 Runner Watchdog\n`;
+  let md = `## ALPS v9.3.1.3 Watchdog Action Executor\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -902,7 +903,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1.2 Runner Watchdog\n`;
+  let md = `## ALPS v9.3.1.3 Watchdog Action Executor\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -948,7 +949,7 @@ function buildV930Markdown(report = {}) {
   md += line('Progress age', `${rw.progressAgeMin ?? 0} min / threshold ${rw.bootWatchdogMin ?? Math.round(BOOT_WATCHDOG_MS/60000)} min`) + '\n';
   md += line('Target pair-frames', rw.targetPairFrames ?? BOOT_WATCHDOG_TARGET_PAIRFRAMES) + '\n';
   md += line('Last action', rw.lastAction || '—') + '\n';
-  md += `\n> v9.3.1.2 note: the pool remains evidence-gated, and Runner Watchdog only restarts stuck Chromium loading/research sessions. It does not fabricate trades, force entries, or bypass closed-candle/freshness safety.\n`;
+  md += `\n> v9.3.1.3 note: Runner Watchdog now executes the recovery action when RESTART_DUE is reached. It first starts the forward watcher if candidates already exist; otherwise it safely relaunches Chromium and restarts research. It does not fabricate trades, force entries, or bypass closed-candle/freshness safety.\n`;
   return md;
 }
 
@@ -2510,7 +2511,7 @@ function buildRunnerWatchdogView(h = lastHealth || {}) {
   };
 }
 
-async function maybeRecoverStuckBoot(h = lastHealth || {}) {
+async function maybeRecoverStuckBoot(h = lastHealth || {}, options = {}) {
   updateBootProgress(h);
   const view = buildRunnerWatchdogView(h);
   lastRunnerWatchdogView = view;
@@ -2518,44 +2519,75 @@ async function maybeRecoverStuckBoot(h = lastHealth || {}) {
   if (Date.now() - (lastHealth.startedAt || Date.now()) < BOOT_WATCHDOG_MIN_BOOT_AGE_MS) return false;
   if (view.progressAgeMs < BOOT_WATCHDOG_MS) return false;
   if (Date.now() - lastBootWatchdogAt < BOOT_WATCHDOG_COOLDOWN_MS) return false;
+  if (watchdogActionBusy) {
+    lastRunnerWatchdogView = { ...view, state: 'ACTION_ALREADY_RUNNING', lastAction: 'WAIT_EXISTING_WATCHDOG_ACTION' };
+    return false;
+  }
 
+  watchdogActionBusy = true;
   lastBootWatchdogAt = Date.now();
   bootWatchdogRestarts += 1;
-  lastRunnerWatchdogView = { ...view, state: 'RESTARTING_CHROMIUM_PAGE', lastAction: 'RELOAD_STUCK_BOOT_OR_LAB' };
-  log(`Runner watchdog recovery: stuck boot/lab detected. pairFrames=${view.diagnostics.pairFrames}/${BOOT_WATCHDOG_TARGET_PAIRFRAMES} candles=${view.diagnostics.candlesLoaded} rawStrategies=${view.diagnostics.rawResearchStrategies} monitored=${view.diagnostics.candidatesMonitored}`);
-
-  try { await collectReport().catch(() => null); } catch (_) {}
+  const actionSource = String(options.source || 'watchdog-loop');
+  const diag = view.diagnostics || {};
+  const hasReadyResearch = n(diag.candidatesMonitored, 0) > 0 || n(h.candidates, 0) > 0 || n(h.officialCandidates, 0) > 0 || n(diag.rawResearchStrategies, 0) > 0;
+  lastRunnerWatchdogView = { ...view, state: 'EXECUTING_ACTION', lastAction: hasReadyResearch ? 'START_FORWARD_RUNNER' : 'RELOAD_STUCK_BOOT_OR_LAB', actionSource, restarts: bootWatchdogRestarts };
+  log(`Runner watchdog action executor: source=${actionSource} pairFrames=${diag.pairFrames}/${BOOT_WATCHDOG_TARGET_PAIRFRAMES} candles=${diag.candlesLoaded} rawStrategies=${diag.rawResearchStrategies} monitored=${diag.candidatesMonitored} candidates=${n(h.candidates, 0)} action=${lastRunnerWatchdogView.lastAction}`);
 
   try {
-    if (page && !page.isClosed()) {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 }).catch(e => log('Runner watchdog page reload failed:', e.message));
-      await page.waitForLoadState('load', { timeout: 120_000 }).catch(() => null);
-      await page.waitForFunction(() => typeof buildRunReportObject === 'function' || typeof startLab === 'function' || typeof startWatch === 'function', null, { timeout: 120_000 }).catch(() => null);
-    } else {
-      await launchAppPage({ allowProfileReset: false });
+    // First rescue path: if discovery has produced candidates/results but the Browser Runner is still paused,
+    // start the actual forward watcher directly. This does not create trades and does not bypass freshness/closed-candle gates.
+    if (page && !page.isClosed() && hasReadyResearch) {
+      lastRunnerWatchdogView = { ...lastRunnerWatchdogView, state: 'STARTING_FORWARD_RUNNER', lastAction: 'START_FORWARD_RUNNER' };
+      await pageEval(async reasonText => {
+        try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {}
+        try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {}
+        try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {}
+        try { if (typeof startWatch === 'function') await startWatch(); } catch (_) {}
+        try { if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText || 'runner-watchdog-action-executor'); } catch (_) {}
+        try { if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false); } catch (_) {}
+        try { if (typeof renderAll === 'function') renderAll(); } catch (_) {}
+        return true;
+      }, 'runner-watchdog-action-executor').catch(e => log('Runner watchdog direct forward start failed:', e.message));
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const directHealth = enhanceHealth(await getPageHealth().catch(() => lastHealth));
+      Object.assign(lastHealth, directHealth, { status: directHealth.fwRunning ? 'RUNNING' : (directHealth.labRunning ? 'LAB_RUNNING' : 'LOADED'), lastTickAt: Date.now(), lastError: '' });
+      if (directHealth.fwRunning || n(directHealth.lastForwardRefresh, 0) > 0) {
+        updateBootProgress(directHealth);
+        lastRunnerWatchdogView = { ...buildRunnerWatchdogView(lastHealth), state: 'FORWARD_RUNNING_AFTER_ACTION', lastAction: 'START_FORWARD_RUNNER', restarts: bootWatchdogRestarts };
+        await recordSnapshot(snapshotFromMetrics(lastHealth, 'runner-watchdog-forward-start')).catch(() => null);
+        return true;
+      }
+      log('Runner watchdog direct forward start did not make fwRunning=true; falling back to page relaunch.');
     }
+
+    // Second rescue path: full Chromium page relaunch. This is deliberately operational only;
+    // it restarts loading/research and keeps the paper-only boundary intact.
+    lastRunnerWatchdogView = { ...lastRunnerWatchdogView, state: 'RELAUNCHING_CHROMIUM_PAGE', lastAction: 'FORCE_RELAUNCH_CHROMIUM_PAGE', restarts: bootWatchdogRestarts };
+    await closeBrowserContextSafe().catch(() => null);
+    await launchAppPage({ allowProfileReset: false });
     await installV930StableAutonomyInPage().catch(e => log('Runner watchdog autonomy reinstall failed:', e.message));
     await pageEval(async () => {
       try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {}
       try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {}
       try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {}
-      try {
-        // Restart research only; do not force paper entries. Browser Runner starts later only after real candidates exist.
-        if (typeof startLab === 'function' && !globalThis.labRunning) startLab();
-      } catch (_) {}
+      try { if (typeof startLab === 'function') startLab(); } catch (_) {}
       return true;
-    }).catch(e => log('Runner watchdog runtime restart hook failed:', e.message));
-    const fresh = enhanceHealth(await getPageHealth());
+    }).catch(e => log('Runner watchdog runtime relaunch hook failed:', e.message));
+    const fresh = enhanceHealth(await getPageHealth().catch(() => lastHealth));
+    lastBootProgressSignature = '';
+    lastBootProgressAt = Date.now();
     updateBootProgress(fresh);
-    Object.assign(lastHealth, fresh, { status: 'WATCHDOG_RECOVERING', lastTickAt: Date.now(), lastError: '' });
-    lastRunnerWatchdogView = { ...buildRunnerWatchdogView(lastHealth), lastAction: 'RELOADED_AND_RESTARTED_RESEARCH' };
-    await recordSnapshot(snapshotFromMetrics(lastHealth, 'runner-watchdog-recovery')).catch(() => null);
+    Object.assign(lastHealth, fresh, { status: 'WATCHDOG_RELAUNCHED', lastTickAt: Date.now(), lastError: '' });
+    lastRunnerWatchdogView = { ...buildRunnerWatchdogView(lastHealth), state: 'RELAUNCHED_RESEARCH_RESTARTED', lastAction: 'FORCE_RELAUNCH_CHROMIUM_PAGE', restarts: bootWatchdogRestarts };
+    await recordSnapshot(snapshotFromMetrics(lastHealth, 'runner-watchdog-relaunch')).catch(() => null);
     return true;
   } catch (e) {
-    lastHealth.lastError = `Runner watchdog recovery failed: ${e.message}`;
-    lastRunnerWatchdogView = { ...lastRunnerWatchdogView, state: 'RECOVERY_ERROR', lastAction: 'RECOVERY_FAILED', error: e.message };
+    lastHealth.lastError = `Runner watchdog action executor failed: ${e.message}`;
+    lastRunnerWatchdogView = { ...lastRunnerWatchdogView, state: 'ACTION_ERROR', lastAction: 'ACTION_FAILED', error: e.message, restarts: bootWatchdogRestarts };
     log(lastHealth.lastError);
     return false;
+  } finally {
+    watchdogActionBusy = false;
   }
 }
 
@@ -2657,9 +2689,9 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}) }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message)); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}) }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
-      if (url.pathname === '/runner/watchdog') { return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
+      if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/export-recovery-state') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/import-recovery-state' && req.method === 'POST') {
@@ -3638,6 +3670,13 @@ async function collectReport() {
   md = `${md}\n\n${buildV930Markdown(report)}`;
   md = appendRecoveryMarkdown(md);
   lastReportMarkdown = md;
+  try {
+    const reportHealth = enhanceHealth(await getPageHealth());
+    Object.assign(lastHealth, reportHealth, { status: reportHealth.forwardStale ? 'STALE_FORWARD' : (reportHealth.fwRunning ? 'RUNNING' : (reportHealth.labRunning ? 'LAB_RUNNING' : 'LOADED')), lastError: '' });
+    await maybeRecoverStuckBoot(lastHealth, { source: 'collect-report-action-executor' }).catch(e => log('Runner watchdog action from report failed:', e.message));
+  } catch (e) {
+    log('Runner watchdog report health refresh skipped:', e.message);
+  }
   lastHealth.lastReportAt = Date.now();
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-report.json'), JSON.stringify(report, null, 2));
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-report.md'), md);
