@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.3.1 Decision Intelligence Spec
+ * ALPS Server Runner — v9.3.1.1 Evidence-Gated Decision Intelligence
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.3.1-decision-intelligence-spec';
+const RECOVERY_PATCH_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.3.1-decision-intelligence-spec';
+const COGNITION_PATCH_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.3.1-decision-intelligence-spec';
+const AUTONOMY_PATCH_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -327,9 +327,9 @@ let lastLaunchError = null;
 let launchAttempts = 0;
 
 
-// ALPS v9.3.1 Decision Intelligence Spec
+// ALPS v9.3.1.1 Evidence-Gated Decision Intelligence
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.3.1-decision-intelligence-spec';
+const FINAL_V930_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -532,10 +532,11 @@ function buildChartView(report = {}) {
 }
 
 
-// ALPS v9.3.1 Decision Intelligence Spec
+// ALPS v9.3.1.1 Evidence-Gated Decision Intelligence
 // Adds three decision-layer controls above the stable v9.3.0 runtime:
-// 1) cluster dedup before the forward pool, 2) quantitative FULL_AUTONOMY_FORWARD promotion,
-// 3) mutation stagnation governor that moves selection budget to exploration.
+// 1) minimum-evidence gate BEFORE cluster dedup, 2) cluster dedup before the forward pool,
+// 3) quantitative FULL_AUTONOMY_FORWARD promotion, 4) mutation stagnation governor that moves selection budget to exploration.
+// v9.3.1.1 fixes v9.3.1 by preventing PFNA/OOSNA rows from taking WATCH_FORWARD slots.
 function v931Num(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -607,12 +608,24 @@ function v931EvidenceMetrics(c = {}) {
     : `WAIT: nEff=${nEffOOS}/25, posterior=${posteriorPFgt1.toFixed(2)}/0.90, rollingPass=${rollingPass}, PF=${oosPF.toFixed(2)}`;
   return { oosPF, oosTrades, totalTrades, nEffOOS, clusterSize, rollingMinPF: rolling, stress5, posteriorPFgt1, rollingPass, posteriorPass, samplePass, pfPass, promote, reason };
 }
+function v931HasMinimumEvidence(c = {}) {
+  const m = v931EvidenceMetrics(c);
+  return m.oosPF > 0 && m.oosTrades >= 10;
+}
+function v931EvidenceTier(c = {}) {
+  const m = v931EvidenceMetrics(c);
+  if (m.promote) return 'QUANT_PASS';
+  if (v931HasMinimumEvidence(c)) return 'EVIDENCE_READY';
+  return 'NO_OOS_EVIDENCE';
+}
 function v931RankCandidate(c = {}) {
   const m = v931EvidenceMetrics(c);
   const score = v931Num(c.score, 0);
   const dd = v931Num(c.oosDD ?? c.ddBps, 0);
   const forwardBonus = (c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) ? 30 : 0;
-  return score + (m.posteriorPFgt1 * 100) + (m.oosPF * 10) + (m.nEffOOS * 0.4) + forwardBonus - (dd / 5000);
+  const evidenceBonus = v931HasMinimumEvidence(c) ? 1000 : -5000;
+  const promotedBonus = m.promote ? 1500 : 0;
+  return evidenceBonus + promotedBonus + score + (m.posteriorPFgt1 * 100) + (m.oosPF * 10) + (m.nEffOOS * 0.4) + forwardBonus - (dd / 5000);
 }
 function v931DedupCandidates(rows = [], report = {}, cap = FINAL_V930_TECHNICAL_CAP) {
   const enriched = v931AttachRobustnessMetrics(safeArray(rows).filter(Boolean), report);
@@ -641,7 +654,7 @@ function v931DedupCandidates(rows = [], report = {}, cap = FINAL_V930_TECHNICAL_
   return {
     rows: selected.slice(0, cap),
     stats: {
-      method: 'CLUSTER_REPRESENTATIVE_BEFORE_FORWARD_POOL',
+      method: 'MIN_EVIDENCE_GATE_THEN_CLUSTER_REPRESENTATIVE',
       rawRows: enriched.length,
       clusters: clusters.size,
       selectedRows: Math.min(selected.length, cap),
@@ -684,15 +697,19 @@ function classifyCandidateV930(c = {}, routes = []) {
   const safety = candidateSafetyReason(c);
   const labels = candidateEvidenceLabels(c);
   const metrics = v931EvidenceMetrics(c);
-  const qLabels = labels.concat(metrics.promote ? ['QUANT_PASS'] : ['QUANT_WAIT']);
+  const evidenceTier = v931EvidenceTier(c);
+  const qLabels = labels.concat(metrics.promote ? ['QUANT_PASS'] : [evidenceTier]);
+  const hasEvidence = v931HasMinimumEvidence(c);
   if (safety) return { tier: safety === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: safety, evidenceLabels: qLabels, quantitative: metrics };
   const suspended = routes.find(r => String(r.action || '').toUpperCase().includes('SHADOW') && autonomyRouteMatchesCandidate(r, c));
   if (suspended) return { tier: 'COGNITION_SUSPENDED', safetyReason: '', evidenceLabels: qLabels.concat(['COGNITION_ROUTE']), routeKey: suspended.routeKey || '', quantitative: metrics };
-  if (c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels, quantitative: metrics };
   if (metrics.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['PROMOTED_BY_AUTONOMY']), quantitative: metrics };
-  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['WAITING_FOR_QUANT_EVIDENCE']), quantitative: metrics };
-  if (/DISCARD/i.test([c.rawVerdict, c.effectiveVerdict].map(textValue).join('|')) && Number(c.oosPF || 0) > 1 && Number(c.oosTrades || 0) >= 10) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['SANDBOX_RETEST']), quantitative: metrics };
-  return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels, quantitative: metrics };
+  if ((c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS']), quantitative: metrics };
+  if ((c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) && !hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['FORWARD_HELD_NO_OOS']), quantitative: metrics };
+  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|')) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS']), quantitative: metrics };
+  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['WAITING_FOR_MIN_EVIDENCE']), quantitative: metrics };
+  if (/DISCARD/i.test([c.rawVerdict, c.effectiveVerdict].map(textValue).join('|')) && hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['SANDBOX_RETEST']), quantitative: metrics };
+  return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['NO_FORWARD_WITHOUT_OOS']), quantitative: metrics };
 }
 function buildNativeForwardPoolView(report = {}, routes = []) {
   const top = safeArray(report?.research?.topStrategies);
@@ -763,7 +780,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     mutationGovernor,
     evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
     candidates: selected.slice(0, 50),
-    note: 'v9.3.1: forward pool is built from deduped cluster representatives first. Quantitative promotion is explicit; sample/DD/PF/LAB_ONLY remain evidence labels unless the quantitative rule passes.'
+    note: 'v9.3.1.1: minimum OOS evidence is required before WATCH_FORWARD. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; dedup then selects cluster representatives; quantitative promotion is explicit.'
   };
 }
 function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
@@ -831,7 +848,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1 Decision Intelligence Spec\n`;
+  let md = `## ALPS v9.3.1.1 Evidence-Gated Decision Intelligence\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -873,7 +890,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1 Decision Intelligence Spec\n`;
+  let md = `## ALPS v9.3.1.1 Evidence-Gated Decision Intelligence\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2983,15 +3000,19 @@ async function installV930StableAutonomyInPage() {
           return '';
         }
         function classify(c) {
-          const s = safety(c || {}); const m = metrics(c || {}); const ls = labels(c || {}).concat(m.promote ? ['QUANT_PASS'] : ['QUANT_WAIT']);
+          const s = safety(c || {}); const m = metrics(c || {}); const hasEvidence = hasMinEvidence(c || {}); const ls = labels(c || {}).concat(m.promote ? ['QUANT_PASS'] : [evidenceTier(c || {})]);
           if (s) return { tier: s === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: s, evidenceLabels: ls, quantitative: m };
-          if ((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls, quantitative: m };
           if (m.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['PROMOTED_BY_AUTONOMY']), quantitative: m };
-          if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['WAITING_FOR_QUANT_EVIDENCE']), quantitative: m };
-          if (/DISCARD/i.test([c && c.rawVerdict, c && c.effectiveVerdict].map(text).join('|')) && Number(c && c.oosPF || 0) > 1 && Number(c && c.oosTrades || 0) >= 10) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['SANDBOX_RETEST']), quantitative: m };
-          return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls, quantitative: m };
+          if (((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['MIN_EVIDENCE_PASS']), quantitative: m };
+          if (((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) && !hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['FORWARD_HELD_NO_OOS']), quantitative: m };
+          if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|')) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['MIN_EVIDENCE_PASS']), quantitative: m };
+          if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['WAITING_FOR_MIN_EVIDENCE']), quantitative: m };
+          if (/DISCARD/i.test([c && c.rawVerdict, c && c.effectiveVerdict].map(text).join('|')) && hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['SANDBOX_RETEST']), quantitative: m };
+          return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['NO_FORWARD_WITHOUT_OOS']), quantitative: m };
         }
-        function rank(c) { const m = metrics(c); const dd = num(c && (c.oosDD ?? c.ddBps), 0); return num(c && c.score, 0) + m.posteriorPFgt1 * 100 + m.oosPF * 10 + m.nEffOOS * 0.4 + ((c && c.forwardEligible === true) ? 30 : 0) - dd / 5000; }
+        function hasMinEvidence(c) { const m = metrics(c || {}); return m.oosPF > 0 && m.oosTrades >= 10; }
+        function evidenceTier(c) { const m = metrics(c || {}); if (m.promote) return 'QUANT_PASS'; if (hasMinEvidence(c)) return 'EVIDENCE_READY'; return 'NO_OOS_EVIDENCE'; }
+        function rank(c) { const m = metrics(c); const dd = num(c && (c.oosDD ?? c.ddBps), 0); const evidenceBonus = hasMinEvidence(c) ? 1000 : -5000; const promotedBonus = m.promote ? 1500 : 0; return evidenceBonus + promotedBonus + num(c && c.score, 0) + m.posteriorPFgt1 * 100 + m.oosPF * 10 + m.nEffOOS * 0.4 + ((c && c.forwardEligible === true) ? 30 : 0) - dd / 5000; }
         function dedup(rows) {
           const clusters = new Map();
           for (const c of arr(rows).filter(Boolean)) {
@@ -3004,7 +3025,7 @@ async function installV930StableAutonomyInPage() {
             reps.push(cl.rep); if (cl.members.length > 1) topClusters.push({ key: cl.key, size: cl.members.length, representative: key(cl.rep) });
           }
           reps.sort((a,b) => rank(b) - rank(a));
-          return { rows: reps, stats: { method: 'CLUSTER_REPRESENTATIVE_BEFORE_FORWARD_POOL', rawRows: arr(rows).length, clusters: clusters.size, selectedRows: reps.length, compressedRows: Math.max(0, arr(rows).length - clusters.size), topClusters: topClusters.sort((a,b)=>b.size-a.size).slice(0,12) } };
+          return { rows: reps, stats: { method: 'MIN_EVIDENCE_GATE_THEN_CLUSTER_REPRESENTATIVE', rawRows: arr(rows).length, clusters: clusters.size, selectedRows: reps.length, compressedRows: Math.max(0, arr(rows).length - clusters.size), topClusters: topClusters.sort((a,b)=>b.size-a.size).slice(0,12) } };
         }
         function sourceRows() { try { if (Array.isArray(globalThis.results) && globalThis.results.length) return globalThis.results; } catch (_) {} try { if (typeof results !== 'undefined' && Array.isArray(results) && results.length) return results; } catch (_) {} return []; }
         function promoteInPlace(c, cls) {
@@ -3034,13 +3055,14 @@ async function installV930StableAutonomyInPage() {
           const active = c >= 12 || z >= 12;
           return { schema:'alps.mutationGovernor.view.v1', version: policy.version, installed:true, mode: active ? 'EXPLORATION_REBALANCE' : 'NORMAL_MUTATION', active, zeroImprovementLogs:z, consecutiveZeroImprovement:c, missingEdgeGenerated:m, trigger: active ? 'ZERO_IMPROVEMENT_STAGNATION' : '', action: active ? 'Selection budget rebalanced to cluster representatives and under-covered hypotheses.' : 'Observe' };
         }
-        function applyNow() { let mutated=0; const native = buildNativeFromRows(sourceRows()); for (const c of sourceRows()) { const cls=classify(c); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(cls.tier) && promoteInPlace(c, cls)) mutated++; } status.nativeForwardPool = native; status.fullAutonomy = { schema:'alps.fullAutonomy.view.v1', version: policy.version, enabled:true, mode:'DECIDE_AND_ACT_PAPER_ONLY', paperOnly:true, liveCapitalExecution:false, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, decisions:[ native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} rows compressed`} : {action:'WAIT_FOR_EVIDENCE', reason:'Awaiting fresh closed-candle signal'} ], lastDecision: native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : 'WAIT_FOR_EVIDENCE', nativeForwardPool:{ totalCandidates:native.totalCandidates, promotedByFullAutonomy:native.promotedByFullAutonomy, blockedBySafety:native.blockedBySafety } }; status.nativeExecutionControl = { installed:true, authoritative:true, version:policy.version, mutatedCandidates:mutated, lastAppliedAt:Date.now(), rule:'Deduped cluster representatives are selected first; only WATCH_FORWARD and quantitative FULL_AUTONOMY_FORWARD are written back as forward-eligible.' }; status.engineHook = { installed:true, safe:true, version:policy.version, lastError:status.lastError||'', wrappedFunctions:arr(status.wrappedFunctions), fallbackActive:!!status.fallbackActive, nativeExecutionControl:status.nativeExecutionControl }; status.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:status.mutationGovernor || null }; return native; }
+        function applyNow() { let mutated=0; const native = buildNativeFromRows(sourceRows()); for (const c of sourceRows()) { const cls=classify(c); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(cls.tier) && promoteInPlace(c, cls)) mutated++; } status.nativeForwardPool = native; status.fullAutonomy = { schema:'alps.fullAutonomy.view.v1', version: policy.version, enabled:true, mode:'DECIDE_AND_ACT_PAPER_ONLY', paperOnly:true, liveCapitalExecution:false, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, decisions:[ native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} rows compressed`} : {action:'WAIT_FOR_EVIDENCE', reason:'Awaiting fresh closed-candle signal'} ], lastDecision: native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : 'WAIT_FOR_EVIDENCE', nativeForwardPool:{ totalCandidates:native.totalCandidates, promotedByFullAutonomy:native.promotedByFullAutonomy, blockedBySafety:native.blockedBySafety } }; status.nativeExecutionControl = { installed:true, authoritative:true, version:policy.version, mutatedCandidates:mutated, lastAppliedAt:Date.now(), rule:'Minimum-evidence rows are selected before dedup. PFNA/OOSNA rows remain RESEARCH_SANDBOX; only evidence-ready WATCH_FORWARD and quantitative FULL_AUTONOMY_FORWARD are written back as forward-eligible.' }; status.engineHook = { installed:true, safe:true, version:policy.version, lastError:status.lastError||'', wrappedFunctions:arr(status.wrappedFunctions), fallbackActive:!!status.fallbackActive, nativeExecutionControl:status.nativeExecutionControl }; status.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:status.mutationGovernor || null }; return native; }
         function patchPool(name) {
           try { const original = globalThis[name] || window[name]; if (typeof original !== 'function' || original.__alpsV931Wrapped) return false; const wrapped = function(...args) { try { const base = arr(original.apply(this,args)); const combined = base.concat(sourceRows()); const native = buildNativeFromRows(combined); const out = native.candidates.map(x => Object.assign({}, combined.find(c => key(c) === x.key) || {}, { __alpsV931Tier:x.tier, forwardEligible:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(x.tier), forwardBlockReason:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(x.tier)?'':(x.originalBlockReason||''), candidateTier:x.tier, promotionStatus:x.tier, promotionGateSummary:x.tier })); status.nativeForwardPool = native; return out.slice(0, Number(policy.technicalCap || 360)); } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return original.apply(this,args); } }; wrapped.__alpsV931Wrapped = true; try { globalThis[name]=wrapped; } catch(_) { window[name]=wrapped; } if (!status.wrappedFunctions.includes(name+':v931')) status.wrappedFunctions.push(name+':v931'); return true; } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return false; }
         }
         patchPool('forwardCandidatePool'); patchPool('activeForwardCandidatePool');
         try { const originalReport = globalThis.buildRunReportObject || window.buildRunReportObject; if (typeof originalReport === 'function' && !originalReport.__alpsV931Wrapped) { const wrappedReport = async function(...args) { const report = await originalReport.apply(this,args); try { const native = buildNativeFromRows(arr(report && report.research && report.research.topStrategies).length ? report.research.topStrategies : sourceRows()); const mg = mutationGovernorFromReport(report); status.mutationGovernor = mg; status.nativeForwardPool = native; report.nativeForwardPool = native; report.fullAutonomyNativeForwardPool = native; report.mutationGovernor = mg; report.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:mg }; report.fullAutonomy = Object.assign({}, status.fullAutonomy || {}, { version:policy.version, enabled:true, paperOnly:true, liveCapitalExecution:false, decisions:[ native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} duplicate rows compressed before forward pool.`} : {action:'WAIT_FOR_EVIDENCE', reason:'No compression required.'}, mg.active ? {action:'REBUILD', reason:'Mutation stagnation moved selection to exploration representatives.'} : null ].filter(Boolean), lastDecision: mg.active ? 'EXPLORATION_REBALANCE' : (native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : 'WAIT_FOR_EVIDENCE'), duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:mg }); report.nativeExecutionControl = status.nativeExecutionControl; report.engineHook = status.engineHook; } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; } return report; }; wrappedReport.__alpsV931Wrapped = true; globalThis.buildRunReportObject = wrappedReport; if (!status.wrappedFunctions.includes('buildRunReportObject:v931')) status.wrappedFunctions.push('buildRunReportObject:v931'); } } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; }
         try { applyNow(); } catch(_) {}
+        if (!status.wrappedFunctions.includes('minimumEvidenceGate')) status.wrappedFunctions.push('minimumEvidenceGate');
         if (!status.wrappedFunctions.includes('dedupBeforeForwardPool')) status.wrappedFunctions.push('dedupBeforeForwardPool');
         if (!status.wrappedFunctions.includes('quantitativePromotionRule')) status.wrappedFunctions.push('quantitativePromotionRule');
         if (!status.wrappedFunctions.includes('stagnationExplorationGovernor')) status.wrappedFunctions.push('stagnationExplorationGovernor');
