@@ -40,19 +40,19 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
+const RECOVERY_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
+const COGNITION_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
+const AUTONOMY_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
-const FULL_AUTONOMY_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
+const FULL_AUTONOMY_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
 const FULL_AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'full-autonomy-state.json');
 // Full Autonomy removes human strategic constraints. These are technical safety rails only.
 const FULL_AUTONOMY_MODE = String(process.env.ALPS_FULL_AUTONOMY_MODE || '1') !== '0';
@@ -1564,6 +1564,7 @@ function buildFullAutonomyView(report = {}, cognitionView = null, bridgeView = n
       exposureReductions: overrides.exposure.length,
       circuitOpen: !!overrides.circuitBreaker?.open
     },
+    nativeForwardPool: report.fullAutonomyNativeForwardPool || fw.nativeForwardPoolOverride || null,
     watchCollapse: collapse,
     counterfactual: {
       enabled: true,
@@ -1823,6 +1824,10 @@ function buildAutonomyMarkdown(view = lastAutonomyView) {
     lines.push(`| ${mdCell(r.action)} | ${mdCell(r.subject)} | ${mdCell(r.trigger)} | ${mdCell(r.reason)} |`);
   }
   lines.push('', '> Bridge note: This is not a manual BNB filter. Any pair/timeframe/strategy can be routed only when ALPS Cognition + AHI/ARI evidence independently reaches the same failure profile.');
+  const np = view.fullAutonomy?.nativeForwardPool || view.fullAutonomy?.adaptiveCandidateUniverse || null;
+  if (view.fullAutonomy) {
+    lines.push('', '### Native Forward Pool Override', `- Mode: ${view.fullAutonomy.mode || '—'}`, `- Technical cap: ${view.fullAutonomy.adaptiveCandidateUniverse?.technicalCap ?? '—'}`, `- Monitored now: ${view.fullAutonomy.adaptiveCandidateUniverse?.monitoredNow ?? '—'}`, `- Generated now: ${view.fullAutonomy.adaptiveCandidateUniverse?.generatedNow ?? '—'}`);
+  }
   return lines.join('\n');
 }
 
@@ -1842,7 +1847,7 @@ async function installAutonomousBridgeInPage(view = null) {
       const technicalCap = Number((policy?.fullAutonomy?.adaptiveCandidateUniverse?.technicalCap) || 9999);
       try {
         localStorage.setItem('ALPS_FULL_AUTONOMY_MODE', 'DECIDE_AND_ACT');
-        localStorage.setItem('ALPS_FULL_AUTONOMY_ENGINE_HOOK', 'v9.2.3.1-engine-full-autonomy-hook');
+        localStorage.setItem('ALPS_FULL_AUTONOMY_ENGINE_HOOK', 'v9.2.3.2-native-forward-pool-override');
         localStorage.setItem('ALPS_FULL_AUTONOMY_TECHNICAL_CANDIDATE_CAP', String(technicalCap));
         localStorage.setItem('maxForwardCandidates', String(technicalCap));
         localStorage.setItem('ALPS_MAX_FORWARD_CANDIDATES', String(technicalCap));
@@ -2062,7 +2067,30 @@ async function installAutonomousBridgeInPage(view = null) {
           try { sweep(window[name], 0); } catch (_) {}
         }
       } catch (_) {}
-      window.__ALPS_FULL_AUTONOMY_ENGINE_HOOK__ = { installed:true, version:'v9.2.3.1-engine-full-autonomy-hook', mode:'DECIDE_AND_ACT', technicalCap, wrapped, sweptCandidates, api:['__alpsApplyCognition','__alpsFullAutonomyPromoteCandidate','__alpsFullAutonomyFilterCandidates','__alpsFullAutonomyBeforeOpen'] };
+
+      // v9.2.3.2 Native Forward Pool Override: promote strategic LAB_ONLY/sample/DD/PF blocks into forward pool evidence tags.
+      function nativeForwardPoolOverrideInstall() {
+        function num(v,d=0){ const x=Number(v); return Number.isFinite(x)?x:d; }
+        function txt(v){ return String(v ?? '').trim(); }
+        function up(v){ return txt(v).toUpperCase(); }
+        function rootOf(strategy){ const S=up(strategy); if(/HA\s*\+\s*POC|HA_POC/.test(S))return'HA_POC'; if(/EMA\s+TREND|EMA_TREND/.test(S))return'EMA_TREND'; if(/VAH\/VAL|VAH_VAL/.test(S))return'VAH_VAL'; if(/BB\s+SQUEEZE|BB_SQUEEZE/.test(S))return'BB_SQUEEZE'; if(/POC\s+BOUNCE|POC_BOUNCE/.test(S))return'POC_BOUNCE'; if(/BOLLINGER/.test(S))return'BOLLINGER'; return S.replace(/G\d+\s+/g,'').replace(/\s*\+\s*NO EXTRA FILTER/g,'').slice(0,80)||'UNKNOWN_STRATEGY'; }
+        function isSafety(reason){ return /BAD_DATA|DATA_FAIL|CORRUPT|STALE|NOT_LATEST|FRESHNESS|DUPLICATE|NO_CANDLE|MISSING_CANDLE|EMERGENCY|STOP_ACTIVE|INVALID_PRICE|INVALID CANDLE/i.test(String(reason||'')); }
+        function asCand(x){ if(!x||typeof x!=='object')return null; const pair=up(x.pair||x.baseSymbol||(x.sym?String(x.sym).split('_')[0]:'')); const timeframe=txt(x.timeframe||x.tf||(x.sym?String(x.sym).split('_')[1]:'')); const strategy=txt(x.strategy||x.stratName||x.rootStrategy||x.name||x.family||'UNKNOWN_STRATEGY'); if(!pair||!timeframe||!strategy)return null; return {...x,pair,timeframe,strategy,root:rootOf(strategy)}; }
+        function candKey(x){ const c=asCand(x); return c?[c.pair,c.timeframe,c.root,c.strategy,c.exit||c.exitName||''].map(up).join('||'):''; }
+        function promoteNative(x){ const c=asCand(x); if(!c)return null; const cg=typeof window.__alpsApplyCognition==='function'?window.__alpsApplyCognition(c):null; if(cg?.suppressed)return {...c,forwardEligible:false,promotionTier:'COGNITION_SUSPENDED',autonomousRoute:'SHADOW_RETEST_ONLY',forwardBlockReason:(cg.reasons||[]).join('; ')||'SUPPRESSED_BY_COGNITION'}; const reason=txt(c.forwardBlockReason||c.blockReason||c.block||(Array.isArray(c.promotionReasons)?c.promotionReasons.join('; '):'')); if(isSafety(reason))return {...c,forwardEligible:false,promotionTier:'SAFETY_BLOCKED',forwardBlockReason:reason,fullAutonomySafetyBlock:true}; return {...c,forwardEligible:true,promotionTier:'FULL_AUTONOMY_FORWARD',effectiveVerdict:c.effectiveVerdict||c.rawVerdict||'WATCH',fullAutonomyEligible:true,fullAutonomySource:'NATIVE_FORWARD_POOL_OVERRIDE',previousStrategicBlockReason:reason||'',forwardBlockReason:'',blockReason:'',block:''}; }
+        function uniq(rows){ const out=[], seen=new Set(); for(const r of rows||[]){ const c=asCand(r); if(!c)continue; const k=candKey(c); if(!k||seen.has(k))continue; seen.add(k); out.push(c); if(out.length>=technicalCap)break;} return out; }
+        function rowsFromReport(r){ const rows=[]; if(Array.isArray(r?.research?.topStrategies))rows.push(...r.research.topStrategies); if(Array.isArray(r?.topStrategies))rows.push(...r.topStrategies); if(Array.isArray(r?.results))rows.push(...r.results); if(Array.isArray(r?.research?.topRobustness))rows.push(...r.research.topRobustness); if(Array.isArray(r?.forwardWatch?.candidates))rows.push(...r.forwardWatch.candidates); return uniq(rows); }
+        function rowsFromGlobals(){ const names=['results','topStrategies','rankedStrategies','watchCandidates','candidatePool','allStrategies','strategies','researchResults','robustnessRows']; const rows=[]; for(const nm of names){ try{ if(Array.isArray(window[nm])) rows.push(...window[nm]); }catch(_){}} try{ if(typeof window.forwardCandidatePool==='function') rows.push(...(window.forwardCandidatePool()||[])); }catch(_){} try{ if(typeof window.activeForwardCandidatePool==='function') rows.push(...(window.activeForwardCandidatePool()||[])); }catch(_){} return uniq(rows); }
+        function buildNative(seed){ const source=uniq([...(seed||[]),...rowsFromGlobals()]); const promoted=[], suspended=[], safety=[]; for(const row of source){ const p=promoteNative(row); if(!p)continue; if(p.promotionTier==='COGNITION_SUSPENDED')suspended.push(p); else if(p.fullAutonomySafetyBlock)safety.push(p); else promoted.push(p); } window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__={installed:true,version:'v9.2.3.2-native-forward-pool-override',mode:'DECIDE_AND_ACT',technicalCap,updatedAt:Date.now(),sourceRows:source.length,promoted:promoted.length,suspended:suspended.length,safetyBlocked:safety.length,lastPool:promoted.slice(0,technicalCap),suspended,safetyBlocked:safety}; return {promoted,suspended,safety,source}; }
+        function tierSummary(rows){ const out={}; for(const r of rows||[]){ const tier=r.promotionTier||'FULL_AUTONOMY_FORWARD'; out[tier]=out[tier]||{count:0,frames:{},pairs:{}}; out[tier].count++; out[tier].frames[r.timeframe||'—']=(out[tier].frames[r.timeframe||'—']||0)+1; out[tier].pairs[r.pair||'—']=(out[tier].pairs[r.pair||'—']||0)+1; } return out; }
+        window.__alpsBuildNativeForwardPool=function(seed){ return buildNative(seed).promoted; };
+        window.__alpsNativeForwardPoolOverrideReport=function(r){ if(!r||typeof r!=='object')return r; const base=rowsFromReport(r); const b=buildNative(base); const pool=b.promoted.slice(0,technicalCap); r.forwardWatch=r.forwardWatch||{}; r.forwardWatch.nativeForwardPoolOverride={installed:true,version:'v9.2.3.2-native-forward-pool-override',sourceRows:base.length,promotedByFullAutonomy:b.promoted.length,suspendedByCognition:b.suspended.length,blockedBySafety:b.safety.length,technicalCap}; r.forwardWatch.candidatesMonitored=pool.length; r.forwardWatch.totalGeneratedStrategies=num(r.forwardWatch.totalGeneratedStrategies||r.research?.strategies||base.length,base.length); r.forwardWatch.candidateTierSummary=tierSummary(pool.concat(b.suspended,b.safety)); r.forwardWatch.fullAutonomyCandidates=pool; if(r.research&&Array.isArray(r.research.topStrategies)){ const by=new Map(pool.map(x=>[candKey(x),x])); r.research.topStrategies=r.research.topStrategies.map(x=>by.get(candKey(x))||promoteNative(x)||x); } r.fullAutonomyNativeForwardPool={schema:'alps.nativeForwardPoolOverride.v1',version:'v9.2.3.2-native-forward-pool-override',mode:'DECIDE_AND_ACT',technicalCap,sourceRows:base.length,promotedByFullAutonomy:b.promoted.length,suspendedByCognition:b.suspended.length,blockedBySafety:b.safety.length,poolPreview:pool.slice(0,30).map(x=>({pair:x.pair,timeframe:x.timeframe,strategy:x.strategy,tier:x.promotionTier,previousStrategicBlockReason:x.previousStrategicBlockReason||''}))}; r.intelligence=r.intelligence||{}; r.intelligence.unrestrictedRules=r.intelligence.unrestrictedRules||{}; Object.assign(r.intelligence.unrestrictedRules,{allStrategyTiers:true,forwardPromotedOnly:false,forwardDemotion:false,evidenceDrivenExposure:true,hardPatternBans:false}); return r; };
+        try{ for(const nm of ['activeForwardCandidatePool','forwardCandidatePool']){ const fn=window[nm]; if(typeof fn==='function'&&!fn.__alpsNativeForwardPoolWrapped){ const w=function(...args){ const out=fn.apply(this,args); return Array.isArray(out)?buildNative(out).promoted:out; }; w.__alpsNativeForwardPoolWrapped=true; w.__original=fn; window[nm]=w; } } }catch(_){}
+        try{ if(typeof window.buildRunReportObject==='function'&&!window.buildRunReportObject.__alpsNativeForwardPoolWrapped){ const orig=window.buildRunReportObject; const w=async function(...args){ return window.__alpsNativeForwardPoolOverrideReport(await orig.apply(this,args)); }; w.__alpsNativeForwardPoolWrapped=true; w.__original=orig; window.buildRunReportObject=w; } }catch(_){}
+        return buildNative([]);
+      }
+      const nativePool = nativeForwardPoolOverrideInstall();
+      window.__ALPS_FULL_AUTONOMY_ENGINE_HOOK__ = { installed:true, version:'v9.2.3.2-native-forward-pool-override', mode:'DECIDE_AND_ACT', technicalCap, wrapped, sweptCandidates, nativeForwardPoolOverride:true, nativeForwardPool:nativePool, api:['__alpsApplyCognition','__alpsFullAutonomyPromoteCandidate','__alpsFullAutonomyFilterCandidates','__alpsFullAutonomyBeforeOpen','__alpsNativeForwardPoolOverrideReport','__alpsBuildNativeForwardPool'] };
       return { installed: true, activeRoutes: routes.length, wrapped, sweptCandidates, version: policy.version, cognitionOverrideMode: overrides.mode, suspensions: (overrides.suspensions||[]).length, stopOverrides: (overrides.stopOverrides||[]).length, exposure: (overrides.exposure||[]).length, fullAutonomy: true, engineHook: window.__ALPS_FULL_AUTONOMY_ENGINE_HOOK__ };
     } catch (e) {
       return { installed: false, error: e.message };
@@ -2482,8 +2510,9 @@ async function getPageHealth() {
       fwRunning: val(() => !!fwRunning, false),
       labRunning: val(() => !!labRunning, false),
       rtPrepared: val(() => !!rtPrepared, false),
-      candidates: val(() => typeof activeForwardCandidatePool === 'function' ? activeForwardCandidatePool().length : 0, 0),
-      officialCandidates: val(() => typeof forwardCandidatePool === 'function' ? forwardCandidatePool().length : 0, 0),
+      candidates: val(() => (window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__?.lastPool?.length) || (typeof activeForwardCandidatePool === 'function' ? activeForwardCandidatePool().length : 0), 0),
+      officialCandidates: val(() => (window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__?.lastPool?.length) || (typeof forwardCandidatePool === 'function' ? forwardCandidatePool().length : 0), 0),
+      nativeForwardPoolOverride: val(() => window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__ || null, null),
       results: val(() => (results || []).length, 0),
       paperSignals: val(() => (paperSignals || []).length, 0),
       openPositions: val(() => (openPositions || []).length, 0),
@@ -2697,9 +2726,11 @@ async function runnerTick(reason = 'server-runner tick') {
 
 async function collectReport() {
   if (!page || page.isClosed()) throw new Error('ALPS page is not ready');
+  await installAutonomousBridgeInPage().catch(e => ({ installed:false, preInstallError:e.message }));
   const report = await pageEval(async () => {
     if (typeof buildRunReportObject !== 'function') throw new Error('buildRunReportObject not available');
-    const r = await buildRunReportObject();
+    let r = await buildRunReportObject();
+    if (typeof window.__alpsNativeForwardPoolOverrideReport === 'function') r = window.__alpsNativeForwardPoolOverrideReport(r);
     r.serverRunner = {
       enabled: true,
       mode: 'server-side-chromium-wrapper',
