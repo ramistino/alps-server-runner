@@ -40,19 +40,19 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.2.3-full-autonomy-paper-lab';
+const RECOVERY_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.2.3-full-autonomy-paper-lab';
+const COGNITION_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.2.3-full-autonomy-paper-lab';
+const AUTONOMY_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
-const FULL_AUTONOMY_PATCH_VERSION = 'v9.2.3-full-autonomy-paper-lab';
+const FULL_AUTONOMY_PATCH_VERSION = 'v9.2.3.1-engine-full-autonomy-hook';
 const FULL_AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'full-autonomy-state.json');
 // Full Autonomy removes human strategic constraints. These are technical safety rails only.
 const FULL_AUTONOMY_MODE = String(process.env.ALPS_FULL_AUTONOMY_MODE || '1') !== '0';
@@ -1826,6 +1826,7 @@ function buildAutonomyMarkdown(view = lastAutonomyView) {
   return lines.join('\n');
 }
 
+
 async function installAutonomousBridgeInPage(view = null) {
   if (!page || page.isClosed()) return { installed: false, reason: 'page not ready' };
   await loadAutonomyState();
@@ -1838,20 +1839,26 @@ async function installAutonomousBridgeInPage(view = null) {
         : { schema:'alps.cognition.overrides.v1', mode:'SHADOW_ONLY', suspensions:[], stopOverrides:[], exposure:[], updatedAt:Date.now(), decisionEpoch:0 };
       window.__ALPS_COGNITION_OVERRIDES = overrides;
       window.__ALPS_FULL_AUTONOMY_CONFIG__ = policy?.fullAutonomy || { mode: overrides.mode, paperOnly:true };
+      const technicalCap = Number((policy?.fullAutonomy?.adaptiveCandidateUniverse?.technicalCap) || 9999);
       try {
         localStorage.setItem('ALPS_FULL_AUTONOMY_MODE', 'DECIDE_AND_ACT');
-        localStorage.setItem('ALPS_FULL_AUTONOMY_TECHNICAL_CANDIDATE_CAP', String((policy?.fullAutonomy?.adaptiveCandidateUniverse?.technicalCap) || 9999));
-        localStorage.setItem('maxForwardCandidates', String((policy?.fullAutonomy?.adaptiveCandidateUniverse?.technicalCap) || 9999));
-        localStorage.setItem('ALPS_MAX_FORWARD_CANDIDATES', String((policy?.fullAutonomy?.adaptiveCandidateUniverse?.technicalCap) || 9999));
+        localStorage.setItem('ALPS_FULL_AUTONOMY_ENGINE_HOOK', 'v9.2.3.1-engine-full-autonomy-hook');
+        localStorage.setItem('ALPS_FULL_AUTONOMY_TECHNICAL_CANDIDATE_CAP', String(technicalCap));
+        localStorage.setItem('maxForwardCandidates', String(technicalCap));
+        localStorage.setItem('ALPS_MAX_FORWARD_CANDIDATES', String(technicalCap));
         localStorage.setItem('forwardPromotedOnly', 'false');
+        localStorage.setItem('robustCandidateGate', 'false');
+        localStorage.setItem('fullAutonomyPaperOnly', 'true');
       } catch (_) {}
       function t(v) { return String(v || '').trim(); }
+      function up(v) { return t(v).toUpperCase(); }
       function root(strategy) {
-        const s = t(strategy).toUpperCase();
+        const s = up(strategy);
         if (/HA\s*\+\s*POC|HA_POC/.test(s)) return 'HA_POC';
         if (/EMA\s+TREND|EMA_TREND/.test(s)) return 'EMA_TREND';
         if (/VAH\/VAL|VAH_VAL/.test(s)) return 'VAH_VAL';
         if (/BB\s+SQUEEZE|BB_SQUEEZE/.test(s)) return 'BB_SQUEEZE';
+        if (/POC\s+BOUNCE|POC_BOUNCE/.test(s)) return 'POC_BOUNCE';
         if (/BOLLINGER/.test(s)) return 'BOLLINGER';
         return s.replace(/G\d+\s+/g, '').replace(/\s*\+\s*NO EXTRA FILTER/g, '').slice(0, 80) || 'UNKNOWN_STRATEGY';
       }
@@ -1862,31 +1869,18 @@ async function installAutonomousBridgeInPage(view = null) {
       function norm(x) {
         const fp = x?.fingerprint || {};
         return {
-          pair: t(x?.pair || x?.baseSymbol || fp.pair || (x?.sym ? String(x.sym).split('_')[0] : '')).toUpperCase(),
+          pair: up(x?.pair || x?.baseSymbol || fp.pair || (x?.sym ? String(x.sym).split('_')[0] : '')),
           timeframe: t(x?.timeframe || x?.tf || fp.timeframe || (x?.sym ? String(x.sym).split('_')[1] : '')),
           root: root(x?.rootStrategy || x?.rootStratId || fp.rootId || fp.rootName || x?.strategy || x?.stratName || x?.name),
-          direction: t(x?.direction || x?.dir || x?.side || x?.bias || 'LONG').toUpperCase(),
+          direction: up(x?.direction || x?.dir || x?.side || x?.bias || 'LONG'),
           regime: regime(x)
         };
       }
-      function key(n) { return [n.pair, n.timeframe, n.root, n.direction, n.regime].map(x => t(x).toUpperCase()).join('||'); }
-      function match(x) {
+      function key(n) { return [n.pair, n.timeframe, n.root, n.direction, n.regime].map(x => up(x)).join('||'); }
+      function matchRoute(x) {
         if (!x || typeof x !== 'object') return null;
         const k = key(norm(x));
-        return routes.find(r => t(r.routeKey).toUpperCase() === k) || null;
-      }
-      function shadowOnly(x) { return !!match(x); }
-      function routedReturn(x, route) {
-        return {
-          blocked: true,
-          action: 'SHADOW_RETEST_ONLY',
-          source: 'ALPS_AUTONOMOUS_COGNITION_ARI_BRIDGE',
-          hardBan: false,
-          manualRule: false,
-          routeKey: route.routeKey,
-          reason: route.reason,
-          original: x && typeof x === 'object' ? { pair: x.pair || x.baseSymbol || x.sym, timeframe: x.timeframe, strategy: x.strategy || x.stratName || x.rootStrategy } : null
-        };
+        return routes.find(r => up(r.routeKey) === k) || null;
       }
       function regimeMatch(sel, actual) {
         if (!sel || sel === '*') return true;
@@ -1897,17 +1891,17 @@ async function installAutonomousBridgeInPage(view = null) {
       function overrideMatch(m, x) {
         const n = norm(x);
         if (!m) return false;
-        const pairOk = !m.pair || m.pair === '*' || t(m.pair).toUpperCase() === n.pair;
+        const pairOk = !m.pair || m.pair === '*' || up(m.pair) === n.pair;
         const tfOk = !m.timeframe || m.timeframe === '*' || t(m.timeframe).toLowerCase() === t(n.timeframe).toLowerCase();
-        const rootOk = !m.root || m.root === '*' || t(m.root).toUpperCase() === n.root;
-        const dirOk = !m.direction || m.direction === '*' || t(m.direction).toUpperCase() === n.direction;
-        const strategyOk = !m.strategy || m.strategy === '*' || t(m.strategy).toUpperCase().includes(n.root) || n.root.includes(t(m.strategy).split(/\s+/)[0].toUpperCase());
+        const rootOk = !m.root || m.root === '*' || up(m.root) === n.root;
+        const dirOk = !m.direction || m.direction === '*' || up(m.direction) === n.direction;
+        const strategyOk = !m.strategy || m.strategy === '*' || up(m.strategy).includes(n.root) || n.root.includes(up(m.strategy).split(/\s+/)[0]);
         return pairOk && tfOk && rootOk && dirOk && strategyOk && regimeMatch(m.regime, n.regime);
       }
       window.__alpsApplyCognition = function(sig) {
         const out = { suppressed:false, stopAtrMult:null, minStopDistBps:null, sizeMult:1, appliedDecisionIds:[], reasons:[] };
         const c = window.__ALPS_COGNITION_OVERRIDES;
-        if (!c || c.schema !== 'alps.cognition.overrides.v1' || c.mode !== 'DECIDE_AND_ACT') return out;
+        if (!c || c.schema !== 'alps.cognition.overrides.v1' || c.mode !== 'DECIDE_AND_ACT' || c.circuitBreaker?.open) return out;
         const now = Date.now();
         for (const s of (c.suspensions || [])) {
           if ((s.expiresAt || 0) > now && overrideMatch(s.match, sig)) {
@@ -1928,30 +1922,65 @@ async function installAutonomousBridgeInPage(view = null) {
         }
         return out;
       };
+      function operationalBlock(reason) {
+        const r = up(reason);
+        return /BAD_DATA|DATA_FAIL|CORRUPT|STALE|NOT_LATEST|FRESHNESS|DUPLICATE|NO_CANDLE|MISSING_CANDLE|EMERGENCY|STOP_ACTIVE/.test(r);
+      }
+      function looksCandidate(x) {
+        if (!x || typeof x !== 'object') return false;
+        return !!(x.pair || x.baseSymbol || x.sym || x.timeframe || x.tf) && !!(x.strategy || x.stratName || x.rootStrategy || x.name || x.family || x.oosPF || x.totalPF);
+      }
       function applyOverrideMutation(x, cog) {
-        if (!x || typeof x !== 'object' || !cog || !cog.appliedDecisionIds?.length) return x;
+        if (!x || typeof x !== 'object' || !cog) return x;
         try {
-          x.__alpsCognition = { appliedDecisionIds: cog.appliedDecisionIds, reasons: cog.reasons, version: policy.version, paperOnly:true };
+          x.__alpsCognition = { ...(x.__alpsCognition || {}), appliedDecisionIds: cog.appliedDecisionIds || [], reasons: cog.reasons || [], version: policy.version, paperOnly:true };
           if (cog.minStopDistBps != null) { x.minStopDistBps = cog.minStopDistBps; x.cognitionMinStopDistBps = cog.minStopDistBps; }
           if (cog.stopAtrMult != null) { x.stopAtrMult = cog.stopAtrMult; x.cognitionStopAtrMult = cog.stopAtrMult; }
           if (cog.sizeMult != null) { x.sizeMult = (Number(x.sizeMult || 1) * cog.sizeMult); x.cognitionSizeMult = cog.sizeMult; }
         } catch (_) {}
         return x;
       }
-      const bridge = {
-        version: policy.version,
-        installedAt: new Date().toISOString(),
-        activeRoutes: routes,
-        normalize: norm,
-        routeKey: x => key(norm(x)),
-        match,
-        shouldShadowRetest: shadowOnly,
-        routeObject(x) { const r = match(x); return r ? routedReturn(x, r) : null; }
-      };
+      function promoteCandidate(x) {
+        if (!looksCandidate(x)) return x;
+        const cog = window.__alpsApplyCognition(x);
+        const route = matchRoute(x);
+        if (cog.suppressed || route) {
+          try {
+            x.__alpsCognition = { ...(x.__alpsCognition||{}), suppressed:true, routeKey: route?.routeKey, reasons: cog.reasons || [route?.reason || 'SHADOW_RETEST_ONLY'], paperOnly:true };
+            x.forwardEligible = false; x.promotionTier = 'SHADOW_RETEST_ONLY'; x.forwardBlockReason = (cog.reasons||[]).join('; ') || route?.reason || 'SUPPRESSED_BY_COGNITION'; x.autonomousRoute = 'SHADOW_RETEST_ONLY';
+          } catch (_) {}
+          return null;
+        }
+        const reason = x.forwardBlockReason || x.blockReason || x.block || '';
+        if (!operationalBlock(reason)) {
+          try {
+            x.forwardEligible = true;
+            x.promotionTier = 'WATCHLIST';
+            x.effectiveVerdict = x.effectiveVerdict || x.rawVerdict || 'WATCH';
+            x.fullAutonomyEligible = true;
+            x.fullAutonomySource = 'ALPS_SYSTEM_ONLY_GOVERNANCE';
+            if (reason) x.previousStrategicBlockReason = reason;
+            x.forwardBlockReason = ''; x.blockReason = ''; x.block = '';
+          } catch (_) {}
+        }
+        return applyOverrideMutation(x, cog);
+      }
+      function filterList(v) { return Array.isArray(v) ? v.map(promoteCandidate).filter(Boolean) : v; }
+      function routedReturn(x, route) {
+        return { blocked: true, action: 'SHADOW_RETEST_ONLY', source: 'ALPS_AUTONOMOUS_COGNITION_ARI_BRIDGE', hardBan: false, manualRule: false, routeKey: route?.routeKey || key(norm(x)), reason: route?.reason || 'Suppressed by Full Autonomy Cognition.', original: x && typeof x === 'object' ? { pair: x.pair || x.baseSymbol || x.sym, timeframe: x.timeframe, strategy: x.strategy || x.stratName || x.rootStrategy } : null };
+      }
+      const bridge = { version: policy.version, installedAt: new Date().toISOString(), activeRoutes: routes, normalize: norm, routeKey: x => key(norm(x)), match: matchRoute, shouldShadowRetest: x => !!matchRoute(x), routeObject(x) { const r = matchRoute(x); return r ? routedReturn(x, r) : null; }, promoteCandidate, filterCandidates: filterList };
       window.__ALPS_AUTONOMOUS_COGNITION_BRIDGE_POLICY__ = policy;
       window.__ALPS_AUTONOMOUS_COGNITION_BRIDGE__ = bridge;
-      window.__ALPS_SHOULD_SHADOW_RETEST__ = shadowOnly;
-      window.__ALPS_AUTONOMOUS_ROUTE_CANDIDATE__ = (x) => bridge.routeObject(x);
+      window.__ALPS_SHOULD_SHADOW_RETEST__ = x => !!matchRoute(x);
+      window.__ALPS_AUTONOMOUS_ROUTE_CANDIDATE__ = x => bridge.routeObject(x);
+      window.__alpsFullAutonomyPromoteCandidate = promoteCandidate;
+      window.__alpsFullAutonomyFilterCandidates = filterList;
+      window.__alpsFullAutonomyBeforeOpen = signal => {
+        const cog = window.__alpsApplyCognition(signal); const route = matchRoute(signal);
+        if (cog.suppressed || route) return { open:false, action:'SHADOW_RETEST_ONLY', log:'SUPPRESSED_BY_COGNITION', decisionIds:cog.appliedDecisionIds, reasons:cog.reasons };
+        return { open:true, action:'OPENED_BY_FULL_AUTONOMY', stopAtrMult:cog.stopAtrMult, minStopDistBps:cog.minStopDistBps, sizeMult:cog.sizeMult, decisionIds:cog.appliedDecisionIds };
+      };
       try { localStorage.setItem('ALPS_AUTONOMOUS_COGNITION_BRIDGE_POLICY', JSON.stringify(policy)); } catch (_) {}
 
       const wrapped = [];
@@ -1962,32 +1991,79 @@ async function installAutonomousBridgeInPage(view = null) {
         if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) return;
         const w = function(...args) {
           const out = fn.apply(this, args);
-          const filter = v => Array.isArray(v) ? v.filter(x => !(window.__alpsApplyCognition(x).suppressed || shadowOnly(x))) : v;
-          if (out && typeof out.then === 'function') return out.then(filter);
-          return filter(out);
+          if (out && typeof out.then === 'function') return out.then(filterList);
+          return filterList(out);
         };
-        w.__alpsAutonomousBridgeWrapped = true;
-        w.__original = fn;
-        window[name] = w;
-        wrapped.push(name);
+        w.__alpsAutonomousBridgeWrapped = true; w.__original = fn; window[name] = w; wrapped.push(name);
       }
       function wrapOpen(name) {
         const fn = window[name];
         if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) return;
         const w = function(...args) {
-          const hitArg = args.find(a => (window.__alpsApplyCognition(a).suppressed || shadowOnly(a)));
-          if (hitArg) return routedReturn(hitArg, match(hitArg) || { routeKey: bridge.routeKey(hitArg), reason: (window.__alpsApplyCognition(hitArg).reasons||[]).join('; ') || 'Suppressed by Full Autonomy Cognition.' });
+          const hitArg = args.find(a => (window.__alpsApplyCognition(a).suppressed || matchRoute(a)));
+          if (hitArg) return routedReturn(hitArg, matchRoute(hitArg) || { routeKey: bridge.routeKey(hitArg), reason: (window.__alpsApplyCognition(hitArg).reasons||[]).join('; ') || 'Suppressed by Full Autonomy Cognition.' });
           for (const a of args) applyOverrideMutation(a, window.__alpsApplyCognition(a));
           return fn.apply(this, args);
         };
-        w.__alpsAutonomousBridgeWrapped = true;
-        w.__original = fn;
-        window[name] = w;
-        wrapped.push(name);
+        w.__alpsAutonomousBridgeWrapped = true; w.__original = fn; window[name] = w; wrapped.push(name);
       }
-      listFns.forEach(wrapList);
+      listFns.forEach(name => {
+        if (typeof window[name] !== 'function') window[name] = function(candidates) { return filterList(Array.isArray(candidates) ? candidates : []); };
+        wrapList(name);
+      });
       openFns.forEach(wrapOpen);
-      return { installed: true, activeRoutes: routes.length, wrapped, version: policy.version, cognitionOverrideMode: overrides.mode, suspensions: (overrides.suspensions||[]).length, stopOverrides: (overrides.stopOverrides||[]).length, exposure: (overrides.exposure||[]).length, fullAutonomy: true };
+      // Heuristic wrapping for globally exposed engine functions with nonstandard names.
+      try {
+        const blacklist = /^(fetch|set|clear|request|cancel|alert|prompt|confirm|print|render|addEvent|removeEvent|dispatchEvent|open|close|postMessage)$/i;
+        const nameHint = /(candidate|signal|paper|forward|eligible|promote|rank|hypothesis|strategy)/i;
+        for (const name of Object.getOwnPropertyNames(window).slice(0, 2000)) {
+          if (blacklist.test(name) || !nameHint.test(name) || /^__alps/i.test(name)) continue;
+          const fn = window[name];
+          if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) continue;
+          const src = Function.prototype.toString.call(fn).slice(0, 500);
+          if (!/(candidate|signal|paper|forward|eligible|open|rank)/i.test(src + name)) continue;
+          const w = function(...args) {
+            const hitArg = args.find(a => looksCandidate(a) && (window.__alpsApplyCognition(a).suppressed || matchRoute(a)));
+            if (/open|execute|signal|paper/i.test(name) && hitArg) return routedReturn(hitArg, matchRoute(hitArg) || null);
+            for (const a of args) if (looksCandidate(a)) promoteCandidate(a);
+            const out = fn.apply(this, args);
+            if (out && typeof out.then === 'function') return out.then(filterList);
+            return filterList(out);
+          };
+          w.__alpsAutonomousBridgeWrapped = true; w.__original = fn; window[name] = w; wrapped.push(`heuristic:${name}`);
+        }
+      } catch (_) {}
+      // State sweep: remove strategic-only gates from existing candidate arrays.
+      let sweptCandidates = 0;
+      try {
+        const seen = new WeakSet();
+        function sweep(obj, depth) {
+          if (!obj || typeof obj !== 'object' || depth > 3 || seen.has(obj)) return;
+          seen.add(obj);
+          if (Array.isArray(obj)) {
+            if (obj.some(looksCandidate)) {
+              for (let i = 0; i < obj.length; i++) {
+                const before = obj[i]; const after = promoteCandidate(before);
+                if (after === null) { obj.splice(i,1); i--; sweptCandidates++; }
+                else if (after !== before) { obj[i] = after; sweptCandidates++; }
+                else if (looksCandidate(after)) sweptCandidates++;
+              }
+            }
+            return;
+          }
+          const keys = Object.keys(obj).slice(0, 80);
+          for (const k of keys) {
+            if (!/(candidate|strategy|forward|watch|research|hypoth|state|store|pool|rank|tier|result)/i.test(k)) continue;
+            try { sweep(obj[k], depth + 1); } catch (_) {}
+          }
+        }
+        for (const name of Object.getOwnPropertyNames(window)) {
+          if (!/(state|store|alps|ahi|ari|forward|research|runner|pool|strategy|candidate|watch)/i.test(name)) continue;
+          try { sweep(window[name], 0); } catch (_) {}
+        }
+      } catch (_) {}
+      window.__ALPS_FULL_AUTONOMY_ENGINE_HOOK__ = { installed:true, version:'v9.2.3.1-engine-full-autonomy-hook', mode:'DECIDE_AND_ACT', technicalCap, wrapped, sweptCandidates, api:['__alpsApplyCognition','__alpsFullAutonomyPromoteCandidate','__alpsFullAutonomyFilterCandidates','__alpsFullAutonomyBeforeOpen'] };
+      return { installed: true, activeRoutes: routes.length, wrapped, sweptCandidates, version: policy.version, cognitionOverrideMode: overrides.mode, suspensions: (overrides.suspensions||[]).length, stopOverrides: (overrides.stopOverrides||[]).length, exposure: (overrides.exposure||[]).length, fullAutonomy: true, engineHook: window.__ALPS_FULL_AUTONOMY_ENGINE_HOOK__ };
     } catch (e) {
       return { installed: false, error: e.message };
     }
