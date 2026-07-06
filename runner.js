@@ -2421,6 +2421,84 @@ async function installV930StableAutonomyInPage() {
         } catch (_) {}
         return [];
       }
+      function promotionPassTier(cls) {
+        const tier = text(cls && cls.tier).toUpperCase();
+        return tier === 'FULL_AUTONOMY_FORWARD' || tier === 'WATCH_FORWARD';
+      }
+      function promoteCandidateInPlace(c, cls) {
+        if (!c || !promotionPassTier(cls)) return false;
+        try {
+          if (!c.__alpsV930Original) {
+            try {
+              c.__alpsV930Original = {
+                forwardEligible: c.forwardEligible,
+                forwardBlockReason: c.forwardBlockReason,
+                blockReason: c.blockReason,
+                promotionTier: c.promotionTier,
+                promotionStatus: c.promotionStatus,
+                promotionGateSummary: c.promotionGateSummary,
+                candidateTier: c.candidateTier,
+                promotionReasons: Array.isArray(c.promotionReasons) ? c.promotionReasons.slice() : c.promotionReasons,
+                sampleFlag: c.sampleFlag
+              };
+            } catch (_) {}
+          }
+          const nativeTier = String(cls.tier || 'FULL_AUTONOMY_FORWARD');
+          const originalReasons = Array.isArray(c.__alpsV930Original && c.__alpsV930Original.promotionReasons) ? c.__alpsV930Original.promotionReasons : [];
+          c.__alpsV930Tier = nativeTier;
+          c.__alpsV930EvidenceLabels = Array.from(new Set(cls.evidenceLabels || []));
+          c.__alpsV930AuthoritativeForward = true;
+          c.__alpsV930PromotionGateOverride = true;
+          c.forwardEligible = true;
+          c.eligible = true;
+          c.forwardBlockReason = '';
+          c.blockReason = '';
+          c.promotionBlocked = false;
+          c.promotionGateBlocked = false;
+          c.promotionTier = nativeTier === 'WATCH_FORWARD' ? (c.promotionTier || 'WATCHLIST') : 'FULL_AUTONOMY_FORWARD';
+          c.promotionStatus = nativeTier;
+          c.promotionGateSummary = nativeTier;
+          c.candidateTier = nativeTier;
+          c.sampleFlag = c.sampleFlag || 'EVIDENCE_TAG';
+          c.promotionReasons = [];
+          c.__alpsV930EvidenceReasons = originalReasons;
+          if (c.promotionGate && typeof c.promotionGate === 'object') {
+            c.promotionGate.forwardEligible = true;
+            c.promotionGate.eligible = true;
+            c.promotionGate.blocked = false;
+            c.promotionGate.blockReason = '';
+            c.promotionGate.reason = '';
+            c.promotionGate.status = nativeTier;
+            c.promotionGate.summary = nativeTier;
+          }
+          return true;
+        } catch (err) {
+          try { status.lastError = String(err && err.message || err); } catch (_) {}
+          return false;
+        }
+      }
+      function applyAuthoritativeNativePool() {
+        let mutated = 0;
+        try {
+          for (const c of sourceRows()) {
+            const cls = classify(c || {});
+            if (promoteCandidateInPlace(c, cls)) mutated += 1;
+          }
+          status.nativeExecutionControl = {
+            installed: true,
+            authoritative: true,
+            version: policy.version,
+            mutatedCandidates: mutated,
+            lastAppliedAt: Date.now(),
+            rule: 'FULL_AUTONOMY_FORWARD and WATCH_FORWARD candidates are written back into the real engine result objects; LAB_ONLY/sample/DD/PF remain evidence labels only.'
+          };
+          return mutated;
+        } catch (err) {
+          status.lastError = String(err && err.message || err);
+          status.nativeExecutionControl = { installed: true, authoritative: false, lastError: status.lastError, fallbackActive: true };
+          return mutated;
+        }
+      }
       function supplement(originalRows) {
         const out = [];
         const seen = new Set(arr(originalRows).map(key));
@@ -2429,12 +2507,18 @@ async function installV930StableAutonomyInPage() {
           if (!k || seen.has(k)) continue;
           const cls = classify(c);
           if (cls.tier === 'SAFETY_BLOCKED' || cls.tier === 'DATA_BLOCKED' || cls.tier === 'COGNITION_SUSPENDED') continue;
+          promoteCandidateInPlace(c, cls);
           const copy = Object.assign({}, c, {
             __alpsV930Tier: cls.tier,
             __alpsV930EvidenceLabels: cls.evidenceLabels,
+            __alpsV930AuthoritativeForward: true,
             promotionTier: cls.tier === 'FULL_AUTONOMY_FORWARD' ? 'FULL_AUTONOMY_FORWARD' : (c.promotionTier || cls.tier),
+            promotionStatus: cls.tier,
+            promotionGateSummary: cls.tier,
+            candidateTier: cls.tier,
             forwardEligible: true,
-            forwardBlockReason: ''
+            forwardBlockReason: '',
+            blockReason: ''
           });
           out.push(copy); seen.add(k);
           if (out.length + arr(originalRows).length >= Number(policy.technicalCap || 360)) break;
@@ -2479,6 +2563,16 @@ async function installV930StableAutonomyInPage() {
       }
       patchPoolFunction('forwardCandidatePool');
       patchPoolFunction('activeForwardCandidatePool');
+      try { applyAuthoritativeNativePool(); } catch (_) {}
+      try {
+        if (!status.__alpsV930AuthoritativeInterval) {
+          status.__alpsV930AuthoritativeInterval = true;
+          const timer = setInterval(() => { try { applyAuthoritativeNativePool(); } catch (_) {} }, 5000);
+          try { if (timer && typeof timer.unref === 'function') timer.unref(); } catch (_) {}
+        }
+      } catch (_) {}
+      if (!status.wrappedFunctions.includes('nativeResultMutation')) status.wrappedFunctions.push('nativeResultMutation');
+      if (!status.wrappedFunctions.includes('promotionGateOverride')) status.wrappedFunctions.push('promotionGateOverride');
       try {
         const originalReport = globalThis.buildRunReportObject || window.buildRunReportObject;
         if (typeof originalReport === 'function' && !originalReport.__alpsV930Wrapped) {
@@ -2488,8 +2582,9 @@ async function installV930StableAutonomyInPage() {
               const nfp = buildNative(report || {});
               report.nativeForwardPool = nfp;
               report.fullAutonomyNativeForwardPool = nfp;
-              report.fullAutonomy = { schema: 'alps.fullAutonomy.view.v1', version: policy.version, enabled: true, mode: 'DECIDE_AND_ACT_PAPER_ONLY', paperOnly: true, liveCapitalExecution: false, humanStrategicRestrictionsRemoved: true, safetyGuardsPreserved: true, lastDecision: nfp.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_POOL_READY' : 'WAIT_FOR_EVIDENCE' };
-              report.engineHook = { schema: 'alps.engineHook.view.v1', version: policy.version, installed: true, safe: true, lastError: status.lastError || '', wrappedFunctions: status.wrappedFunctions.slice(), fallbackActive: !!status.fallbackActive };
+              report.fullAutonomy = { schema: 'alps.fullAutonomy.view.v1', version: policy.version, enabled: true, mode: 'DECIDE_AND_ACT_PAPER_ONLY', paperOnly: true, liveCapitalExecution: false, humanStrategicRestrictionsRemoved: true, safetyGuardsPreserved: true, executionControl: status.nativeExecutionControl || null, lastDecision: nfp.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_POOL_AUTHORITATIVE' : 'WAIT_FOR_EVIDENCE' };
+              report.engineHook = { schema: 'alps.engineHook.view.v1', version: policy.version, installed: true, safe: true, lastError: status.lastError || '', wrappedFunctions: status.wrappedFunctions.slice(), fallbackActive: !!status.fallbackActive, nativeExecutionControl: status.nativeExecutionControl || null };
+              report.nativeExecutionControl = status.nativeExecutionControl || null;
               report.circuitBreaker = { schema: 'alps.circuitBreaker.view.v1', version: policy.version, enabled: true, open: false, reason: '', fallbackMode: 'ADVANCED_MODULES_ACTIVE', disabledModules: [] };
               report.chart = { schema: 'alps.chart.view.v1', version: policy.version, ready: true, selectedPair: (nfp.candidates[0] && nfp.candidates[0].pair) || 'BTCUSDT', selectedTimeframe: (nfp.candidates[0] && nfp.candidates[0].timeframe) || '1h', candlesLoaded: Number(report && report.data && report.data.candlesLoaded || 0), candidateTradesShown: nfp.totalCandidates, openTradesShown: Number(report && report.forwardWatch && report.forwardWatch.openPositions || 0), closedTradesShown: Number(report && report.forwardWatch && report.forwardWatch.closedTrades || 0), lastError: '' };
               report.v930 = { version: policy.version, dataSource: 'LIVE SNAPSHOT', liveCapitalExecution: false };
@@ -2506,7 +2601,7 @@ async function installV930StableAutonomyInPage() {
       } catch (err) { status.lastError = String(err && err.message || err); status.fallbackActive = true; }
       status.installed = true;
       status.safe = true;
-      status.engineHook = { installed: true, safe: true, version: policy.version, lastError: status.lastError || '', wrappedFunctions: status.wrappedFunctions.slice(), fallbackActive: !!status.fallbackActive };
+      status.engineHook = { installed: true, safe: true, version: policy.version, lastError: status.lastError || '', wrappedFunctions: status.wrappedFunctions.slice(), fallbackActive: !!status.fallbackActive, nativeExecutionControl: status.nativeExecutionControl || null };
       return status;
     }, policy);
     lastEngineHookView = buildEngineHookView(status?.engineHook || status || {});
@@ -2621,6 +2716,7 @@ async function getPageHealth() {
       nativeForwardPool: val(() => window.__ALPS_FINAL_V930__?.nativeForwardPool || null, null),
       fullAutonomy: val(() => window.__ALPS_FINAL_V930__?.fullAutonomy || null, null),
       engineHook: val(() => window.__ALPS_FINAL_V930__?.engineHook || null, null),
+      nativeExecutionControl: val(() => window.__ALPS_FINAL_V930__?.nativeExecutionControl || null, null),
       circuitBreaker: val(() => ({ enabled: true, open: false, reason: '', fallbackMode: 'ADVANCED_MODULES_ACTIVE', disabledModules: [] }), null),
       chart: val(() => window.__ALPS_FINAL_V930__?.chart || null, null),
       dataSource: 'LIVE SNAPSHOT'
