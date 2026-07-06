@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.2.1 Autonomous Cognition → ARI Bridge
+ * ALPS Server Runner — v9.2.2 Persistent Autonomous Memory
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,16 +40,17 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.2.1-autonomous-cognition-ari-bridge';
+const RECOVERY_PATCH_VERSION = 'v9.2.2-persistent-autonomous-memory';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.2.1-autonomous-cognition-ari-bridge';
+const COGNITION_PATCH_VERSION = 'v9.2.2-persistent-autonomous-memory';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.2.1-autonomous-cognition-ari-bridge';
+const AUTONOMY_PATCH_VERSION = 'v9.2.2-persistent-autonomous-memory';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
+const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
 const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
   "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
@@ -123,6 +124,162 @@ const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
     "note": "Seeded from previous ALPS report; historical continuity only. Fingerprints are not treated as executable live trades."
   }
 };
+
+const EMBEDDED_AUTONOMOUS_EVIDENCE_SEEDS = [
+{
+  "schema": "alps.autonomous.evidenceSeed.v1",
+  "source": "ALPS_AHI_Command_Report_2026-07-06_14-34.md",
+  "generatedAt": "2026-07-06T10:34:00.439Z",
+  "note": "System-generated ALPS report evidence seed. Historical evidence only; not a manual pair rule and not current positions.",
+  "export": {
+    "schema": "quantedge.alps.tradeExport.v1",
+    "generatedAt": "2026-07-06T10:34:00.433Z",
+    "openTrades": [],
+    "closedTrades": [
+      {
+        "tradeId": "1783303231794_BNBUSDT_1h_VAH_VAL_G1_SlowF_667_G2_SlowF_k49_G3_SlowF_HABea_b85_G4_SlowF_mfp_R2",
+        "pair": "BNBUSDT",
+        "timeframe": "1h",
+        "direction": "LONG",
+        "strategy": "G4 G3 G2 G1 VAH/VAL Break + Slow Frame + Slow Frame + Slow Frame + HA Bear + Slow Frame",
+        "entry": 588.53,
+        "exit": 581.817,
+        "pnlPct": null,
+        "pnlBps": -126.06385400914083,
+        "bars": null,
+        "result": "LOSS",
+        "status": "CLOSED",
+        "openedAt": "2026-07-06T02:00:31.794Z",
+        "closedAt": "2026-07-06T09:00:33.197Z",
+        "mfeBps": 0,
+        "maeBps": 134.23274939255396,
+        "exitReason": "STOP",
+        "ariAction": "EXPLORE",
+        "ariConfidence": 70,
+        "regime": "TREND_UP / HIGH_VOL / ABOVE_VALUE",
+        "freshness": "FRESH",
+        "source": "report.forwardWatch.recentSignals.CLOSED"
+      },
+      {
+        "tradeId": "1783303231707_BNBUSDT_1h_VAH_VAL_G1_SlowF_667_G2_SlowF_k49_G3_SlowF_HABea_b85_R2",
+        "pair": "BNBUSDT",
+        "timeframe": "1h",
+        "direction": "LONG",
+        "strategy": "G3 G2 G1 VAH/VAL Break + Slow Frame + Slow Frame + Slow Frame + HA Bear",
+        "entry": 588.53,
+        "exit": 581.817,
+        "pnlPct": null,
+        "pnlBps": -126.06385400914083,
+        "bars": null,
+        "result": "LOSS",
+        "status": "CLOSED",
+        "openedAt": "2026-07-06T02:00:31.707Z",
+        "closedAt": "2026-07-06T09:00:33.195Z",
+        "mfeBps": 0,
+        "maeBps": 134.23274939255396,
+        "exitReason": "STOP",
+        "ariAction": "EXPLORE",
+        "ariConfidence": 70,
+        "regime": "TREND_UP / HIGH_VOL / ABOVE_VALUE",
+        "freshness": "FRESH",
+        "source": "report.forwardWatch.recentSignals.CLOSED"
+      },
+      {
+        "tradeId": "1783299631296_BNBUSDT_1h_VAH_VAL_G1_SlowF_667_G2_SlowF_k49_G3_SlowF_HABea_b85_G4_SlowF_mfp_R2",
+        "pair": "BNBUSDT",
+        "timeframe": "1h",
+        "direction": "LONG",
+        "strategy": "G4 G3 G2 G1 VAH/VAL Break + Slow Frame + Slow Frame + Slow Frame + HA Bear + Slow Frame",
+        "entry": 591.77,
+        "exit": 585.199,
+        "pnlPct": null,
+        "pnlBps": -123.0397620697235,
+        "bars": null,
+        "result": "LOSS",
+        "status": "CLOSED",
+        "openedAt": "2026-07-06T01:00:31.296Z",
+        "closedAt": "2026-07-06T05:00:32.099Z",
+        "mfeBps": 0,
+        "maeBps": 130.11812021562318,
+        "exitReason": "STOP",
+        "ariAction": "EXPLORE",
+        "ariConfidence": 70,
+        "regime": "TREND_UP / HIGH_VOL / ABOVE_VALUE",
+        "freshness": "FRESH",
+        "source": "report.forwardWatch.recentSignals.CLOSED"
+      },
+      {
+        "tradeId": "1783288830703_BNBUSDT_1h_VAH_VAL_G1_SlowF_667_G2_SlowF_k49_G3_SlowF_HABea_b85_G4_SlowF_mfp_R2",
+        "pair": "BNBUSDT",
+        "timeframe": "1h",
+        "direction": "LONG",
+        "strategy": "G4 G3 G2 G1 VAH/VAL Break + Slow Frame + Slow Frame + Slow Frame + HA Bear + Slow Frame",
+        "entry": 589.65,
+        "exit": 583.1659999999999,
+        "pnlPct": null,
+        "pnlBps": -121.96353769185174,
+        "bars": null,
+        "result": "LOSS",
+        "status": "CLOSED",
+        "openedAt": "2026-07-05T22:00:30.703Z",
+        "closedAt": "2026-07-06T07:00:32.497Z",
+        "mfeBps": 35.953531756126594,
+        "maeBps": 123.12388705164065,
+        "exitReason": "STOP",
+        "ariAction": "EXPLORE",
+        "ariConfidence": 70,
+        "regime": "TREND_UP / HIGH_VOL / ABOVE_VALUE",
+        "freshness": "FRESH",
+        "source": "report.forwardWatch.recentSignals.CLOSED"
+      }
+    ],
+    "stats": {
+      "openTrades": 0,
+      "closedTrades": 4,
+      "sourceStats": {
+        "openSources": [
+          {
+            "source": "report.forwardWatch.recentSignals.OPEN",
+            "count": 0
+          }
+        ],
+        "closedSources": [
+          {
+            "source": "report.forwardWatch.recentSignals.CLOSED",
+            "count": 4
+          }
+        ]
+      }
+    },
+    "note": "Exported from ALPS server runner for QuantEdge sync. Fingerprints are not treated as executable trades."
+  },
+  "report": {
+    "intelligence": {
+      "adaptiveResearch": {
+        "patterns": [
+          {
+            "pattern": "1h | VAH_VAL | LONG | TREND_UP / HIGH_VOL / ABOVE_VALUE",
+            "stage": "REBUILD",
+            "confidence": 0,
+            "trust": 0,
+            "exposureLimit": 0,
+            "openExposureLimit": 0,
+            "closed": 4,
+            "wins": 0,
+            "losses": 4,
+            "lossClusters": 3,
+            "winClusters": 0,
+            "avgR": -1.1069012347682445,
+            "winRate": 0,
+            "pairs": "BNBUSDT",
+            "basis": "Historical ALPS forward report: 4 closed forward losses, 3 loss clusters, STOP-driven failure, system stage REBUILD."
+          }
+        ]
+      }
+    }
+  }
+}
+];
 const FORWARD_STALE_MS = Number(process.env.ALPS_FORWARD_STALE_MS || 90 * 60 * 1000);
 const MAX_SNAPSHOT_HISTORY = Number(process.env.ALPS_SNAPSHOT_HISTORY_LIMIT || 500);
 const AUTO_RELOAD_STALE_FORWARD = String(process.env.ALPS_AUTO_RELOAD_STALE_FORWARD || '1') !== '0';
@@ -160,6 +317,7 @@ let tradeVaultState = null;
 let cognitionState = null;
 let lastCognitionView = null;
 let autonomyState = null;
+let autonomyMemoryState = null;
 let lastAutonomyView = null;
 let lastNotifyCounts = { paperSignals: 0, closedTrades: 0, openPositions: 0 };
 let tickBusy = false;
@@ -925,12 +1083,224 @@ function buildCognitionMarkdown(view = lastCognitionView) {
   for (const d of (view.shadowDecisions || []).slice(0, 20)) {
     lines.push(`| ${mdCell(d.action)} | ${mdCell(d.severity)} | ${mdCell(d.subject)} | ${mdCell(d.reason)} |`);
   }
-  lines.push('', '> Cognition note: v9.2.1 keeps cognition deterministic and auditable. It does not close trades, widen stops, or hard-ban any pair; the Autonomous Bridge may route future matching hypotheses to Shadow Retest only when ALPS evidence itself requests REBUILD/REDUCE.');
+  lines.push('', '> Cognition note: v9.2.2 keeps cognition deterministic and auditable. It does not close trades, widen stops, or hard-ban any pair; the Autonomous Bridge may route future matching hypotheses to Shadow Retest only when ALPS evidence itself requests REBUILD/REDUCE.');
   return lines.join('\n');
 }
 
 
-// ===== ALPS v9.2.1 — Autonomous Cognition → ARI Bridge =====
+
+// ===== ALPS v9.2.2 — Persistent Autonomous Evidence Memory =====
+// Stores system-derived evidence routes across restarts/deploys. It does not store manual pair bans.
+function emptyAutonomyMemoryState() {
+  return {
+    schema: 'alps.autonomousEvidenceMemory.state.v1',
+    version: AUTONOMY_PATCH_VERSION,
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+    seedSourcesLoaded: [],
+    lastNonZeroCognition: null,
+    lastNonZeroExport: null,
+    lastNonZeroReportEvidence: null,
+    activeRoutes: [],
+    routeHistory: [],
+    notes: []
+  };
+}
+
+async function loadAutonomyMemoryState() {
+  if (autonomyMemoryState) return autonomyMemoryState;
+  await ensureDirs();
+  try {
+    autonomyMemoryState = JSON.parse(await fsp.readFile(AUTONOMY_MEMORY_FILE, 'utf8'));
+  } catch (_) {
+    autonomyMemoryState = emptyAutonomyMemoryState();
+  }
+  if (!Array.isArray(autonomyMemoryState.seedSourcesLoaded)) autonomyMemoryState.seedSourcesLoaded = [];
+  if (!Array.isArray(autonomyMemoryState.activeRoutes)) autonomyMemoryState.activeRoutes = [];
+  if (!Array.isArray(autonomyMemoryState.routeHistory)) autonomyMemoryState.routeHistory = [];
+  if (!Array.isArray(autonomyMemoryState.notes)) autonomyMemoryState.notes = [];
+  return autonomyMemoryState;
+}
+
+async function saveAutonomyMemoryState() {
+  if (!autonomyMemoryState) return;
+  autonomyMemoryState.updatedAt = new Date().toISOString();
+  await fsp.writeFile(AUTONOMY_MEMORY_FILE, JSON.stringify(autonomyMemoryState, null, 2)).catch(e => log('Autonomy memory save failed:', e.message));
+}
+
+function cognitionHasEvidence(view) {
+  const s = view?.summary || {};
+  return Number(s.rawTotal || 0) > 0 || Number(s.nEffTotal || 0) > 0 || (Array.isArray(view?.families) && view.families.length > 0);
+}
+
+function exportHasEvidence(exported) {
+  return tradeExportCounts(exported || {}).total > 0;
+}
+
+function routeMemoryKey(route) {
+  return [route?.routeKey || '', route?.action || '', route?.trigger || '']
+    .map(x => String(x || '').trim().toUpperCase()).join('::');
+}
+
+function mergeAutonomousRoutes(...lists) {
+  const map = new Map();
+  for (const list of lists) {
+    for (const r of (Array.isArray(list) ? list : [])) {
+      const key = routeMemoryKey(r);
+      if (!key.replace(/:/g, '')) continue;
+      const prev = map.get(key) || {};
+      map.set(key, {
+        ...prev,
+        ...r,
+        source: r.source || prev.source || 'AUTONOMOUS_EVIDENCE_NOT_MANUAL',
+        restoredFromPersistentMemory: !!(r.restoredFromPersistentMemory || prev.restoredFromPersistentMemory),
+        hardBan: false,
+        pairSpecificManualRule: false
+      });
+    }
+  }
+  return Array.from(map.values());
+}
+
+function minimalReportEvidence(report = {}) {
+  return {
+    generatedAt: report?.meta?.generatedAt || report?.generatedAt || new Date().toISOString(),
+    adaptivePatterns: report?.intelligence?.adaptiveResearch?.patterns || [],
+    ahiRegimes: report?.intelligence?.ahiRegimes || [],
+    failureLearning: report?.intelligence?.failureLearning || []
+  };
+}
+
+async function importEmbeddedAutonomyEvidenceSeedsIfNeeded() {
+  await loadAutonomyMemoryState();
+  const imported = [];
+  for (const seed of (EMBEDDED_AUTONOMOUS_EVIDENCE_SEEDS || [])) {
+    const source = seed?.source || 'embedded-autonomous-evidence-seed';
+    if (autonomyMemoryState.seedSourcesLoaded.includes(source)) continue;
+    const seededCognition = cognitionAnalyse(seed.export || {}, seed.report || {});
+    const seededBridge = deriveAutonomousBridgeView(seed.report || {}, seededCognition);
+    if (cognitionHasEvidence(seededCognition)) {
+      autonomyMemoryState.lastNonZeroCognition = {
+        capturedAt: new Date().toISOString(),
+        source,
+        note: seed.note || 'Imported system-generated evidence seed.',
+        view: seededCognition
+      };
+      autonomyMemoryState.lastNonZeroExport = {
+        capturedAt: new Date().toISOString(),
+        source,
+        counts: tradeExportCounts(seed.export || {}),
+        export: seed.export || {}
+      };
+      autonomyMemoryState.lastNonZeroReportEvidence = {
+        capturedAt: new Date().toISOString(),
+        source,
+        reportEvidence: minimalReportEvidence(seed.report || {})
+      };
+    }
+    if (seededBridge?.activeRoutes?.length) {
+      const seededRoutes = seededBridge.activeRoutes.map(r => ({
+        ...r,
+        restoredFromPersistentMemory: true,
+        persistedAt: new Date().toISOString(),
+        evidenceSource: source,
+        source: r.source || 'AUTONOMOUS_EVIDENCE_NOT_MANUAL'
+      }));
+      autonomyMemoryState.activeRoutes = mergeAutonomousRoutes(autonomyMemoryState.activeRoutes, seededRoutes);
+      autonomyMemoryState.routeHistory.push({
+        capturedAt: new Date().toISOString(),
+        source,
+        reason: 'embedded system-generated evidence seed imported to preserve autonomous route after restart',
+        routes: seededRoutes
+      });
+      while (autonomyMemoryState.routeHistory.length > 200) autonomyMemoryState.routeHistory.shift();
+    }
+    autonomyMemoryState.seedSourcesLoaded.push(source);
+    autonomyMemoryState.notes.push(`Autonomous evidence seed imported from ${source} at ${new Date().toISOString()}`);
+    imported.push({ source, routes: seededBridge?.activeRoutes?.length || 0, cognitionFamilies: seededCognition?.families?.length || 0 });
+  }
+  if (imported.length) await saveAutonomyMemoryState();
+  return imported;
+}
+
+async function updateAutonomyPersistentMemory(report, exported, cognitionView, bridgeView) {
+  await loadAutonomyMemoryState();
+  let changed = false;
+  if (cognitionHasEvidence(cognitionView)) {
+    autonomyMemoryState.lastNonZeroCognition = {
+      capturedAt: new Date().toISOString(),
+      source: 'current-report-cognition',
+      note: 'Last non-zero cognition evidence produced by ALPS itself.',
+      view: cognitionView
+    };
+    autonomyMemoryState.lastNonZeroReportEvidence = {
+      capturedAt: new Date().toISOString(),
+      source: 'current-report',
+      reportEvidence: minimalReportEvidence(report || {})
+    };
+    changed = true;
+  }
+  if (exportHasEvidence(exported)) {
+    autonomyMemoryState.lastNonZeroExport = {
+      capturedAt: new Date().toISOString(),
+      source: 'current-report-trade-export',
+      counts: tradeExportCounts(exported || {}),
+      export: exported || {}
+    };
+    changed = true;
+  }
+  if (bridgeView?.activeRoutes?.length) {
+    const persistedRoutes = (bridgeView.activeRoutes || []).map(r => ({
+      ...r,
+      restoredFromPersistentMemory: !!r.restoredFromPersistentMemory,
+      persistedAt: r.persistedAt || new Date().toISOString(),
+      source: r.source || 'AUTONOMOUS_EVIDENCE_NOT_MANUAL',
+      hardBan: false,
+      pairSpecificManualRule: false
+    }));
+    const before = autonomyMemoryState.activeRoutes.length;
+    autonomyMemoryState.activeRoutes = mergeAutonomousRoutes(autonomyMemoryState.activeRoutes, persistedRoutes);
+    if (autonomyMemoryState.activeRoutes.length !== before || persistedRoutes.length) {
+      autonomyMemoryState.routeHistory.push({
+        capturedAt: new Date().toISOString(),
+        source: 'current-bridge-view',
+        reason: 'system-derived autonomous route persisted',
+        routes: persistedRoutes
+      });
+      while (autonomyMemoryState.routeHistory.length > 200) autonomyMemoryState.routeHistory.shift();
+      changed = true;
+    }
+  }
+  if (changed) await saveAutonomyMemoryState();
+  return autonomyMemoryState;
+}
+
+function buildPersistentMemoryView(memory = autonomyMemoryState) {
+  const routes = memory?.activeRoutes || [];
+  return {
+    schema: 'alps.autonomousEvidenceMemory.view.v1',
+    version: AUTONOMY_PATCH_VERSION,
+    enabled: true,
+    activeRoutes: routes.length,
+    seedSourcesLoaded: memory?.seedSourcesLoaded || [],
+    lastNonZeroCognition: memory?.lastNonZeroCognition ? {
+      capturedAt: memory.lastNonZeroCognition.capturedAt,
+      source: memory.lastNonZeroCognition.source,
+      rawTotal: memory.lastNonZeroCognition.view?.summary?.rawTotal || 0,
+      nEffTotal: memory.lastNonZeroCognition.view?.summary?.nEffTotal || 0,
+      families: memory.lastNonZeroCognition.view?.summary?.families || 0
+    } : null,
+    lastNonZeroExport: memory?.lastNonZeroExport ? {
+      capturedAt: memory.lastNonZeroExport.capturedAt,
+      source: memory.lastNonZeroExport.source,
+      counts: memory.lastNonZeroExport.counts || tradeExportCounts(memory.lastNonZeroExport.export || {})
+    } : null,
+    routeHistoryCount: memory?.routeHistory?.length || 0,
+    note: 'Persistent memory stores ALPS system-derived evidence routes across restarts. It does not contain manual pair bans.'
+  };
+}
+
+// ===== ALPS v9.2.2 — Autonomous Cognition → ARI Bridge =====
 // No manual pair/strategy bans. The bridge converts the system's own evidence into future routing.
 function emptyAutonomyState() {
   return {
@@ -1115,9 +1485,50 @@ async function appendAutonomyDecision(decision) {
 
 async function updateAutonomousBridgeState(report, cognitionView) {
   await loadAutonomyState();
-  const view = deriveAutonomousBridgeView(report || {}, cognitionView || lastCognitionView || null);
+  await loadAutonomyMemoryState();
+  const importedSeeds = await importEmbeddedAutonomyEvidenceSeedsIfNeeded();
+  let view = deriveAutonomousBridgeView(report || {}, cognitionView || lastCognitionView || null);
+
+  const memoryRoutes = (autonomyMemoryState?.activeRoutes || []).map(r => ({
+    ...r,
+    restoredFromPersistentMemory: true,
+    hardBan: false,
+    pairSpecificManualRule: false
+  }));
+  const mergedRoutes = mergeAutonomousRoutes(view.activeRoutes || [], autonomyState.activeRoutes || [], memoryRoutes);
+  const restoredCount = mergedRoutes.filter(r => r.restoredFromPersistentMemory).length;
+  view.activeRoutes = mergedRoutes;
+  view.summary = {
+    ...(view.summary || {}),
+    activeRoutes: mergedRoutes.length,
+    shadowRetestOnly: mergedRoutes.filter(r => r.action === 'SHADOW_RETEST_ONLY').length,
+    manualPairRules: 0,
+    hardBans: 0,
+    mode: mergedRoutes.length ? (restoredCount ? 'ACTIVE_PERSISTENT_AUTONOMOUS_BRIDGE' : 'ACTIVE_AUTONOMOUS_BRIDGE') : 'OBSERVE_ONLY',
+    restoredFromPersistentMemory: restoredCount,
+    importedEvidenceSeeds: importedSeeds.length
+  };
+  view.persistentMemory = buildPersistentMemoryView(autonomyMemoryState);
+  view.note = 'The bridge uses persistent ALPS system-derived evidence memory. It does not contain manual pair names or fixed bans; routes survive restarts only if ALPS evidence previously created them.';
+
   const appended = [];
   for (const d of view.decisions || []) {
+    const rec = await appendAutonomyDecision(d);
+    if (rec) appended.push(rec);
+  }
+  for (const r of mergedRoutes || []) {
+    const d = {
+      key: `PERSISTENT_ROUTE_ACTIVE::${r.trigger || 'ROUTE'}::${r.routeKey || ''}`,
+      action: r.action || 'SHADOW_RETEST_ONLY',
+      trigger: r.trigger || 'PERSISTENT_AUTONOMOUS_ROUTE',
+      subject: r.subject || r.routeKey,
+      severity: r.severity || 'HIGH',
+      source: r.source || 'AUTONOMOUS_EVIDENCE_NOT_MANUAL',
+      evidence: { routeKey: r.routeKey, restoredFromPersistentMemory: !!r.restoredFromPersistentMemory, evidenceSource: r.evidenceSource || r.source || 'current-system-evidence' },
+      reason: r.reason || 'Persistent autonomous route is active.',
+      reversible: true,
+      hardBan: false
+    };
     const rec = await appendAutonomyDecision(d);
     if (rec) appended.push(rec);
   }
@@ -1129,21 +1540,27 @@ async function updateAutonomousBridgeState(report, cognitionView) {
     tamperEvident: true
   };
   autonomyState.lastView = view;
-  autonomyState.activeRoutes = view.activeRoutes || [];
+  autonomyState.activeRoutes = mergedRoutes;
   lastAutonomyView = view;
   await saveAutonomyState();
+  await updateAutonomyPersistentMemory(report || {}, lastTradeExport || {}, cognitionView || lastCognitionView || null, view);
+  view.persistentMemory = buildPersistentMemoryView(autonomyMemoryState);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(view, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomous-memory.json'), JSON.stringify(view.persistentMemory || {}, null, 2)).catch(() => null);
   return view;
 }
 
 function buildAutonomyMarkdown(view = lastAutonomyView) {
-  if (!view) return '## ALPS v9.2.1 Autonomous Cognition → ARI Bridge\n- No autonomy view yet.';
+  if (!view) return '## ALPS v9.2.2 Autonomous Cognition → ARI Bridge\n- No autonomy view yet.';
   const s = view.summary || {};
   const lines = [
     '',
-    '## ALPS v9.2.1 Autonomous Cognition → ARI Bridge',
+    '## ALPS v9.2.2 Autonomous Cognition → ARI Bridge',
     `- Version: ${view.version}`,
     `- Mode: ${s.mode || view.mode}`,
+    `- Persistent memory routes: ${view.persistentMemory?.activeRoutes ?? '—'}`,
+    `- Restored routes: ${s.restoredFromPersistentMemory || 0}`,
+    `- Imported evidence seeds: ${s.importedEvidenceSeeds || 0}`,
     `- No manual rules: ${view.noManualRules ? 'YES' : 'NO'}`,
     `- Hard pair bans: ${s.hardBans || 0}`,
     `- Active routes: ${s.activeRoutes || 0}`,
@@ -1476,7 +1893,7 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS' } }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) } }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/export-recovery-state') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -1540,6 +1957,11 @@ async function createServer() {
         await loadAutonomyState();
         await collectReport().catch(() => null);
         return send(res, 200, buildAutonomyMarkdown(lastAutonomyView || autonomyState.lastView), 'text/markdown; charset=utf-8');
+      }
+      if (url.pathname === '/runner/autonomous-memory.json') {
+        await loadAutonomyMemoryState();
+        await collectReport().catch(() => null);
+        return send(res, 200, buildPersistentMemoryView(autonomyMemoryState));
       }
       if (url.pathname === '/runner/autonomy-ledger.json') {
         if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
