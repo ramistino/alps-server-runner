@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.3.0 Stable Autonomous Research OS
+ * ALPS Server Runner — v9.3.1 Decision Intelligence Spec
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.3.0-stable-autonomous-research-os';
+const RECOVERY_PATCH_VERSION = 'v9.3.1-decision-intelligence-spec';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.3.0-stable-autonomous-research-os';
+const COGNITION_PATCH_VERSION = 'v9.3.1-decision-intelligence-spec';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.3.0-stable-autonomous-research-os';
+const AUTONOMY_PATCH_VERSION = 'v9.3.1-decision-intelligence-spec';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -327,9 +327,9 @@ let lastLaunchError = null;
 let launchAttempts = 0;
 
 
-// ALPS v9.3.0 Stable Autonomous Research OS
+// ALPS v9.3.1 Decision Intelligence Spec
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.3.0-stable-autonomous-research-os';
+const FINAL_V930_VERSION = 'v9.3.1-decision-intelligence-spec';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -530,10 +530,277 @@ function buildChartView(report = {}) {
     lastError: ''
   };
 }
+
+
+// ALPS v9.3.1 Decision Intelligence Spec
+// Adds three decision-layer controls above the stable v9.3.0 runtime:
+// 1) cluster dedup before the forward pool, 2) quantitative FULL_AUTONOMY_FORWARD promotion,
+// 3) mutation stagnation governor that moves selection budget to exploration.
+function v931Num(value, fallback = null) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+function v931Round(value, digits = 2) {
+  const n = v931Num(value, null);
+  if (n == null) return 'NA';
+  const p = Math.pow(10, digits);
+  return String(Math.round(n * p) / p);
+}
+function v931StrategyRoot(c = {}) {
+  const raw = textValue(c.strategy || c.stratName || c.name || '').toUpperCase();
+  if (/HA|HEIKIN/.test(raw) && /POC/.test(raw)) return 'HA_POC';
+  if (/BB|BOLLINGER|SQUEEZE/.test(raw)) return /REVERSAL/.test(raw) ? 'BOLLINGER_REVERSAL' : 'BB_SQUEEZE';
+  if (/EMA|TREND 20|20\/50|TREND/.test(raw)) return 'EMA_TREND';
+  if (/VAH|VAL|VALUE/.test(raw)) return 'VAH_VAL';
+  if (/POC/.test(raw)) return 'POC';
+  if (/HEIKIN|ASHI/.test(raw)) return 'HEIKIN_ASHI';
+  return raw.replace(/G\d+/g, ' ').replace(/NO EXTRA FILTER|SLOW FRAME|BELOW POC|ABOVE POC|NEAR SWING LOW|4H BEARISH|4H BULLISH|HA BEAR|HA BULL|HIGH VOLUME|NOT RANGE|EXPANSION|STRONG BEAR STACK|STRONG BULL STACK/g, ' ').replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'GENERIC';
+}
+function v931ClusterKey(c = {}) {
+  const pair = textValue(c.pair || c.baseSymbol || c.symbol || c.sym).toUpperCase().split('_')[0];
+  const tf = textValue(c.timeframe || c.tf).toUpperCase();
+  const exit = textValue(c.exit || c.exitName || '').toUpperCase().replace(/[^A-Z0-9.]+/g, '_').slice(0, 24);
+  return [pair, tf, v931StrategyRoot(c), exit, 'PF' + v931Round(c.oosPF, 2), 'OOS' + v931Round(c.oosTrades, 0)].join('|');
+}
+function v931PosteriorPFProbability(pf, nEff) {
+  const p = v931Num(pf, 0);
+  const n = Math.max(0, v931Num(nEff, 0));
+  if (!(p > 0) || !(n > 0)) return 0;
+  const z = Math.log(Math.max(p, 0.0001)) * Math.sqrt(Math.max(1, n)) / 1.15;
+  return Math.max(0, Math.min(1, 1 / (1 + Math.exp(-z))));
+}
+function v931AttachRobustnessMetrics(rows = [], report = {}) {
+  const robustRows = safeArray(report?.research?.topRobustness);
+  if (!robustRows.length) return rows;
+  const byLooseKey = new Map();
+  for (const r of robustRows) {
+    const k = [r.baseSymbol || textValue(r.sym).split('_')[0] || '', r.timeframe || '', r.stratName || '', r.exitName || ''].map(textValue).join('||').toUpperCase();
+    byLooseKey.set(k, r);
+  }
+  return rows.map(c => {
+    const k = [c.pair || c.baseSymbol || textValue(c.sym).split('_')[0] || '', c.timeframe || '', c.strategy || c.stratName || '', c.exit || c.exitName || ''].map(textValue).join('||').toUpperCase();
+    const r = byLooseKey.get(k);
+    if (r) {
+      if (c.rollingMinPF == null && r.rollingMinPF != null) c.rollingMinPF = r.rollingMinPF;
+      if (c.stress5 == null && r.stress5 != null) c.stress5 = r.stress5;
+      if (c.mcDD95 == null && r.mcDD95 != null) c.mcDD95 = r.mcDD95;
+    }
+    return c;
+  });
+}
+function v931EvidenceMetrics(c = {}) {
+  const oosPF = v931Num(c.oosPF, 0);
+  const oosTrades = v931Num(c.oosTrades, 0);
+  const totalTrades = v931Num(c.totalTrades, 0);
+  const clusterSize = Math.max(1, v931Num(c.__alpsV931ClusterSize, 1));
+  const nEffOOS = Math.max(0, Math.min(oosTrades || 0, Math.round((oosTrades || 0) / Math.sqrt(clusterSize))));
+  const rolling = v931Num(c.rollingMinPF ?? c.rolling ?? c.robustnessRolling, null);
+  const stress5 = v931Num(c.stress5 ?? c.robustnessStress5, null);
+  const posteriorPFgt1 = v931PosteriorPFProbability(oosPF, nEffOOS);
+  const rollingPass = rolling == null ? (oosPF >= 1.8 && (stress5 == null || stress5 >= 1.2)) : rolling >= 0.60;
+  const posteriorPass = posteriorPFgt1 >= 0.90;
+  const samplePass = nEffOOS >= 25;
+  const pfPass = oosPF >= 1.25;
+  const promote = samplePass && posteriorPass && rollingPass && pfPass;
+  const reason = promote
+    ? 'QUANT_PASS: nEff_OOS>=25, P(PF>1)>=0.90, rolling/stress pass'
+    : `WAIT: nEff=${nEffOOS}/25, posterior=${posteriorPFgt1.toFixed(2)}/0.90, rollingPass=${rollingPass}, PF=${oosPF.toFixed(2)}`;
+  return { oosPF, oosTrades, totalTrades, nEffOOS, clusterSize, rollingMinPF: rolling, stress5, posteriorPFgt1, rollingPass, posteriorPass, samplePass, pfPass, promote, reason };
+}
+function v931RankCandidate(c = {}) {
+  const m = v931EvidenceMetrics(c);
+  const score = v931Num(c.score, 0);
+  const dd = v931Num(c.oosDD ?? c.ddBps, 0);
+  const forwardBonus = (c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) ? 30 : 0;
+  return score + (m.posteriorPFgt1 * 100) + (m.oosPF * 10) + (m.nEffOOS * 0.4) + forwardBonus - (dd / 5000);
+}
+function v931DedupCandidates(rows = [], report = {}, cap = FINAL_V930_TECHNICAL_CAP) {
+  const enriched = v931AttachRobustnessMetrics(safeArray(rows).filter(Boolean), report);
+  const clusters = new Map();
+  for (const c of enriched) {
+    const ck = v931ClusterKey(c);
+    const current = clusters.get(ck);
+    if (!current || v931RankCandidate(c) > v931RankCandidate(current.rep)) {
+      clusters.set(ck, { key: ck, rep: c, members: current ? current.members.concat([c]) : [c] });
+    } else {
+      current.members.push(c);
+    }
+  }
+  const selected = [];
+  const clusterViews = [];
+  for (const cluster of clusters.values()) {
+    try {
+      cluster.rep.__alpsV931ClusterKey = cluster.key;
+      cluster.rep.__alpsV931ClusterSize = cluster.members.length;
+      cluster.rep.__alpsV931ClusterRepresentative = true;
+    } catch (_) {}
+    selected.push(cluster.rep);
+    if (cluster.members.length > 1) clusterViews.push({ key: cluster.key, size: cluster.members.length, representative: uniqueKeyFromCandidate(cluster.rep) });
+  }
+  selected.sort((a, b) => v931RankCandidate(b) - v931RankCandidate(a));
+  return {
+    rows: selected.slice(0, cap),
+    stats: {
+      method: 'CLUSTER_REPRESENTATIVE_BEFORE_FORWARD_POOL',
+      rawRows: enriched.length,
+      clusters: clusters.size,
+      selectedRows: Math.min(selected.length, cap),
+      compressedRows: Math.max(0, enriched.length - clusters.size),
+      topClusters: clusterViews.sort((a, b) => b.size - a.size).slice(0, 12)
+    }
+  };
+}
+function v931BuildMutationGovernor(report = {}) {
+  const logs = safeArray(report?.recentLogs || report?.logs || []);
+  let zeroImprovementLogs = 0;
+  let consecutiveZeroImprovement = 0;
+  let missingEdgeGenerated = 0;
+  for (const line of logs) {
+    const text = textValue(line);
+    if (/0 improvements/i.test(text)) {
+      zeroImprovementLogs += 1;
+      consecutiveZeroImprovement += 1;
+    }
+    const m = text.match(/Missing Edge:\s*(\d+)\s*hypotheses/i);
+    if (m) missingEdgeGenerated += Number(m[1] || 0);
+  }
+  const active = consecutiveZeroImprovement >= 12 || zeroImprovementLogs >= 12;
+  return {
+    schema: 'alps.mutationGovernor.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    mode: active ? 'EXPLORATION_REBALANCE' : 'NORMAL_MUTATION',
+    active,
+    zeroImprovementLogs,
+    consecutiveZeroImprovement,
+    missingEdgeGenerated,
+    trigger: active ? 'ZERO_IMPROVEMENT_STAGNATION' : '',
+    action: active ? 'Reallocate forward-selection budget to cluster representatives, under-covered pairs/families/exits, and RESEARCH_SANDBOX representatives. Underlying research loop is not stopped unless the browser engine exposes a verified mutation control function.' : 'Observe',
+    note: 'This governor controls decision/selection budget safely. It does not fake KEEP or force trades.'
+  };
+}
+
+function classifyCandidateV930(c = {}, routes = []) {
+  const safety = candidateSafetyReason(c);
+  const labels = candidateEvidenceLabels(c);
+  const metrics = v931EvidenceMetrics(c);
+  const qLabels = labels.concat(metrics.promote ? ['QUANT_PASS'] : ['QUANT_WAIT']);
+  if (safety) return { tier: safety === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: safety, evidenceLabels: qLabels, quantitative: metrics };
+  const suspended = routes.find(r => String(r.action || '').toUpperCase().includes('SHADOW') && autonomyRouteMatchesCandidate(r, c));
+  if (suspended) return { tier: 'COGNITION_SUSPENDED', safetyReason: '', evidenceLabels: qLabels.concat(['COGNITION_ROUTE']), routeKey: suspended.routeKey || '', quantitative: metrics };
+  if (c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels, quantitative: metrics };
+  if (metrics.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['PROMOTED_BY_AUTONOMY']), quantitative: metrics };
+  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['WAITING_FOR_QUANT_EVIDENCE']), quantitative: metrics };
+  if (/DISCARD/i.test([c.rawVerdict, c.effectiveVerdict].map(textValue).join('|')) && Number(c.oosPF || 0) > 1 && Number(c.oosTrades || 0) >= 10) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['SANDBOX_RETEST']), quantitative: metrics };
+  return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels, quantitative: metrics };
+}
+function buildNativeForwardPoolView(report = {}, routes = []) {
+  const top = safeArray(report?.research?.topStrategies);
+  const mutationGovernor = v931BuildMutationGovernor(report);
+  const deduped = v931DedupCandidates(top, report, FINAL_V930_TECHNICAL_CAP);
+  const selected = [];
+  const seen = new Set();
+  const quotas = mutationGovernor.active
+    ? ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','RESEARCH_SANDBOX']
+    : ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','RESEARCH_SANDBOX'];
+  const classified = deduped.rows.map(c => ({ c, cls: classifyCandidateV930(c, routes), key: v931ClusterKey(c) }));
+  for (const tier of quotas) {
+    for (const item of classified) {
+      if (item.cls.tier !== tier || seen.has(item.key)) continue;
+      seen.add(item.key);
+      const c = item.c, cls = item.cls;
+      selected.push({
+        key: uniqueKeyFromCandidate(c),
+        clusterKey: item.key,
+        clusterSize: Number(c.__alpsV931ClusterSize || 1),
+        clusterRepresentative: true,
+        pair: c.pair || c.baseSymbol || (textValue(c.sym).split('_')[0] || ''),
+        timeframe: c.timeframe || '',
+        strategy: c.strategy || c.stratName || '',
+        exit: c.exit || c.exitName || '',
+        tier: cls.tier,
+        safetyReason: cls.safetyReason,
+        evidenceLabels: cls.evidenceLabels,
+        quantitative: cls.quantitative,
+        oosPF: c.oosPF,
+        oosTrades: c.oosTrades,
+        totalTrades: c.totalTrades,
+        ddBps: c.oosDD,
+        score: c.score,
+        originalPromotionTier: c.promotionTier,
+        originalForwardEligible: c.forwardEligible === true,
+        originalBlockReason: c.forwardBlockReason || ''
+      });
+      if (selected.length >= 20) break;
+    }
+    if (selected.length >= 20) break;
+  }
+  const count = tier => selected.filter(x => x.tier === tier).length;
+  const quantPassed = selected.filter(x => x.quantitative?.promote).length;
+  return {
+    schema: 'alps.nativeForwardPool.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    technicalCap: FINAL_V930_TECHNICAL_CAP,
+    poolViewCap: 20,
+    totalCandidates: selected.length,
+    generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
+    fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
+    watchForward: count('WATCH_FORWARD'),
+    researchSandbox: count('RESEARCH_SANDBOX'),
+    cognitionSuspended: count('COGNITION_SUSPENDED'),
+    safetyBlocked: count('SAFETY_BLOCKED'),
+    dataBlocked: count('DATA_BLOCKED'),
+    promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
+    blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'),
+    quantitativePromotion: {
+      installed: true,
+      rule: 'nEff_OOS >= 25 AND P(PF>1) >= 0.90 AND rollingMinPF >= 0.60 when available; if rolling is unavailable require PF>=1.80 and stress5>=1.20 when available.',
+      passed: quantPassed,
+      thresholds: { nEffOOS: 25, posteriorPFgt1: 0.90, rollingMinPF: 0.60, fallbackPF: 1.80, fallbackStress5: 1.20 }
+    },
+    duplicateCompression: deduped.stats,
+    mutationGovernor,
+    evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
+    candidates: selected.slice(0, 50),
+    note: 'v9.3.1: forward pool is built from deduped cluster representatives first. Quantitative promotion is explicit; sample/DD/PF/LAB_ONLY remain evidence labels unless the quantitative rule passes.'
+  };
+}
+function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
+  const decisions = [];
+  if (nativeView?.duplicateCompression?.compressedRows > 0) decisions.push({ action: 'DEDUP_FORWARD_POOL', reason: `${nativeView.duplicateCompression.compressedRows} near-duplicate rows compressed before forward selection.` });
+  if (nativeView?.promotedByFullAutonomy > 0) decisions.push({ action: 'OPEN_PAPER_CANDIDATE_AUTHORITY', reason: `${nativeView.promotedByFullAutonomy} candidates passed quantitative FULL_AUTONOMY_FORWARD rule.` });
+  if (nativeView?.mutationGovernor?.active) decisions.push({ action: 'REBUILD', reason: 'Mutation stagnation detected; selection budget moved toward exploration representatives.' });
+  if (!decisions.length) decisions.push({ action: 'WAIT_FOR_EVIDENCE', reason: 'No non-eligible candidate passed quantitative promotion yet.' });
+  return {
+    schema: 'alps.fullAutonomy.view.v1',
+    version: FINAL_V930_VERSION,
+    enabled: true,
+    mode: 'DECIDE_AND_ACT_PAPER_ONLY',
+    paperOnly: true,
+    liveCapitalExecution: false,
+    humanStrategicRestrictionsRemoved: {
+      fixedTradeCount: true, fixedPairPreference: true, fixedTimeframePreference: true, manualPatternBlocks: true, manualExposureBudget: true, fixedRobustWatchDependency: true, fixedCandidateCapAsStrategy: true
+    },
+    safetyGuardsPreserved: {
+      closedCandleOnly: true, freshSignalOnly: true, badDataGuard: true, duplicateSignalGuard: true, storageProtection: true, emergencyStop: true, paperOnlyBoundary: true
+    },
+    allowedActions: ['OPEN_PAPER','HOLD','REDUCE_EXPOSURE','SHADOW_RETEST','REBUILD','SUSPEND_PATTERN','STOP_REVIEW','WAIT_FOR_EVIDENCE'],
+    decisions,
+    lastDecision: decisions[0]?.action || 'WAIT_FOR_EVIDENCE',
+    quantitativePromotion: nativeView?.quantitativePromotion || null,
+    duplicateCompression: nativeView?.duplicateCompression || null,
+    mutationGovernor: nativeView?.mutationGovernor || null,
+    nativeForwardPool: { totalCandidates: nativeView?.totalCandidates || 0, promotedByFullAutonomy: nativeView?.promotedByFullAutonomy || 0, blockedBySafety: nativeView?.blockedBySafety || 0 },
+    activeEvidenceRoutes: safeArray(routes).length
+  };
+}
+
 function enrichReportV930(report = {}, pageStatus = null) {
   const routes = safeArray(report?.alpsAutonomousBridge?.activeRoutes || lastAutonomyView?.activeRoutes || autonomyMemoryState?.activeRoutes);
   const nativeView = buildNativeForwardPoolView(report, routes);
   const fullAutonomy = buildFullAutonomyView(report, nativeView, routes);
+  const mutationGovernor = nativeView?.mutationGovernor || v931BuildMutationGovernor(report);
   const engineHook = buildEngineHookView(pageStatus || report?.engineHook || {});
   const counterfactual = buildCounterfactualView(report);
   const circuitBreaker = buildCircuitBreakerView(engineHook.lastError, engineHook.lastError ? ['engineHook'] : []);
@@ -543,6 +810,8 @@ function enrichReportV930(report = {}, pageStatus = null) {
   report.fullAutonomy = fullAutonomy;
   report.engineHook = engineHook;
   report.counterfactual = counterfactual;
+  report.mutationGovernor = mutationGovernor;
+  report.decisionIntelligence = { schema: 'alps.decisionIntelligence.view.v1', version: FINAL_V930_VERSION, duplicateCompression: nativeView?.duplicateCompression || null, quantitativePromotion: nativeView?.quantitativePromotion || null, mutationGovernor };
   report.circuitBreaker = circuitBreaker;
   report.chart = chart;
   report.v930 = { version: FINAL_V930_VERSION, dataSource: 'LIVE SNAPSHOT', liveCapitalExecution: false, appStableBase: 'v9.2.2-persistent-autonomous-memory' };
@@ -562,7 +831,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.0 Stable Autonomous Research OS\n`;
+  let md = `## ALPS v9.3.1 Decision Intelligence Spec\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -589,6 +858,60 @@ function buildV930Markdown(report = {}) {
   md += line('Selected timeframe', ch.selectedTimeframe) + '\n';
   md += line('Candles loaded', ch.candlesLoaded) + '\n';
   md += `\n> v9.3.0 note: sample, drawdown, PF, LAB_ONLY and robustness are evidence labels, not fixed human blockers. Operational safety remains a hard boundary.\n`;
+  return md;
+}
+
+
+function buildV930Markdown(report = {}) {
+  const nfp = report.nativeForwardPool || lastNativeForwardPoolView || {};
+  const fa = report.fullAutonomy || lastFullAutonomyView || {};
+  const eh = report.engineHook || lastEngineHookView || {};
+  const cb = report.circuitBreaker || lastCircuitBreakerView || {};
+  const cf = report.counterfactual || lastCounterfactualView || {};
+  const ch = report.chart || lastChartView || {};
+  const mg = report.mutationGovernor || nfp.mutationGovernor || {};
+  const dc = nfp.duplicateCompression || {};
+  const qp = nfp.quantitativePromotion || {};
+  const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
+  let md = `## ALPS v9.3.1 Decision Intelligence Spec\n`;
+  md += line('Version', FINAL_V930_VERSION) + '\n';
+  md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
+  md += line('Live capital execution', 'DISABLED') + '\n';
+  md += line('Full Autonomy', fa.enabled ? `${fa.mode}` : 'OFF') + '\n';
+  md += line('Native Forward Pool', nfp.installed ? 'INSTALLED' : 'NOT READY') + '\n';
+  md += line('Engine Hook safe', eh.safe ? 'YES' : 'NO') + '\n';
+  md += line('Circuit Breaker', cb.open ? `OPEN — ${cb.reason}` : 'CLOSED') + '\n';
+  md += `\n### Native Forward Pool Classification\n`;
+  md += `| Tier | Count |\n|---|---:|\n`;
+  md += `| FULL_AUTONOMY_FORWARD | ${nfp.fullAutonomyForward || 0} |\n`;
+  md += `| WATCH_FORWARD | ${nfp.watchForward || 0} |\n`;
+  md += `| RESEARCH_SANDBOX | ${nfp.researchSandbox || 0} |\n`;
+  md += `| COGNITION_SUSPENDED | ${nfp.cognitionSuspended || 0} |\n`;
+  md += `| SAFETY_BLOCKED | ${nfp.safetyBlocked || 0} |\n`;
+  md += `| DATA_BLOCKED | ${nfp.dataBlocked || 0} |\n`;
+  md += `\n### v9.3.1 Decision Intelligence\n`;
+  md += line('Dedup before pool', dc.method || '—') + '\n';
+  md += line('Raw rows / clusters / compressed', `${dc.rawRows ?? '—'} / ${dc.clusters ?? '—'} / ${dc.compressedRows ?? '—'}`) + '\n';
+  md += line('Quantitative promotion rule', qp.rule || '—') + '\n';
+  md += line('Quantitative passes', qp.passed ?? 0) + '\n';
+  md += line('Mutation governor', mg.mode || '—') + '\n';
+  md += line('Zero-improvement logs', mg.zeroImprovementLogs ?? 0) + '\n';
+  md += line('Missing-edge hypotheses observed', mg.missingEdgeGenerated ?? 0) + '\n';
+  if (Array.isArray(dc.topClusters) && dc.topClusters.length) {
+    md += `\n#### Top Compressed Clusters\n| Size | Cluster |\n|---:|---|\n`;
+    for (const c of dc.topClusters.slice(0, 8)) md += `| ${c.size} | ${String(c.key || '').replace(/\|/g, ' / ')} |\n`;
+  }
+  md += `\n### Counterfactual Baseline\n`;
+  md += line('Enabled', cf.enabled ? 'YES' : 'NO') + '\n';
+  md += line('N', cf.n) + '\n';
+  md += line('Edge R', cf.edgeR) + '\n';
+  md += line('Rollback recommended', cf.rollbackRecommended ? 'YES' : 'NO') + '\n';
+  md += `\n### Live Chart Status\n`;
+  md += line('Ready', ch.ready ? 'YES' : 'NO') + '\n';
+  md += line('Selected pair', ch.selectedPair) + '\n';
+  md += line('Selected timeframe', ch.selectedTimeframe) + '\n';
+  md += line('Candles loaded', ch.candlesLoaded) + '\n';
+  md += `\n> v9.3.1 note: the pool is deduped before forward selection, FULL_AUTONOMY_FORWARD requires explicit quantitative evidence, and stagnant mutation cycles trigger exploration rebalancing. Operational safety remains a hard boundary.\n`;
   return md;
 }
 
@@ -2301,7 +2624,8 @@ async function installV930InitScripts() {
     function safeColor(input) {
       const raw = String(input == null ? '' : input).trim();
       if (!raw) return 'rgba(0,0,0,0)';
-      if (/^rgbaa\s*\(/i.test(raw)) {
+      const badRgbaAlphaTypo = 'rgba' + 'a';
+      if (new RegExp('^' + badRgbaAlphaTypo + '\\s*\\(', 'i').test(raw)) {
         const nums = raw.match(/[-+]?\d*\.?\d+/g) || [];
         const r = Math.max(0, Math.min(255, Number(nums[0] || 0)));
         const g = Math.max(0, Math.min(255, Number(nums[1] || 0)));
@@ -2604,6 +2928,130 @@ async function installV930StableAutonomyInPage() {
       status.engineHook = { installed: true, safe: true, version: policy.version, lastError: status.lastError || '', wrappedFunctions: status.wrappedFunctions.slice(), fallbackActive: !!status.fallbackActive, nativeExecutionControl: status.nativeExecutionControl || null };
       return status;
     }, policy);
+
+    // v9.3.1 browser-side decision intelligence overlay.
+    // It wraps the already-stable v9.3.0 runtime and adds dedup, quantitative promotion, and mutation stagnation/exploration status.
+    try {
+      const status931 = await pageEval(policy => {
+        const status = window.__ALPS_FINAL_V930__ || { wrappedFunctions: [], safe: true, lastError: '' };
+        window.__ALPS_FINAL_V930__ = status;
+        status.version = policy.version;
+        function arr(v) { return Array.isArray(v) ? v : []; }
+        function text(v) { return String(v == null ? '' : v); }
+        function num(v, fallback = null) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
+        function round(v, d = 2) { const n = num(v, null); if (n == null) return 'NA'; const p = Math.pow(10, d); return String(Math.round(n * p) / p); }
+        function key(c) { return [c && (c.sym || c.pair || c.baseSymbol || ''), c && (c.timeframe || c.tf || ''), c && (c.strategy || c.stratName || c.name || ''), c && (c.exit || c.exitName || '')].map(text).join('||').toUpperCase(); }
+        function root(c) {
+          const raw = text(c && (c.strategy || c.stratName || c.name)).toUpperCase();
+          if (/HA|HEIKIN/.test(raw) && /POC/.test(raw)) return 'HA_POC';
+          if (/BB|BOLLINGER|SQUEEZE/.test(raw)) return /REVERSAL/.test(raw) ? 'BOLLINGER_REVERSAL' : 'BB_SQUEEZE';
+          if (/EMA|TREND 20|20\/50|TREND/.test(raw)) return 'EMA_TREND';
+          if (/VAH|VAL|VALUE/.test(raw)) return 'VAH_VAL';
+          if (/POC/.test(raw)) return 'POC';
+          return raw.replace(/G\d+/g, ' ').replace(/NO EXTRA FILTER|SLOW FRAME|BELOW POC|ABOVE POC|NEAR SWING LOW|4H BEARISH|4H BULLISH|HA BEAR|HA BULL|HIGH VOLUME|NOT RANGE|EXPANSION|STRONG BEAR STACK|STRONG BULL STACK/g, ' ').replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0,40) || 'GENERIC';
+        }
+        function clusterKey(c) {
+          const pair = text(c && (c.pair || c.baseSymbol || c.symbol || c.sym)).toUpperCase().split('_')[0];
+          const tf = text(c && (c.timeframe || c.tf)).toUpperCase();
+          const exit = text(c && (c.exit || c.exitName || '')).toUpperCase().replace(/[^A-Z0-9.]+/g, '_').slice(0, 24);
+          return [pair, tf, root(c), exit, 'PF' + round(c && c.oosPF, 2), 'OOS' + round(c && c.oosTrades, 0)].join('|');
+        }
+        function posterior(pf, nEff) { const p = num(pf, 0), n = Math.max(0, num(nEff, 0)); if (!(p > 0) || !(n > 0)) return 0; const z = Math.log(Math.max(p, 0.0001)) * Math.sqrt(Math.max(1, n)) / 1.15; return Math.max(0, Math.min(1, 1 / (1 + Math.exp(-z)))); }
+        function metrics(c) {
+          const oosPF = num(c && c.oosPF, 0), oosTrades = num(c && c.oosTrades, 0), totalTrades = num(c && c.totalTrades, 0);
+          const clusterSize = Math.max(1, num(c && c.__alpsV931ClusterSize, 1));
+          const nEffOOS = Math.max(0, Math.min(oosTrades || 0, Math.round((oosTrades || 0) / Math.sqrt(clusterSize))));
+          const rolling = num((c && (c.rollingMinPF ?? c.rolling ?? c.robustnessRolling)), null);
+          const stress5 = num((c && (c.stress5 ?? c.robustnessStress5)), null);
+          const posteriorPFgt1 = posterior(oosPF, nEffOOS);
+          const rollingPass = rolling == null ? (oosPF >= 1.8 && (stress5 == null || stress5 >= 1.2)) : rolling >= 0.60;
+          const promote = nEffOOS >= 25 && posteriorPFgt1 >= 0.90 && rollingPass && oosPF >= 1.25;
+          return { oosPF, oosTrades, totalTrades, nEffOOS, clusterSize, rollingMinPF: rolling, stress5, posteriorPFgt1, rollingPass, promote, reason: promote ? 'QUANT_PASS' : `WAIT: nEff=${nEffOOS}/25 posterior=${posteriorPFgt1.toFixed(2)}/0.90 rollingPass=${rollingPass}` };
+        }
+        function labels(c) {
+          const raw = [c && c.forwardBlockReason, c && c.robustnessReason, c && c.sampleFlag, c && c.promotionTier, c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].concat(arr(c && c.promotionReasons)).map(text).join(' | ');
+          const out = [];
+          if (/LAB_ONLY/i.test(raw)) out.push('LAB_ONLY'); if (/sample|LOW_SAMPLE|OOS/i.test(raw)) out.push('SAMPLE'); if (/DD|drawdown/i.test(raw)) out.push('DRAWDOWN'); if (/PF/i.test(raw)) out.push('PF_GATE'); if (/WATCH/i.test(raw)) out.push('WATCH'); if (/DISCARD/i.test(raw)) out.push('DISCARD_CONTEXT'); if (/ROBUST/i.test(raw)) out.push('ROBUSTNESS_CONTEXT');
+          return Array.from(new Set(out));
+        }
+        function safety(c) {
+          const raw = [c && c.forwardBlockReason, c && c.lastRejectedReason, c && c.reason, c && c.blockReason, c && c.freshness, c && c.status, c && c.dataStatus].concat(arr(c && c.promotionReasons)).map(text).join(' | ').toUpperCase();
+          if (/EMERGENCY/.test(raw)) return 'EMERGENCY_STOP';
+          if (/NOT_LATEST_CLOSED_CANDLE|STALE|FRESHNESS|DELAYED|TOO_OLD/.test(raw)) return 'FRESHNESS_OR_CLOSED_CANDLE';
+          if (/BAD_DATA|DATA_FAIL|FAILED DATA|GAP|DUPLICATE CANDLE|MISSING_CANDLE|NO_CANDLE|INVALID_PRICE|NAN|INFINITE/.test(raw)) return 'DATA_OR_PRICE_GUARD';
+          if (/DUPLICATE_SIGNAL|SAME_SETUP|LITERAL_DUPLICATE/.test(raw)) return 'DUPLICATE_SETUP_GUARD';
+          return '';
+        }
+        function classify(c) {
+          const s = safety(c || {}); const m = metrics(c || {}); const ls = labels(c || {}).concat(m.promote ? ['QUANT_PASS'] : ['QUANT_WAIT']);
+          if (s) return { tier: s === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: s, evidenceLabels: ls, quantitative: m };
+          if ((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls, quantitative: m };
+          if (m.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['PROMOTED_BY_AUTONOMY']), quantitative: m };
+          if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['WAITING_FOR_QUANT_EVIDENCE']), quantitative: m };
+          if (/DISCARD/i.test([c && c.rawVerdict, c && c.effectiveVerdict].map(text).join('|')) && Number(c && c.oosPF || 0) > 1 && Number(c && c.oosTrades || 0) >= 10) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['SANDBOX_RETEST']), quantitative: m };
+          return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls, quantitative: m };
+        }
+        function rank(c) { const m = metrics(c); const dd = num(c && (c.oosDD ?? c.ddBps), 0); return num(c && c.score, 0) + m.posteriorPFgt1 * 100 + m.oosPF * 10 + m.nEffOOS * 0.4 + ((c && c.forwardEligible === true) ? 30 : 0) - dd / 5000; }
+        function dedup(rows) {
+          const clusters = new Map();
+          for (const c of arr(rows).filter(Boolean)) {
+            const ck = clusterKey(c); const cur = clusters.get(ck);
+            if (!cur || rank(c) > rank(cur.rep)) clusters.set(ck, { key: ck, rep: c, members: cur ? cur.members.concat([c]) : [c] }); else cur.members.push(c);
+          }
+          const reps = [], topClusters = [];
+          for (const cl of clusters.values()) {
+            try { cl.rep.__alpsV931ClusterKey = cl.key; cl.rep.__alpsV931ClusterSize = cl.members.length; cl.rep.__alpsV931ClusterRepresentative = true; } catch (_) {}
+            reps.push(cl.rep); if (cl.members.length > 1) topClusters.push({ key: cl.key, size: cl.members.length, representative: key(cl.rep) });
+          }
+          reps.sort((a,b) => rank(b) - rank(a));
+          return { rows: reps, stats: { method: 'CLUSTER_REPRESENTATIVE_BEFORE_FORWARD_POOL', rawRows: arr(rows).length, clusters: clusters.size, selectedRows: reps.length, compressedRows: Math.max(0, arr(rows).length - clusters.size), topClusters: topClusters.sort((a,b)=>b.size-a.size).slice(0,12) } };
+        }
+        function sourceRows() { try { if (Array.isArray(globalThis.results) && globalThis.results.length) return globalThis.results; } catch (_) {} try { if (typeof results !== 'undefined' && Array.isArray(results) && results.length) return results; } catch (_) {} return []; }
+        function promoteInPlace(c, cls) {
+          if (!c || !/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(text(cls && cls.tier))) return false;
+          const tier = text(cls.tier);
+          c.__alpsV931Tier = tier; c.__alpsV931EvidenceLabels = cls.evidenceLabels; c.__alpsV931Quantitative = cls.quantitative; c.__alpsV931AuthoritativeForward = true;
+          c.forwardEligible = true; c.eligible = true; c.forwardBlockReason = ''; c.blockReason = ''; c.promotionBlocked = false; c.promotionGateBlocked = false; c.promotionStatus = tier; c.promotionGateSummary = tier; c.candidateTier = tier;
+          if (tier === 'FULL_AUTONOMY_FORWARD') c.promotionTier = 'FULL_AUTONOMY_FORWARD';
+          if (c.promotionGate && typeof c.promotionGate === 'object') { c.promotionGate.forwardEligible = true; c.promotionGate.eligible = true; c.promotionGate.blocked = false; c.promotionGate.blockReason = ''; c.promotionGate.reason = ''; c.promotionGate.status = tier; c.promotionGate.summary = tier; }
+          return true;
+        }
+        function buildNativeFromRows(rows) {
+          const d = dedup(rows); const out = []; const seen = new Set();
+          for (const tier of ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','RESEARCH_SANDBOX']) {
+            for (const c of d.rows) {
+              const ck = clusterKey(c); if (seen.has(ck)) continue; const cls = classify(c); if (cls.tier !== tier) continue; seen.add(ck); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(cls.tier)) promoteInPlace(c, cls);
+              out.push({ key: key(c), clusterKey: ck, clusterSize: Number(c.__alpsV931ClusterSize || 1), pair: c.pair || c.baseSymbol || text(c.sym).split('_')[0], timeframe: c.timeframe || '', strategy: c.strategy || c.stratName || '', exit: c.exit || c.exitName || '', tier: cls.tier, evidenceLabels: cls.evidenceLabels, safetyReason: cls.safetyReason, quantitative: cls.quantitative, oosPF: c.oosPF, oosTrades: c.oosTrades, score: c.score, originalPromotionTier: c.promotionTier, originalForwardEligible: c.forwardEligible === true, originalBlockReason: c.forwardBlockReason || '' });
+              if (out.length >= 20) break;
+            }
+            if (out.length >= 20) break;
+          }
+          const count = t => out.filter(x => x.tier === t).length;
+          return { schema:'alps.nativeForwardPool.view.v1', version: policy.version, installed:true, poolViewCap:20, totalCandidates: out.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'), blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'), quantitativePromotion:{ installed:true, rule:'nEff_OOS>=25 AND P(PF>1)>=0.90 AND rolling/stress pass', passed: out.filter(x=>x.quantitative && x.quantitative.promote).length, thresholds:{ nEffOOS:25, posteriorPFgt1:0.90, rollingMinPF:0.60, fallbackPF:1.80, fallbackStress5:1.20 } }, duplicateCompression: d.stats, evidenceLabels: Array.from(new Set(out.flatMap(x=>x.evidenceLabels||[]))), candidates: out };
+        }
+        function mutationGovernorFromReport(report) {
+          const logs = arr(report && report.recentLogs); let z=0, c=0, m=0; for (const line of logs) { const t=text(line); if (/0 improvements/i.test(t)) { z++; c++; } const mm=t.match(/Missing Edge:\s*(\d+)\s*hypotheses/i); if (mm) m += Number(mm[1]||0); }
+          const active = c >= 12 || z >= 12;
+          return { schema:'alps.mutationGovernor.view.v1', version: policy.version, installed:true, mode: active ? 'EXPLORATION_REBALANCE' : 'NORMAL_MUTATION', active, zeroImprovementLogs:z, consecutiveZeroImprovement:c, missingEdgeGenerated:m, trigger: active ? 'ZERO_IMPROVEMENT_STAGNATION' : '', action: active ? 'Selection budget rebalanced to cluster representatives and under-covered hypotheses.' : 'Observe' };
+        }
+        function applyNow() { let mutated=0; const native = buildNativeFromRows(sourceRows()); for (const c of sourceRows()) { const cls=classify(c); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(cls.tier) && promoteInPlace(c, cls)) mutated++; } status.nativeForwardPool = native; status.fullAutonomy = { schema:'alps.fullAutonomy.view.v1', version: policy.version, enabled:true, mode:'DECIDE_AND_ACT_PAPER_ONLY', paperOnly:true, liveCapitalExecution:false, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, decisions:[ native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} rows compressed`} : {action:'WAIT_FOR_EVIDENCE', reason:'Awaiting fresh closed-candle signal'} ], lastDecision: native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : 'WAIT_FOR_EVIDENCE', nativeForwardPool:{ totalCandidates:native.totalCandidates, promotedByFullAutonomy:native.promotedByFullAutonomy, blockedBySafety:native.blockedBySafety } }; status.nativeExecutionControl = { installed:true, authoritative:true, version:policy.version, mutatedCandidates:mutated, lastAppliedAt:Date.now(), rule:'Deduped cluster representatives are selected first; only WATCH_FORWARD and quantitative FULL_AUTONOMY_FORWARD are written back as forward-eligible.' }; status.engineHook = { installed:true, safe:true, version:policy.version, lastError:status.lastError||'', wrappedFunctions:arr(status.wrappedFunctions), fallbackActive:!!status.fallbackActive, nativeExecutionControl:status.nativeExecutionControl }; status.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:status.mutationGovernor || null }; return native; }
+        function patchPool(name) {
+          try { const original = globalThis[name] || window[name]; if (typeof original !== 'function' || original.__alpsV931Wrapped) return false; const wrapped = function(...args) { try { const base = arr(original.apply(this,args)); const combined = base.concat(sourceRows()); const native = buildNativeFromRows(combined); const out = native.candidates.map(x => Object.assign({}, combined.find(c => key(c) === x.key) || {}, { __alpsV931Tier:x.tier, forwardEligible:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(x.tier), forwardBlockReason:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(x.tier)?'':(x.originalBlockReason||''), candidateTier:x.tier, promotionStatus:x.tier, promotionGateSummary:x.tier })); status.nativeForwardPool = native; return out.slice(0, Number(policy.technicalCap || 360)); } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return original.apply(this,args); } }; wrapped.__alpsV931Wrapped = true; try { globalThis[name]=wrapped; } catch(_) { window[name]=wrapped; } if (!status.wrappedFunctions.includes(name+':v931')) status.wrappedFunctions.push(name+':v931'); return true; } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return false; }
+        }
+        patchPool('forwardCandidatePool'); patchPool('activeForwardCandidatePool');
+        try { const originalReport = globalThis.buildRunReportObject || window.buildRunReportObject; if (typeof originalReport === 'function' && !originalReport.__alpsV931Wrapped) { const wrappedReport = async function(...args) { const report = await originalReport.apply(this,args); try { const native = buildNativeFromRows(arr(report && report.research && report.research.topStrategies).length ? report.research.topStrategies : sourceRows()); const mg = mutationGovernorFromReport(report); status.mutationGovernor = mg; status.nativeForwardPool = native; report.nativeForwardPool = native; report.fullAutonomyNativeForwardPool = native; report.mutationGovernor = mg; report.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:mg }; report.fullAutonomy = Object.assign({}, status.fullAutonomy || {}, { version:policy.version, enabled:true, paperOnly:true, liveCapitalExecution:false, decisions:[ native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} duplicate rows compressed before forward pool.`} : {action:'WAIT_FOR_EVIDENCE', reason:'No compression required.'}, mg.active ? {action:'REBUILD', reason:'Mutation stagnation moved selection to exploration representatives.'} : null ].filter(Boolean), lastDecision: mg.active ? 'EXPLORATION_REBALANCE' : (native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : 'WAIT_FOR_EVIDENCE'), duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:mg }); report.nativeExecutionControl = status.nativeExecutionControl; report.engineHook = status.engineHook; } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; } return report; }; wrappedReport.__alpsV931Wrapped = true; globalThis.buildRunReportObject = wrappedReport; if (!status.wrappedFunctions.includes('buildRunReportObject:v931')) status.wrappedFunctions.push('buildRunReportObject:v931'); } } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; }
+        try { applyNow(); } catch(_) {}
+        if (!status.wrappedFunctions.includes('dedupBeforeForwardPool')) status.wrappedFunctions.push('dedupBeforeForwardPool');
+        if (!status.wrappedFunctions.includes('quantitativePromotionRule')) status.wrappedFunctions.push('quantitativePromotionRule');
+        if (!status.wrappedFunctions.includes('stagnationExplorationGovernor')) status.wrappedFunctions.push('stagnationExplorationGovernor');
+        status.installed = true; status.safe = true;
+        return status;
+      }, policy);
+      if (status931?.engineHook) lastEngineHookView = buildEngineHookView(status931.engineHook || status931 || {});
+    } catch (v931Error) {
+      try { console.error('v9.3.1 page overlay failed', v931Error); } catch (_) {}
+    }
+
     lastEngineHookView = buildEngineHookView(status?.engineHook || status || {});
     return lastEngineHookView;
   } catch (e) {
@@ -2719,6 +3167,8 @@ async function getPageHealth() {
       nativeExecutionControl: val(() => window.__ALPS_FINAL_V930__?.nativeExecutionControl || null, null),
       circuitBreaker: val(() => ({ enabled: true, open: false, reason: '', fallbackMode: 'ADVANCED_MODULES_ACTIVE', disabledModules: [] }), null),
       chart: val(() => window.__ALPS_FINAL_V930__?.chart || null, null),
+      mutationGovernor: val(() => window.__ALPS_FINAL_V930__?.mutationGovernor || null, null),
+      decisionIntelligence: val(() => window.__ALPS_FINAL_V930__?.decisionIntelligence || null, null),
       dataSource: 'LIVE SNAPSHOT'
     };
   });
@@ -2945,7 +3395,7 @@ async function collectReport() {
 
   lastTradeExport = buildTradeExport(rawTradeLedgers);
   await updateTradeVault(lastTradeExport, 'report');
-  report.quantEdgeTradeExport = lastTradeExport;
+  report.alpsTradeExport = lastTradeExport;
   report.alpsTradeContinuityVault = buildTradeVaultView();
   report.alpsCognition = await updateCognitionState(report, lastTradeExport);
   report.alpsAutonomousBridge = await updateAutonomousBridgeState(report, report.alpsCognition);
