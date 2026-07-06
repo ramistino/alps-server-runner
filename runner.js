@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.2 Stage 1 Cognition Shadow Core
+ * ALPS Server Runner — v9.2.1 Autonomous Cognition → ARI Bridge
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,14 +40,17 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.2-stage1-cognition-shadow-core';
+const RECOVERY_PATCH_VERSION = 'v9.2.1-autonomous-cognition-ari-bridge';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.2-stage1-cognition-shadow-core';
+const COGNITION_PATCH_VERSION = 'v9.2.1-autonomous-cognition-ari-bridge';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
+const AUTONOMY_PATCH_VERSION = 'v9.2.1-autonomous-cognition-ari-bridge';
+const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
+const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
 const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
   "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
   "note": "Previous known ALPS paper-forward trades before QuantEdge export sync. Historical continuity only; not current positions.",
@@ -156,6 +159,8 @@ let lastTradeExport = buildTradeExport({ openTrades: [], closedTrades: [] });
 let tradeVaultState = null;
 let cognitionState = null;
 let lastCognitionView = null;
+let autonomyState = null;
+let lastAutonomyView = null;
 let lastNotifyCounts = { paperSignals: 0, closedTrades: 0, openPositions: 0 };
 let tickBusy = false;
 let recoveryState = null;
@@ -920,10 +925,349 @@ function buildCognitionMarkdown(view = lastCognitionView) {
   for (const d of (view.shadowDecisions || []).slice(0, 20)) {
     lines.push(`| ${mdCell(d.action)} | ${mdCell(d.severity)} | ${mdCell(d.subject)} | ${mdCell(d.reason)} |`);
   }
-  lines.push('', '> Cognition note: Stage 1 only changes interpretation and logging. It does not widen stops, ban patterns, open trades, close trades, or alter AHI/ARI execution.');
+  lines.push('', '> Cognition note: v9.2.1 keeps cognition deterministic and auditable. It does not close trades, widen stops, or hard-ban any pair; the Autonomous Bridge may route future matching hypotheses to Shadow Retest only when ALPS evidence itself requests REBUILD/REDUCE.');
   return lines.join('\n');
 }
 
+
+// ===== ALPS v9.2.1 — Autonomous Cognition → ARI Bridge =====
+// No manual pair/strategy bans. The bridge converts the system's own evidence into future routing.
+function emptyAutonomyState() {
+  return {
+    schema: 'alps.autonomousBridge.state.v1',
+    version: AUTONOMY_PATCH_VERSION,
+    createdAt: new Date().toISOString(),
+    updatedAt: null,
+    seq: 0,
+    prevHash: 'GENESIS',
+    lastView: null,
+    activeRoutes: [],
+    seenKeys: []
+  };
+}
+
+async function loadAutonomyState() {
+  if (autonomyState) return autonomyState;
+  await ensureDirs();
+  try {
+    autonomyState = JSON.parse(await fsp.readFile(AUTONOMY_STATE_FILE, 'utf8'));
+  } catch (_) {
+    autonomyState = emptyAutonomyState();
+  }
+  if (!Array.isArray(autonomyState.activeRoutes)) autonomyState.activeRoutes = [];
+  if (!Array.isArray(autonomyState.seenKeys)) autonomyState.seenKeys = [];
+  if (!autonomyState.prevHash) autonomyState.prevHash = 'GENESIS';
+  if (!Number.isFinite(Number(autonomyState.seq))) autonomyState.seq = 0;
+  return autonomyState;
+}
+
+async function saveAutonomyState() {
+  if (!autonomyState) return;
+  autonomyState.updatedAt = new Date().toISOString();
+  await fsp.writeFile(AUTONOMY_STATE_FILE, JSON.stringify(autonomyState, null, 2)).catch(e => log('Autonomy state save failed:', e.message));
+}
+
+function bridgePatternStageMap(report = {}) {
+  const out = new Map();
+  const rows = report?.intelligence?.adaptiveResearch?.patterns || [];
+  for (const p of rows) {
+    const raw = String(p?.pattern || '');
+    const parts = raw.split('|').map(x => x.trim()).filter(Boolean);
+    if (parts.length >= 4) {
+      const [timeframe, root, direction, ...regimeParts] = parts;
+      const regime = regimeParts.join(' | ').replace(/\s+/g, ' ').trim();
+      const key = ['', timeframe, root, direction, regime].join('||').toUpperCase();
+      out.set(key, p);
+    }
+  }
+  return out;
+}
+
+function bridgeFamilyStage(family = {}, report = {}) {
+  const stageMap = bridgePatternStageMap(report);
+  const looseKey = ['', family.timeframe || '', family.root || '', family.direction || '', family.regime || ''].join('||').toUpperCase();
+  for (const [k, v] of stageMap.entries()) {
+    if (k.includes(String(family.timeframe || '').toUpperCase()) &&
+        k.includes(String(family.root || '').toUpperCase()) &&
+        k.includes(String(family.direction || '').toUpperCase()) &&
+        k.includes(String(family.regime || '').toUpperCase())) return v;
+  }
+  return stageMap.get(looseKey) || null;
+}
+
+function bridgeRouteKey(family = {}) {
+  return [family.pair || '', family.timeframe || '', family.root || '', family.direction || '', family.regime || '']
+    .map(x => String(x || '').trim().toUpperCase()).join('||');
+}
+
+function deriveAutonomousBridgeView(report = {}, cognitionView = null) {
+  const cv = cognitionView || lastCognitionView || {};
+  const families = Array.isArray(cv?.families) ? cv.families : [];
+  const routes = [];
+  const decisions = [];
+
+  for (const f of families) {
+    const rawClosed = Number(f.rawClosed || 0);
+    const nEffClosed = Number(f.nEffClosed || 0);
+    const rawLosses = Number(f.rawLosses || 0);
+    const rawWins = Number(f.rawWins || 0);
+    const stopLosses = Number(f.stopLosses || 0);
+    const stopLossRatio = rawClosed ? stopLosses / rawClosed : 0;
+    const betaMean = Number(f?.betaBelief?.mean ?? 0.5);
+    const avgMfeBps = Number(f.avgMfeBps || 0);
+    const avgMaeBps = Math.max(0, Number(f.avgMaeBps || 0));
+    const mfeMaeRatio = avgMaeBps > 0 ? avgMfeBps / avgMaeBps : null;
+    const stageRow = bridgeFamilyStage(f, report) || {};
+    const stage = String(stageRow.stage || '').toUpperCase();
+    const systemAskedRebuild = ['REBUILD', 'REDUCE', 'SHADOW_REVIEW', 'REBUILD_RETEST'].includes(stage);
+    const stopDrivenFailure = rawClosed >= 3 && rawLosses === rawClosed && stopLossRatio >= 0.8 && avgMaeBps > 0 && avgMfeBps <= avgMaeBps * 0.25;
+    const lowBelief = Number.isFinite(betaMean) && betaMean <= 0.30;
+    const enoughAutonomousEvidence = nEffClosed >= 2 && rawClosed >= 3;
+
+    if (enoughAutonomousEvidence && stopDrivenFailure && lowBelief && systemAskedRebuild) {
+      const key = bridgeRouteKey(f);
+      const evidence = {
+        rawClosed, nEffClosed, rawWins, rawLosses, stopLosses,
+        stopLossRatio: cogRound(stopLossRatio, 4),
+        avgMfeBps: f.avgMfeBps, avgMaeBps: f.avgMaeBps, avgPnlBps: f.avgPnlBps,
+        mfeMaeRatio: cogRound(mfeMaeRatio, 4), betaMean,
+        systemStage: stage || 'UNKNOWN', systemTrust: stageRow.trust, systemConfidence: stageRow.confidence,
+        exposureLimit: stageRow.exposureLimit, openExposureLimit: stageRow.openExposureLimit
+      };
+      const route = {
+        routeKey: key,
+        subject: f.subject,
+        pair: f.pair,
+        timeframe: f.timeframe,
+        root: f.root,
+        direction: f.direction,
+        regime: f.regime,
+        action: 'SHADOW_RETEST_ONLY',
+        trigger: 'SYSTEM_REBUILD_STOP_DRIVEN_FAILURE',
+        severity: 'HIGH',
+        source: 'AUTONOMOUS_EVIDENCE_NOT_MANUAL',
+        reversible: true,
+        hardBan: false,
+        pairSpecificManualRule: false,
+        reason: `${f.subject}: ALPS evidence reached REBUILD/REDUCE with stop-driven losses. Future identical hypotheses are routed to Shadow Retest only until mutation or changed evidence appears.`,
+        evidence
+      };
+      routes.push(route);
+      decisions.push({
+        key: `AUTONOMOUS_ROUTE::${route.trigger}::${route.routeKey}::${stableStringify(evidence).slice(0,500)}`,
+        action: route.action,
+        trigger: route.trigger,
+        subject: route.subject,
+        severity: route.severity,
+        source: route.source,
+        evidence,
+        reason: route.reason,
+        reversible: true,
+        hardBan: false
+      });
+    }
+  }
+
+  const view = {
+    schema: 'alps.autonomousBridge.view.v1',
+    version: AUTONOMY_PATCH_VERSION,
+    generatedAt: new Date().toISOString(),
+    mode: 'AUTONOMOUS_ROUTING',
+    noManualRules: true,
+    noHardPairBan: true,
+    noStopWidening: true,
+    noForcedClose: true,
+    routingScope: 'future focused-paper candidates only',
+    activeRoutes: routes,
+    decisions,
+    summary: {
+      activeRoutes: routes.length,
+      shadowRetestOnly: routes.filter(r => r.action === 'SHADOW_RETEST_ONLY').length,
+      manualPairRules: 0,
+      hardBans: 0,
+      mode: routes.length ? 'ACTIVE_AUTONOMOUS_BRIDGE' : 'OBSERVE_ONLY'
+    },
+    note: 'The bridge does not contain manual pair names or fixed bans. It converts ALPS Cognition/AHI evidence into future routing rules only when ALPS itself reaches REBUILD/REDUCE-style evidence.'
+  };
+  return view;
+}
+
+async function appendAutonomyDecision(decision) {
+  await loadAutonomyState();
+  if (autonomyState.seenKeys.includes(decision.key)) return null;
+  autonomyState.seq += 1;
+  const payload = {
+    seq: autonomyState.seq,
+    decisionId: sha256(`${decision.key}::${autonomyState.seq}`).slice(0, 24),
+    ts: new Date().toISOString(),
+    version: AUTONOMY_PATCH_VERSION,
+    ...decision,
+    prevHash: autonomyState.prevHash
+  };
+  const currHash = sha256(stableStringify(payload) + autonomyState.prevHash);
+  const record = { ...payload, currHash };
+  await fsp.appendFile(AUTONOMY_LEDGER_FILE, JSON.stringify(record) + '\n').catch(e => log('Autonomy ledger append failed:', e.message));
+  autonomyState.prevHash = currHash;
+  autonomyState.seenKeys.push(decision.key);
+  while (autonomyState.seenKeys.length > 1000) autonomyState.seenKeys.shift();
+  return record;
+}
+
+async function updateAutonomousBridgeState(report, cognitionView) {
+  await loadAutonomyState();
+  const view = deriveAutonomousBridgeView(report || {}, cognitionView || lastCognitionView || null);
+  const appended = [];
+  for (const d of view.decisions || []) {
+    const rec = await appendAutonomyDecision(d);
+    if (rec) appended.push(rec);
+  }
+  view.ledger = {
+    seq: autonomyState.seq,
+    prevHash: autonomyState.prevHash,
+    appendedThisRun: appended.length,
+    path: AUTONOMY_LEDGER_FILE,
+    tamperEvident: true
+  };
+  autonomyState.lastView = view;
+  autonomyState.activeRoutes = view.activeRoutes || [];
+  lastAutonomyView = view;
+  await saveAutonomyState();
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(view, null, 2)).catch(() => null);
+  return view;
+}
+
+function buildAutonomyMarkdown(view = lastAutonomyView) {
+  if (!view) return '## ALPS v9.2.1 Autonomous Cognition → ARI Bridge\n- No autonomy view yet.';
+  const s = view.summary || {};
+  const lines = [
+    '',
+    '## ALPS v9.2.1 Autonomous Cognition → ARI Bridge',
+    `- Version: ${view.version}`,
+    `- Mode: ${s.mode || view.mode}`,
+    `- No manual rules: ${view.noManualRules ? 'YES' : 'NO'}`,
+    `- Hard pair bans: ${s.hardBans || 0}`,
+    `- Active routes: ${s.activeRoutes || 0}`,
+    `- Shadow-retest routes: ${s.shadowRetestOnly || 0}`,
+    `- Scope: ${view.routingScope}`,
+    `- Ledger seq: ${view.ledger?.seq ?? 0}`,
+    '',
+    '### Active Autonomous Routes',
+    '| Action | Subject | Trigger | Reason |',
+    '|---|---|---|---|'
+  ];
+  const routes = view.activeRoutes || [];
+  if (!routes.length) lines.push('| — | — | — | No active route. Bridge is observing only. |');
+  for (const r of routes.slice(0, 20)) {
+    lines.push(`| ${mdCell(r.action)} | ${mdCell(r.subject)} | ${mdCell(r.trigger)} | ${mdCell(r.reason)} |`);
+  }
+  lines.push('', '> Bridge note: This is not a manual BNB filter. Any pair/timeframe/strategy can be routed only when ALPS Cognition + AHI/ARI evidence independently reaches the same failure profile.');
+  return lines.join('\n');
+}
+
+async function installAutonomousBridgeInPage(view = null) {
+  if (!page || page.isClosed()) return { installed: false, reason: 'page not ready' };
+  await loadAutonomyState();
+  const payload = view || lastAutonomyView || autonomyState?.lastView || deriveAutonomousBridgeView({}, lastCognitionView || cognitionState?.lastView || null);
+  return pageEval(policy => {
+    try {
+      const routes = Array.isArray(policy?.activeRoutes) ? policy.activeRoutes : [];
+      function t(v) { return String(v || '').trim(); }
+      function root(strategy) {
+        const s = t(strategy).toUpperCase();
+        if (/HA\s*\+\s*POC|HA_POC/.test(s)) return 'HA_POC';
+        if (/EMA\s+TREND|EMA_TREND/.test(s)) return 'EMA_TREND';
+        if (/VAH\/VAL|VAH_VAL/.test(s)) return 'VAH_VAL';
+        if (/BB\s+SQUEEZE|BB_SQUEEZE/.test(s)) return 'BB_SQUEEZE';
+        if (/BOLLINGER/.test(s)) return 'BOLLINGER';
+        return s.replace(/G\d+\s+/g, '').replace(/\s*\+\s*NO EXTRA FILTER/g, '').slice(0, 80) || 'UNKNOWN_STRATEGY';
+      }
+      function regime(x) {
+        const raw = t(x?.regime?.regime || x?.marketRegime || x?.regime || x?.regimeSummary || x?.regimeDetail || 'UNKNOWN_REGIME');
+        return raw.split('/').slice(0, 3).map(p => p.trim()).join(' / ') || 'UNKNOWN_REGIME';
+      }
+      function norm(x) {
+        const fp = x?.fingerprint || {};
+        return {
+          pair: t(x?.pair || x?.baseSymbol || fp.pair || (x?.sym ? String(x.sym).split('_')[0] : '')).toUpperCase(),
+          timeframe: t(x?.timeframe || x?.tf || fp.timeframe || (x?.sym ? String(x.sym).split('_')[1] : '')),
+          root: root(x?.rootStrategy || x?.rootStratId || fp.rootId || fp.rootName || x?.strategy || x?.stratName || x?.name),
+          direction: t(x?.direction || x?.dir || x?.side || x?.bias || 'LONG').toUpperCase(),
+          regime: regime(x)
+        };
+      }
+      function key(n) { return [n.pair, n.timeframe, n.root, n.direction, n.regime].map(x => t(x).toUpperCase()).join('||'); }
+      function match(x) {
+        if (!x || typeof x !== 'object') return null;
+        const k = key(norm(x));
+        return routes.find(r => t(r.routeKey).toUpperCase() === k) || null;
+      }
+      function shadowOnly(x) { return !!match(x); }
+      function routedReturn(x, route) {
+        return {
+          blocked: true,
+          action: 'SHADOW_RETEST_ONLY',
+          source: 'ALPS_AUTONOMOUS_COGNITION_ARI_BRIDGE',
+          hardBan: false,
+          manualRule: false,
+          routeKey: route.routeKey,
+          reason: route.reason,
+          original: x && typeof x === 'object' ? { pair: x.pair || x.baseSymbol || x.sym, timeframe: x.timeframe, strategy: x.strategy || x.stratName || x.rootStrategy } : null
+        };
+      }
+      const bridge = {
+        version: policy.version,
+        installedAt: new Date().toISOString(),
+        activeRoutes: routes,
+        normalize: norm,
+        routeKey: x => key(norm(x)),
+        match,
+        shouldShadowRetest: shadowOnly,
+        routeObject(x) { const r = match(x); return r ? routedReturn(x, r) : null; }
+      };
+      window.__ALPS_AUTONOMOUS_COGNITION_BRIDGE_POLICY__ = policy;
+      window.__ALPS_AUTONOMOUS_COGNITION_BRIDGE__ = bridge;
+      window.__ALPS_SHOULD_SHADOW_RETEST__ = shadowOnly;
+      window.__ALPS_AUTONOMOUS_ROUTE_CANDIDATE__ = (x) => bridge.routeObject(x);
+      try { localStorage.setItem('ALPS_AUTONOMOUS_COGNITION_BRIDGE_POLICY', JSON.stringify(policy)); } catch (_) {}
+
+      const wrapped = [];
+      const listFns = ['selectForwardCandidates','buildForwardCandidates','getForwardCandidates','rankForwardCandidates','getFocusedPaperCandidates','pickForwardCandidates','eligibleForwardCandidates'];
+      const openFns = ['openPaperSignal','registerPaperSignal','pushPaperSignal','createPaperSignal','openForwardSignal','openForwardTrade','maybeOpenPaperSignal','tryOpenForwardCandidate','maybeOpenForwardSignal','executeForwardCandidate','openPaperPosition'];
+      function wrapList(name) {
+        const fn = window[name];
+        if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) return;
+        const w = function(...args) {
+          const out = fn.apply(this, args);
+          const filter = v => Array.isArray(v) ? v.filter(x => !shadowOnly(x)) : v;
+          if (out && typeof out.then === 'function') return out.then(filter);
+          return filter(out);
+        };
+        w.__alpsAutonomousBridgeWrapped = true;
+        w.__original = fn;
+        window[name] = w;
+        wrapped.push(name);
+      }
+      function wrapOpen(name) {
+        const fn = window[name];
+        if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) return;
+        const w = function(...args) {
+          const hitArg = args.find(a => shadowOnly(a));
+          if (hitArg) return routedReturn(hitArg, match(hitArg));
+          return fn.apply(this, args);
+        };
+        w.__alpsAutonomousBridgeWrapped = true;
+        w.__original = fn;
+        window[name] = w;
+        wrapped.push(name);
+      }
+      listFns.forEach(wrapList);
+      openFns.forEach(wrapOpen);
+      return { installed: true, activeRoutes: routes.length, wrapped, version: policy.version };
+    } catch (e) {
+      return { installed: false, error: e.message };
+    }
+  }, payload);
+}
 
 
 function snapshotFromMetrics(metrics = {}, source = 'unknown', extra = {}) {
@@ -1132,7 +1476,7 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' } }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS' } }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/export-recovery-state') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -1184,6 +1528,25 @@ async function createServer() {
         const raw = await fsp.readFile(COGNITION_LEDGER_FILE, 'utf8').catch(() => '');
         const rows = raw.split('\n').filter(Boolean).slice(-200).map(line => { try { return JSON.parse(line); } catch (_) { return { raw: line }; } });
         return send(res, 200, { schema: 'alps.cognition.ledger.tail.v1', version: COGNITION_PATCH_VERSION, seq: cognitionState.seq, hashHead: cognitionState.prevHash, rows });
+      }
+      if (url.pathname === '/runner/autonomy.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await loadAutonomyState();
+        await collectReport().catch(() => null);
+        return send(res, 200, lastAutonomyView || autonomyState.lastView || { error: 'No autonomy view yet' });
+      }
+      if (url.pathname === '/runner/autonomy.md') {
+        if (!isAuthed(req)) return send(res, 401, 'Unauthorized', 'text/plain; charset=utf-8');
+        await loadAutonomyState();
+        await collectReport().catch(() => null);
+        return send(res, 200, buildAutonomyMarkdown(lastAutonomyView || autonomyState.lastView), 'text/markdown; charset=utf-8');
+      }
+      if (url.pathname === '/runner/autonomy-ledger.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await loadAutonomyState();
+        const raw = await fsp.readFile(AUTONOMY_LEDGER_FILE, 'utf8').catch(() => '');
+        const rows = raw.split('\n').filter(Boolean).slice(-200).map(line => { try { return JSON.parse(line); } catch (_) { return { raw: line }; } });
+        return send(res, 200, { schema: 'alps.autonomousBridge.ledger.tail.v1', version: AUTONOMY_PATCH_VERSION, seq: autonomyState.seq, hashHead: autonomyState.prevHash, rows });
       }
       if (url.pathname === '/runner/trades.md') {
         if (!isAuthed(req)) return send(res, 401, 'Unauthorized', 'text/plain; charset=utf-8');
@@ -1488,6 +1851,7 @@ async function runnerTick(reason = 'server-runner tick') {
     }
     await ensureRuntimeStarted();
     const before = enhanceHealth(await getPageHealth());
+    await installAutonomousBridgeInPage().catch(e => log('Autonomous bridge install before catch-up failed:', e.message));
 
     if (before.fwRunning && !before.fwRefreshRunning) {
       await pageEval(async reasonText => {
@@ -1540,6 +1904,8 @@ async function collectReport() {
   report.quantEdgeTradeExport = lastTradeExport;
   report.alpsTradeContinuityVault = buildTradeVaultView();
   report.alpsCognition = await updateCognitionState(report, lastTradeExport);
+  report.alpsAutonomousBridge = await updateAutonomousBridgeState(report, report.alpsCognition);
+  report.autonomousBridgeInstall = await installAutonomousBridgeInPage(report.alpsAutonomousBridge).catch(e => ({ installed: false, error: e.message }));
 
   let md = '';
   try {
@@ -1555,7 +1921,7 @@ async function collectReport() {
   }
   lastReport = report;
   await recordSnapshot(snapshotFromReport(report, 'report'));
-  md = `${md}\n\n${buildTradesMarkdown(lastTradeExport)}\n\n${buildTradeVaultMarkdown()}`;
+  md = `${md}\n\n${buildTradesMarkdown(lastTradeExport)}\n\n${buildTradeVaultMarkdown()}\n\n${buildCognitionMarkdown(report.alpsCognition)}\n\n${buildAutonomyMarkdown(report.alpsAutonomousBridge)}`;
   md = appendRecoveryMarkdown(md);
   lastReportMarkdown = md;
   lastHealth.lastReportAt = Date.now();
@@ -1563,6 +1929,7 @@ async function collectReport() {
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-report.md'), md);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
@@ -1608,6 +1975,7 @@ async function runCommand(command, args = {}) {
   }
   if (command === 'report') return { ok: true, report: await collectReport() };
   if (command === 'cognition') { await collectReport().catch(() => null); return { ok: true, cognition: lastCognitionView || cognitionState?.lastView || null }; }
+  if (command === 'autonomy') { await collectReport().catch(() => null); return { ok: true, autonomousBridge: lastAutonomyView || autonomyState?.lastView || null }; }
   if (command === 'recovery') { await loadRecoveryState(); return { ok: true, recovery: buildRecoveryView(), state: recoveryState }; }
   if (command === 'recover-forward') { lastHealth = enhanceHealth({ ...lastHealth, forwardStale: true }); await maybeRecoverStaleForward(); return { ok: true, health: lastHealth, recovery: buildRecoveryView() }; }
   if (command === 'reload') {
