@@ -1,7 +1,7 @@
 /**
  * ALPS Runner Trade Export v1.1
  *
- * Exposes real paper-forward open/closed trades for QuantEdge.
+ * Exposes real ALPS paper-forward open/closed trades for ALPS reports.
  * This module does not change strategy logic and does not open live execution.
  */
 
@@ -175,7 +175,7 @@ function buildTradeExport({ openTrades = [], closedTrades = [], sourceStats = {}
   const closed = dedupe(closedTrades.map(normalizeClosedTrade).filter(Boolean));
 
   return {
-    schema: 'quantedge.alps.tradeExport.v1',
+    schema: 'alps.runner.tradeExport.v1',
     generatedAt: new Date().toISOString(),
     openTrades: open,
     closedTrades: closed,
@@ -184,7 +184,7 @@ function buildTradeExport({ openTrades = [], closedTrades = [], sourceStats = {}
       closedTrades: closed.length,
       sourceStats
     },
-    note: 'Exported from ALPS server runner for QuantEdge sync. Fingerprints are not treated as executable trades.'
+    note: 'Exported from ALPS server runner for ALPS reports. Fingerprints are not treated as executable trades.'
   };
 }
 
@@ -207,13 +207,13 @@ function buildTradesMarkdown(exported) {
   ).join('\n');
 
   return [
-    '## QuantEdge Trade Export JSON',
+    '## ALPS Trade Export JSON',
     '```json',
     JSON.stringify(exported || buildTradeExport(), null, 2),
     '```',
     '',
-    '## QuantEdge Trade Export Summary',
-    `- Schema: ${mdCell(exported?.schema || 'quantedge.alps.tradeExport.v1')}`,
+    '## ALPS Trade Export Summary',
+    `- Schema: ${mdCell(exported?.schema || 'alps.runner.tradeExport.v1')}`,
     `- Generated At: ${mdCell(exported?.generatedAt || '')}`,
     `- Open Trades: ${mdCell(stats.openTrades ?? open.length)}`,
     `- Closed Trades: ${mdCell(stats.closedTrades ?? closed.length)}`,

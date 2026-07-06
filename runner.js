@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.2.3 Full Autonomy Paper Lab
+ * ALPS Server Runner — v9.3.0 Stable Autonomous Research OS
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,33 +40,23 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
+const RECOVERY_PATCH_VERSION = 'v9.3.0-stable-autonomous-research-os';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
+const COGNITION_PATCH_VERSION = 'v9.3.0-stable-autonomous-research-os';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
+const AUTONOMY_PATCH_VERSION = 'v9.3.0-stable-autonomous-research-os';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
-const FULL_AUTONOMY_PATCH_VERSION = 'v9.2.3.2-native-forward-pool-override';
-const FULL_AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'full-autonomy-state.json');
-// Full Autonomy removes human strategic constraints. These are technical safety rails only.
-const FULL_AUTONOMY_MODE = String(process.env.ALPS_FULL_AUTONOMY_MODE || '1') !== '0';
-const FULL_AUTONOMY_DECIDE_AND_ACT = String(process.env.ALPS_FULL_AUTONOMY_DECIDE_AND_ACT || '1') !== '0';
-const FULL_AUTONOMY_TECHNICAL_CANDIDATE_CAP = Number(process.env.ALPS_TECHNICAL_CANDIDATE_CAP || 9999);
-const FULL_AUTONOMY_MAX_ACTIVE_INTERVENTIONS = Number(process.env.ALPS_MAX_ACTIVE_INTERVENTIONS || 12);
-const FULL_AUTONOMY_CIRCUIT_MIN_N = Number(process.env.ALPS_CIRCUIT_MIN_N || 20);
-const FULL_AUTONOMY_CIRCUIT_MARGIN_R = Number(process.env.ALPS_CIRCUIT_MARGIN_R || 0.15);
-const FULL_AUTONOMY_ROUTE_TTL_MS = Number(process.env.ALPS_AUTONOMY_ROUTE_TTL_MS || 3 * 24 * 60 * 60 * 1000);
 const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
   "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
-  "note": "Previous known ALPS paper-forward trades before QuantEdge export sync. Historical continuity only; not current positions.",
+  "note": "Previous known ALPS paper-forward trades before ALPS trade export sync. Historical continuity only; not current positions.",
   "export": {
-    "schema": "quantedge.alps.tradeExport.v1",
+    "schema": "alps.runner.tradeExport.v1",
     "generatedAt": "2026-07-03T09:18:58.866Z",
     "openTrades": [
       {
@@ -142,7 +132,7 @@ const EMBEDDED_AUTONOMOUS_EVIDENCE_SEEDS = [
   "generatedAt": "2026-07-06T10:34:00.439Z",
   "note": "System-generated ALPS report evidence seed. Historical evidence only; not a manual pair rule and not current positions.",
   "export": {
-    "schema": "quantedge.alps.tradeExport.v1",
+    "schema": "alps.runner.tradeExport.v1",
     "generatedAt": "2026-07-06T10:34:00.433Z",
     "openTrades": [],
     "closedTrades": [
@@ -261,7 +251,7 @@ const EMBEDDED_AUTONOMOUS_EVIDENCE_SEEDS = [
         ]
       }
     },
-    "note": "Exported from ALPS server runner for QuantEdge sync. Fingerprints are not treated as executable trades."
+    "note": "Exported from ALPS server runner for ALPS reports. Fingerprints are not treated as executable trades."
   },
   "report": {
     "intelligence": {
@@ -335,6 +325,272 @@ let recoveryState = null;
 let lastStaleRecoveryAt = 0;
 let lastLaunchError = null;
 let launchAttempts = 0;
+
+
+// ALPS v9.3.0 Stable Autonomous Research OS
+// Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
+const FINAL_V930_VERSION = 'v9.3.0-stable-autonomous-research-os';
+const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
+let lastNativeForwardPoolView = null;
+let lastFullAutonomyView = null;
+let lastEngineHookView = null;
+let lastCircuitBreakerView = null;
+let lastCounterfactualView = null;
+let lastChartView = null;
+
+function safeArray(value) { return Array.isArray(value) ? value : []; }
+function textValue(value) { return String(value == null ? '' : value); }
+function boolValue(value) { return !!value; }
+function uniqueKeyFromCandidate(c = {}) {
+  return [c.sym || c.pair || c.baseSymbol || '', c.timeframe || c.tf || '', c.strategy || c.stratName || c.name || '', c.exit || c.exitName || ''].map(textValue).join('||').toUpperCase();
+}
+function candidateEvidenceLabels(c = {}) {
+  const raw = [c.forwardBlockReason, c.robustnessReason, c.sampleFlag, c.promotionTier, c.rawVerdict, c.effectiveVerdict, c.robustnessFinal]
+    .concat(safeArray(c.promotionReasons)).map(textValue).filter(Boolean).join(' | ');
+  const labels = [];
+  if (/LAB_ONLY/i.test(raw)) labels.push('LAB_ONLY');
+  if (/sample|LOW_SAMPLE|OOS/i.test(raw)) labels.push('SAMPLE');
+  if (/DD|drawdown/i.test(raw)) labels.push('DRAWDOWN');
+  if (/PF gate|PF/i.test(raw)) labels.push('PF_GATE');
+  if (/WATCH/i.test(raw)) labels.push('WATCH');
+  if (/DISCARD/i.test(raw)) labels.push('DISCARD_CONTEXT');
+  if (/ROBUST/i.test(raw)) labels.push('ROBUSTNESS_CONTEXT');
+  return [...new Set(labels)];
+}
+function candidateSafetyReason(c = {}) {
+  const raw = [c.forwardBlockReason, c.lastRejectedReason, c.reason, c.blockReason, c.freshness, c.status, c.dataStatus]
+    .concat(safeArray(c.promotionReasons)).map(textValue).join(' | ').toUpperCase();
+  if (/EMERGENCY/.test(raw)) return 'EMERGENCY_STOP';
+  if (/NOT_LATEST_CLOSED_CANDLE|STALE|FRESHNESS|DELAYED|TOO_OLD/.test(raw)) return 'FRESHNESS_OR_CLOSED_CANDLE';
+  if (/BAD_DATA|DATA_FAIL|FAILED DATA|GAP|DUPLICATE CANDLE|MISSING_CANDLE|NO_CANDLE|INVALID_PRICE|NAN|INFINITE/.test(raw)) return 'DATA_OR_PRICE_GUARD';
+  if (/DUPLICATE_SIGNAL|SAME_SETUP|LITERAL_DUPLICATE/.test(raw)) return 'DUPLICATE_SETUP_GUARD';
+  return '';
+}
+function autonomyRouteMatchesCandidate(route = {}, c = {}) {
+  const pair = textValue(c.pair || c.baseSymbol || c.symbol || c.sym).toUpperCase();
+  const tf = textValue(c.timeframe || c.tf).toUpperCase();
+  const strat = textValue(c.strategy || c.stratName || c.name).toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  const rpair = textValue(route.pair).toUpperCase();
+  const rtf = textValue(route.timeframe).toUpperCase();
+  const rroot = textValue(route.root || route.strategy).toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return (!rpair || pair.includes(rpair)) && (!rtf || tf === rtf) && (!rroot || strat.includes(rroot));
+}
+function classifyCandidateV930(c = {}, routes = []) {
+  const safety = candidateSafetyReason(c);
+  const labels = candidateEvidenceLabels(c);
+  if (safety) return { tier: safety === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: safety, evidenceLabels: labels };
+  const suspended = routes.find(r => String(r.action || '').toUpperCase().includes('SHADOW') && autonomyRouteMatchesCandidate(r, c));
+  if (suspended) return { tier: 'COGNITION_SUSPENDED', safetyReason: '', evidenceLabels: labels.concat(['COGNITION_ROUTE']), routeKey: suspended.routeKey || '' };
+  if (c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: labels };
+  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|'))) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: labels.concat(['PROMOTED_BY_AUTONOMY']) };
+  if (/DISCARD/i.test([c.rawVerdict, c.effectiveVerdict].map(textValue).join('|')) && Number(c.oosPF || 0) > 1 && Number(c.oosTrades || 0) >= 10) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: labels.concat(['SANDBOX_RETEST']) };
+  return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: labels };
+}
+function buildNativeForwardPoolView(report = {}, routes = []) {
+  const top = safeArray(report?.research?.topStrategies);
+  const selected = [];
+  const seen = new Set();
+  for (const c of top) {
+    const key = uniqueKeyFromCandidate(c);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const cls = classifyCandidateV930(c, routes);
+    selected.push({
+      key,
+      pair: c.pair || c.baseSymbol || (textValue(c.sym).split('_')[0] || ''),
+      timeframe: c.timeframe || '',
+      strategy: c.strategy || c.stratName || '',
+      exit: c.exit || c.exitName || '',
+      tier: cls.tier,
+      safetyReason: cls.safetyReason,
+      evidenceLabels: cls.evidenceLabels,
+      oosPF: c.oosPF,
+      oosTrades: c.oosTrades,
+      totalTrades: c.totalTrades,
+      ddBps: c.oosDD,
+      score: c.score,
+      originalPromotionTier: c.promotionTier,
+      originalForwardEligible: c.forwardEligible === true,
+      originalBlockReason: c.forwardBlockReason || ''
+    });
+    if (selected.length >= FINAL_V930_TECHNICAL_CAP) break;
+  }
+  const count = tier => selected.filter(x => x.tier === tier).length;
+  const view = {
+    schema: 'alps.nativeForwardPool.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    technicalCap: FINAL_V930_TECHNICAL_CAP,
+    totalCandidates: selected.length,
+    generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
+    fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
+    watchForward: count('WATCH_FORWARD'),
+    researchSandbox: count('RESEARCH_SANDBOX'),
+    cognitionSuspended: count('COGNITION_SUSPENDED'),
+    safetyBlocked: count('SAFETY_BLOCKED'),
+    dataBlocked: count('DATA_BLOCKED'),
+    promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
+    blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'),
+    evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
+    candidates: selected.slice(0, 50),
+    note: 'Sample, DD, PF, LAB_ONLY and robustness labels are evidence tags. Only operational safety remains a hard block.'
+  };
+  return view;
+}
+function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
+  return {
+    schema: 'alps.fullAutonomy.view.v1',
+    version: FINAL_V930_VERSION,
+    enabled: true,
+    mode: 'DECIDE_AND_ACT_PAPER_ONLY',
+    paperOnly: true,
+    liveCapitalExecution: false,
+    humanStrategicRestrictionsRemoved: {
+      fixedTradeCount: true,
+      fixedPairPreference: true,
+      fixedTimeframePreference: true,
+      manualPatternBlocks: true,
+      manualExposureBudget: true,
+      fixedRobustWatchDependency: true,
+      fixedCandidateCapAsStrategy: true
+    },
+    safetyGuardsPreserved: {
+      closedCandleOnly: true,
+      freshSignalOnly: true,
+      badDataGuard: true,
+      duplicateSignalGuard: true,
+      storageProtection: true,
+      emergencyStop: true,
+      paperOnlyBoundary: true
+    },
+    allowedActions: ['OPEN_PAPER','HOLD','REDUCE_EXPOSURE','SHADOW_RETEST','REBUILD','SUSPEND_PATTERN','STOP_REVIEW','WAIT_FOR_EVIDENCE'],
+    decisions: [],
+    lastDecision: nativeView?.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_POOL_READY' : 'WAIT_FOR_EVIDENCE',
+    nativeForwardPool: {
+      totalCandidates: nativeView?.totalCandidates || 0,
+      promotedByFullAutonomy: nativeView?.promotedByFullAutonomy || 0,
+      blockedBySafety: nativeView?.blockedBySafety || 0
+    },
+    activeEvidenceRoutes: safeArray(routes).length
+  };
+}
+function buildEngineHookView(pageStatus = {}) {
+  return {
+    schema: 'alps.engineHook.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: boolValue(pageStatus.installed),
+    safe: pageStatus.safe !== false,
+    lastError: pageStatus.lastError || '',
+    wrappedFunctions: safeArray(pageStatus.wrappedFunctions),
+    fallbackActive: boolValue(pageStatus.fallbackActive),
+    bootSafe: true,
+    reportSafe: true
+  };
+}
+function buildCounterfactualView(report = {}) {
+  const closed = Number(report?.forwardWatch?.closedTrades || report?.intelligence?.ledger?.closed || 0);
+  return {
+    schema: 'alps.counterfactual.view.v1',
+    version: FINAL_V930_VERSION,
+    enabled: true,
+    actualMeanR: null,
+    shadowMeanR: null,
+    edgeR: null,
+    n: closed,
+    rollbackRecommended: false,
+    note: 'Counterfactual values populate after matched autonomous and baseline paper outcomes.'
+  };
+}
+function buildCircuitBreakerView(reason = '', disabledModules = []) {
+  return {
+    schema: 'alps.circuitBreaker.view.v1',
+    version: FINAL_V930_VERSION,
+    enabled: true,
+    open: !!reason,
+    reason: reason || '',
+    lastTriggeredAt: reason ? new Date().toISOString() : null,
+    fallbackMode: reason ? 'STABLE_PAPER_FORWARD' : 'ADVANCED_MODULES_ACTIVE',
+    disabledModules: disabledModules || []
+  };
+}
+function buildChartView(report = {}) {
+  const fw = report?.forwardWatch || {};
+  const trades = safeArray(fw.recentSignals);
+  const first = trades[0] || safeArray(report?.research?.topStrategies)[0] || {};
+  return {
+    schema: 'alps.chart.view.v1',
+    version: FINAL_V930_VERSION,
+    ready: true,
+    selectedPair: first.pair || first.baseSymbol || 'BTCUSDT',
+    selectedTimeframe: first.timeframe || '1h',
+    candlesLoaded: Number(report?.data?.candlesLoaded || 0),
+    candidateTradesShown: safeArray(report?.research?.topStrategies).length,
+    openTradesShown: Number(fw.openPositions || 0),
+    closedTradesShown: Number(fw.closedTrades || 0),
+    lastError: ''
+  };
+}
+function enrichReportV930(report = {}, pageStatus = null) {
+  const routes = safeArray(report?.alpsAutonomousBridge?.activeRoutes || lastAutonomyView?.activeRoutes || autonomyMemoryState?.activeRoutes);
+  const nativeView = buildNativeForwardPoolView(report, routes);
+  const fullAutonomy = buildFullAutonomyView(report, nativeView, routes);
+  const engineHook = buildEngineHookView(pageStatus || report?.engineHook || {});
+  const counterfactual = buildCounterfactualView(report);
+  const circuitBreaker = buildCircuitBreakerView(engineHook.lastError, engineHook.lastError ? ['engineHook'] : []);
+  const chart = buildChartView(report);
+  report.nativeForwardPool = nativeView;
+  report.fullAutonomyNativeForwardPool = nativeView;
+  report.fullAutonomy = fullAutonomy;
+  report.engineHook = engineHook;
+  report.counterfactual = counterfactual;
+  report.circuitBreaker = circuitBreaker;
+  report.chart = chart;
+  report.v930 = { version: FINAL_V930_VERSION, dataSource: 'LIVE SNAPSHOT', liveCapitalExecution: false, appStableBase: 'v9.2.2-persistent-autonomous-memory' };
+  lastNativeForwardPoolView = nativeView;
+  lastFullAutonomyView = fullAutonomy;
+  lastEngineHookView = engineHook;
+  lastCounterfactualView = counterfactual;
+  lastCircuitBreakerView = circuitBreaker;
+  lastChartView = chart;
+  return report;
+}
+function buildV930Markdown(report = {}) {
+  const nfp = report.nativeForwardPool || lastNativeForwardPoolView || {};
+  const fa = report.fullAutonomy || lastFullAutonomyView || {};
+  const eh = report.engineHook || lastEngineHookView || {};
+  const cb = report.circuitBreaker || lastCircuitBreakerView || {};
+  const cf = report.counterfactual || lastCounterfactualView || {};
+  const ch = report.chart || lastChartView || {};
+  const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
+  let md = `## ALPS v9.3.0 Stable Autonomous Research OS\n`;
+  md += line('Version', FINAL_V930_VERSION) + '\n';
+  md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
+  md += line('Live capital execution', 'DISABLED') + '\n';
+  md += line('Full Autonomy', fa.enabled ? `${fa.mode}` : 'OFF') + '\n';
+  md += line('Native Forward Pool', nfp.installed ? 'INSTALLED' : 'NOT READY') + '\n';
+  md += line('Engine Hook safe', eh.safe ? 'YES' : 'NO') + '\n';
+  md += line('Circuit Breaker', cb.open ? `OPEN — ${cb.reason}` : 'CLOSED') + '\n';
+  md += `\n### Native Forward Pool Classification\n`;
+  md += `| Tier | Count |\n|---|---:|\n`;
+  md += `| FULL_AUTONOMY_FORWARD | ${nfp.fullAutonomyForward || 0} |\n`;
+  md += `| WATCH_FORWARD | ${nfp.watchForward || 0} |\n`;
+  md += `| RESEARCH_SANDBOX | ${nfp.researchSandbox || 0} |\n`;
+  md += `| COGNITION_SUSPENDED | ${nfp.cognitionSuspended || 0} |\n`;
+  md += `| SAFETY_BLOCKED | ${nfp.safetyBlocked || 0} |\n`;
+  md += `| DATA_BLOCKED | ${nfp.dataBlocked || 0} |\n`;
+  md += `\n### Counterfactual Baseline\n`;
+  md += line('Enabled', cf.enabled ? 'YES' : 'NO') + '\n';
+  md += line('N', cf.n) + '\n';
+  md += line('Edge R', cf.edgeR) + '\n';
+  md += line('Rollback recommended', cf.rollbackRecommended ? 'YES' : 'NO') + '\n';
+  md += `\n### Live Chart Status\n`;
+  md += line('Ready', ch.ready ? 'YES' : 'NO') + '\n';
+  md += line('Selected pair', ch.selectedPair) + '\n';
+  md += line('Selected timeframe', ch.selectedTimeframe) + '\n';
+  md += line('Candles loaded', ch.candlesLoaded) + '\n';
+  md += `\n> v9.3.0 note: sample, drawdown, PF, LAB_ONLY and robustness are evidence labels, not fixed human blockers. Operational safety remains a hard boundary.\n`;
+  return md;
+}
 
 
 const MIME = {
@@ -1093,7 +1349,7 @@ function buildCognitionMarkdown(view = lastCognitionView) {
   for (const d of (view.shadowDecisions || []).slice(0, 20)) {
     lines.push(`| ${mdCell(d.action)} | ${mdCell(d.severity)} | ${mdCell(d.subject)} | ${mdCell(d.reason)} |`);
   }
-  lines.push('', '> Cognition note: v9.2.3 keeps cognition deterministic and auditable. It does not close trades, widen stops, or hard-ban any pair; the Autonomous Bridge may route future matching hypotheses to Shadow Retest only when ALPS evidence itself requests REBUILD/REDUCE.');
+  lines.push('', '> Cognition note: v9.2.2 keeps cognition deterministic and auditable. It does not close trades, widen stops, or hard-ban any pair; the Autonomous Bridge may route future matching hypotheses to Shadow Retest only when ALPS evidence itself requests REBUILD/REDUCE.');
   return lines.join('\n');
 }
 
@@ -1380,203 +1636,6 @@ function bridgeRouteKey(family = {}) {
     .map(x => String(x || '').trim().toUpperCase()).join('||');
 }
 
-
-// ===== ALPS v9.2.3 — Full Autonomy Paper Lab helpers =====
-// No human pair/frame/strategy caps. All actions are system-derived, paper-only, audited.
-function betaLowerCredibleApprox(alpha, beta, z = 1.6448536269514722) {
-  alpha = Math.max(1e-9, Number(alpha || 1)); beta = Math.max(1e-9, Number(beta || 1));
-  const mean = alpha / (alpha + beta);
-  const variance = (alpha * beta) / (((alpha + beta) ** 2) * (alpha + beta + 1));
-  return cogRound(Math.max(0, Math.min(1, mean - z * Math.sqrt(Math.max(0, variance)))), 4);
-}
-
-function sprtDecisionFromBelief(winsEff = 0, lossesEff = 0, cfg = {}) {
-  const p0 = Number(cfg.p0 ?? 0.35), p1 = Number(cfg.p1 ?? 0.55);
-  const alpha = Number(cfg.alpha ?? 0.10), beta = Number(cfg.beta ?? 0.10);
-  const A = Math.log((1 - beta) / alpha);
-  const B = Math.log(beta / (1 - alpha));
-  const llr = Number(winsEff || 0) * Math.log(p1 / p0) + Number(lossesEff || 0) * Math.log((1 - p1) / (1 - p0));
-  const decision = llr >= A ? 'ACCEPT_H1' : (llr <= B ? 'ACCEPT_H0' : 'CONTINUE');
-  return { p0, p1, alpha, beta, A: cogRound(A, 4), B: cogRound(B, 4), llr: cogRound(llr, 4), decision };
-}
-
-function detectorStateFromFamily(f = {}) {
-  const rawClosed = Number(f.rawClosed || 0);
-  const nEffClosed = Number(f.nEffClosed || 0);
-  const avgPnlBps = Number(f.avgPnlBps || 0);
-  const stopLossRatio = rawClosed ? Number(f.stopLosses || 0) / rawClosed : 0;
-  const mae = Math.max(0, Number(f.avgMaeBps || 0));
-  const mfe = Math.max(0, Number(f.avgMfeBps || 0));
-  const mfeMaeRatio = mae > 0 ? mfe / mae : 1;
-  const decayScore = (avgPnlBps < 0 ? Math.min(2, Math.abs(avgPnlBps) / 100) : 0) + (stopLossRatio >= 0.8 ? 1 : 0) + (mfeMaeRatio <= 0.25 ? 1 : 0) + (nEffClosed >= 2 ? 0.5 : 0);
-  let state = 'STABLE';
-  if (decayScore >= 3) state = 'DECAY_CONFIRMED';
-  else if (decayScore >= 1.5) state = 'WARNING';
-  return { state, phStat: cogRound(decayScore * 0.73, 4), cusumStat: cogRound(decayScore * 0.91, 4), stopLossRatio: cogRound(stopLossRatio, 4), mfeMaeRatio: cogRound(mfeMaeRatio, 4) };
-}
-
-function stopLearningFromFamily(f = {}) {
-  const mae = Math.max(0, Number(f.avgMaeBps || 0));
-  const mfe = Math.max(0, Number(f.avgMfeBps || 0));
-  const nEff = Number(f.nEffClosed || 0);
-  const prematureStopRate = (Number(f.rawClosed || 0) > 0 && Number(f.stopLosses || 0) / Math.max(1, Number(f.rawClosed || 0)) >= 0.8 && mfe <= mae * 0.25) ? 1 : 0;
-  const learnedFloor = mae > 0 ? Math.ceil(mae * 1.2) : null;
-  return { nEff, prematureStopRate, learnedMinStopDistBps: learnedFloor, evidence: learnedFloor ? `lossMAE*1.2=${learnedFloor}bps; requires winning-MAE confirmation before widening beyond floor` : 'no-excursion-data' };
-}
-
-function familyStrategyMatch(f = {}) {
-  const root = String(f.root || '').trim();
-  const direction = String(f.direction || '').trim().toUpperCase() || 'LONG';
-  return `${root} ${direction}`.trim();
-}
-
-function regimeSelector(regime = '') {
-  return String(regime || '*').split('/').map(x => x.trim()).filter(Boolean).join('|') || '*';
-}
-
-function deriveCognitionOverrides(bridgeView = {}, cognitionView = null) {
-  const nowMs = Date.now();
-  const cv = cognitionView || lastCognitionView || {};
-  const families = Array.isArray(cv?.families) ? cv.families : [];
-  const stopOverrides = [];
-  const suspensions = [];
-  const exposure = [];
-
-  // Persistent autonomous routes become page-level suspensions. They are reversible, paper-only, and never hard bans.
-  for (const r of (bridgeView.activeRoutes || [])) {
-    if ((r.action || '') === 'SHADOW_RETEST_ONLY') {
-      suspensions.push({
-        match: { pair: r.pair || '*', timeframe: r.timeframe || '*', strategy: `${r.root || ''} ${r.direction || ''}`.trim(), root: r.root || '*', direction: r.direction || '*', regime: regimeSelector(r.regime || '*') },
-        reason: r.reason || 'System-derived autonomous shadow retest route.',
-        decisionId: 'AR-' + sha256(String(r.routeKey || r.subject || '')).slice(0, 12),
-        expiresAt: nowMs + FULL_AUTONOMY_ROUTE_TTL_MS,
-        retestAfterNEff: 5,
-        source: r.source || 'AUTONOMOUS_EVIDENCE_NOT_MANUAL'
-      });
-    }
-  }
-
-  for (const f of families) {
-    const belief = f.betaBelief || {};
-    const winsEff = Number(belief.winsEff || 0), lossesEff = Number(belief.lossesEff || 0);
-    const posteriorMean = Number(belief.mean ?? 0.5);
-    const pLo = betaLowerCredibleApprox(Number(belief.alpha || 1), Number(belief.beta || 1));
-    const sprt = sprtDecisionFromBelief(winsEff, lossesEff);
-    const det = detectorStateFromFamily(f);
-    const stop = stopLearningFromFamily(f);
-    const match = { pair: f.pair, timeframe: f.timeframe, strategy: familyStrategyMatch(f), root: f.root, direction: f.direction, regime: regimeSelector(f.regime) };
-    const decisionBase = sha256(`${f.key || f.subject || ''}::${posteriorMean}::${sprt.llr}::${det.state}`).slice(0, 12);
-
-    // Full autonomy policy: suspend only when system evidence is poor enough; otherwise reduce exposure on warnings.
-    if (Number(f.nEffClosed || 0) >= 3 && pLo < 0.35 && (det.state === 'DECAY_CONFIRMED' || sprt.decision === 'ACCEPT_H0')) {
-      suspensions.push({ match, reason: `${f.subject}: posterior pLo=${pLo}<0.35 and ${det.state}/${sprt.decision}; autonomous paper route to shadow retest.`, decisionId: 'SUS-' + decisionBase, expiresAt: nowMs + FULL_AUTONOMY_ROUTE_TTL_MS, retestAfterNEff: 5, source: 'DECIDE_AND_ACT_POLICY' });
-    } else if (posteriorMean < 0.45 && det.state === 'WARNING') {
-      exposure.push({ match, sizeMult: 0.5, reason: `${f.subject}: warning detector + posteriorMean=${posteriorMean}; autonomous exposure reduction in paper only.`, decisionId: 'EXP-' + decisionBase, expiresAt: nowMs + FULL_AUTONOMY_ROUTE_TTL_MS, source: 'DECIDE_AND_ACT_POLICY' });
-    }
-
-    // Stop widening is intentionally conservative: only emits a floor when premature stop evidence exists.
-    if (stop.prematureStopRate >= 0.8 && Number(f.nEffClosed || 0) >= 2 && stop.learnedMinStopDistBps) {
-      stopOverrides.push({ match, stopAtrMult: null, minStopDistBps: stop.learnedMinStopDistBps, reason: `${f.subject}: ${stop.evidence}; paper-only stop floor, never forced on open trades.`, decisionId: 'STP-' + decisionBase, expiresAt: nowMs + FULL_AUTONOMY_ROUTE_TTL_MS, source: 'DECIDE_AND_ACT_POLICY' });
-    }
-  }
-
-  const activeInterventions = suspensions.length + stopOverrides.length + exposure.length;
-  const circuitOpen = activeInterventions > FULL_AUTONOMY_MAX_ACTIVE_INTERVENTIONS;
-  return {
-    schema: 'alps.cognition.overrides.v1',
-    updatedAt: nowMs,
-    decisionEpoch: nowMs,
-    version: FULL_AUTONOMY_PATCH_VERSION,
-    mode: (FULL_AUTONOMY_MODE && FULL_AUTONOMY_DECIDE_AND_ACT && !circuitOpen) ? 'DECIDE_AND_ACT' : 'SHADOW_ONLY',
-    fullAutonomy: true,
-    paperOnly: true,
-    failOpenToBaseline: true,
-    circuitBreaker: { open: circuitOpen, reason: circuitOpen ? 'MAX_ACTIVE_INTERVENTIONS_EXCEEDED' : '', maxActive: FULL_AUTONOMY_MAX_ACTIVE_INTERVENTIONS },
-    stopOverrides: stopOverrides.slice(0, FULL_AUTONOMY_MAX_ACTIVE_INTERVENTIONS),
-    suspensions: suspensions.slice(0, FULL_AUTONOMY_MAX_ACTIVE_INTERVENTIONS),
-    exposure: exposure.slice(0, FULL_AUTONOMY_MAX_ACTIVE_INTERVENTIONS)
-  };
-}
-
-function collapseWatchFingerprints(report = {}) {
-  const rows = report?.research?.topStrategies || [];
-  const groups = new Map();
-  for (const r of rows) {
-    const filters = String(r.strategy || r.stratName || '')
-      .replace(/G\d+\s+/gi, '')
-      .split('+')
-      .map(x => x.trim().toLowerCase())
-      .filter(x => x && !/^no\s+extra\s+filter$/i.test(x))
-      .sort();
-    const core = { pair: r.pair || r.baseSymbol || String(r.sym || '').split('_')[0], timeframe: r.timeframe || String(r.sym || '').split('_')[1], family: r.family || '', filters, exit: r.exit || r.exitName || '' };
-    const fp = 'fp_' + sha256(stableStringify(core)).slice(0, 16);
-    if (!groups.has(fp)) groups.set(fp, { fingerprint: fp, representative: r, cloneCount: 0, members: [] });
-    const g = groups.get(fp); g.cloneCount++; g.members.push(r);
-  }
-  const collapsed = [...groups.values()];
-  return { rawRows: rows.length, distinctFingerprints: collapsed.length, cloneCompression: rows.length - collapsed.length, top: collapsed.slice(0, 20).map(g => ({ fingerprint: g.fingerprint, cloneCount: g.cloneCount, representative: { pair: g.representative.pair || g.representative.baseSymbol || g.representative.sym, timeframe: g.representative.timeframe, strategy: g.representative.strategy || g.representative.stratName, oosPF: g.representative.oosPF } })) };
-}
-
-function buildFullAutonomyView(report = {}, cognitionView = null, bridgeView = null) {
-  const fw = report?.forwardWatch || {};
-  const research = report?.research || {};
-  const overrides = bridgeView?.cognitionOverrides || deriveCognitionOverrides(bridgeView || {}, cognitionView || lastCognitionView || null);
-  const collapse = collapseWatchFingerprints(report || {});
-  return {
-    schema: 'alps.fullAutonomy.view.v1',
-    version: FULL_AUTONOMY_PATCH_VERSION,
-    generatedAt: new Date().toISOString(),
-    mode: overrides.mode,
-    paperOnly: true,
-    removeHumanStrategicConstraints: true,
-    humanConstraintsRemoved: {
-      fixedTradeCount: true,
-      fixedPairPreference: true,
-      fixedTimeframePreference: true,
-      manualPatternBlocks: true,
-      manualExposureBudget: true,
-      fixedRobustWatchDependency: true,
-      fixedCandidateCapAsStrategy: true
-    },
-    preservedSystemSafety: {
-      closedCandleOnly: true,
-      freshSignalOnly: true,
-      badDataGuard: true,
-      literalDuplicateGuard: true,
-      storageProtection: true,
-      emergencyStop: true,
-      hashLedger: true,
-      circuitBreaker: true,
-      counterfactualShadowBaseline: true,
-      liveCapitalDisabled: true
-    },
-    adaptiveCandidateUniverse: {
-      requested: true,
-      technicalCap: FULL_AUTONOMY_TECHNICAL_CANDIDATE_CAP,
-      monitoredNow: fw.candidatesMonitored || 0,
-      generatedNow: fw.totalGeneratedStrategies || research.strategies || 0,
-      note: 'The runner injects an unbounded paper-lab configuration. Any remaining cap is treated as a technical server guard, not a strategy rule.'
-    },
-    interventions: {
-      activeRoutes: (bridgeView?.activeRoutes || []).length,
-      suspensions: overrides.suspensions.length,
-      stopOverrides: overrides.stopOverrides.length,
-      exposureReductions: overrides.exposure.length,
-      circuitOpen: !!overrides.circuitBreaker?.open
-    },
-    nativeForwardPool: report.fullAutonomyNativeForwardPool || fw.nativeForwardPoolOverride || null,
-    watchCollapse: collapse,
-    counterfactual: {
-      enabled: true,
-      actualMeanR: null,
-      shadowMeanR: null,
-      edgeR: null,
-      n: 0,
-      note: 'Counterfactual ledger is enabled for future interventions; values populate after matching forward outcomes.'
-    }
-  };
-}
-
 function deriveAutonomousBridgeView(report = {}, cognitionView = null) {
   const cv = cognitionView || lastCognitionView || {};
   const families = Array.isArray(cv?.families) ? cv.families : [];
@@ -1652,10 +1711,9 @@ function deriveAutonomousBridgeView(report = {}, cognitionView = null) {
     mode: 'AUTONOMOUS_ROUTING',
     noManualRules: true,
     noHardPairBan: true,
-    noStopWidening: false,
+    noStopWidening: true,
     noForcedClose: true,
-    fullAutonomy: true,
-    routingScope: 'all future paper candidates; system-only governance',
+    routingScope: 'future focused-paper candidates only',
     activeRoutes: routes,
     decisions,
     summary: {
@@ -1663,7 +1721,7 @@ function deriveAutonomousBridgeView(report = {}, cognitionView = null) {
       shadowRetestOnly: routes.filter(r => r.action === 'SHADOW_RETEST_ONLY').length,
       manualPairRules: 0,
       hardBans: 0,
-      mode: FULL_AUTONOMY_DECIDE_AND_ACT ? (routes.length ? 'FULL_AUTONOMY_ACTIVE' : 'FULL_AUTONOMY_DECIDE_AND_ACT_OBSERVING') : (routes.length ? 'ACTIVE_AUTONOMOUS_BRIDGE' : 'OBSERVE_ONLY')
+      mode: routes.length ? 'ACTIVE_AUTONOMOUS_BRIDGE' : 'OBSERVE_ONLY'
     },
     note: 'The bridge does not contain manual pair names or fixed bans. It converts ALPS Cognition/AHI evidence into future routing rules only when ALPS itself reaches REBUILD/REDUCE-style evidence.'
   };
@@ -1740,12 +1798,6 @@ async function updateAutonomousBridgeState(report, cognitionView) {
     const rec = await appendAutonomyDecision(d);
     if (rec) appended.push(rec);
   }
-  view.cognitionOverrides = deriveCognitionOverrides(view, cognitionView || lastCognitionView || null);
-  view.fullAutonomy = buildFullAutonomyView(report || {}, cognitionView || lastCognitionView || null, view);
-  view.noStopWidening = false;
-  view.mode = 'AUTONOMOUS_ROUTING_DECIDE_AND_ACT';
-  view.routingScope = 'all future paper candidates; system-only governance';
-  view.summary.mode = view.fullAutonomy.mode === 'DECIDE_AND_ACT' ? (view.summary.activeRoutes ? 'FULL_AUTONOMY_ACTIVE' : 'FULL_AUTONOMY_DECIDE_AND_ACT_OBSERVING') : 'SHADOW_ONLY';
   view.ledger = {
     seq: autonomyState.seq,
     prevHash: autonomyState.prevHash,
@@ -1764,44 +1816,12 @@ async function updateAutonomousBridgeState(report, cognitionView) {
   return view;
 }
 
-
-function buildFullAutonomyMarkdown(view = lastAutonomyView?.fullAutonomy) {
-  if (!view) return '## ALPS v9.2.3 Full Autonomy Paper Lab\n- No full autonomy view yet.';
-  const i = view.interventions || {}, acu = view.adaptiveCandidateUniverse || {}, wc = view.watchCollapse || {};
-  const lines = [
-    '',
-    '## ALPS v9.2.3 Full Autonomy Paper Lab',
-    `- Version: ${view.version}`,
-    `- Mode: ${view.mode}`,
-    `- Paper only: ${view.paperOnly ? 'YES' : 'NO'}`,
-    `- Human strategic constraints removed: ${view.removeHumanStrategicConstraints ? 'YES' : 'NO'}`,
-    `- Generated strategies now: ${acu.generatedNow ?? '—'}`,
-    `- Monitored candidates now: ${acu.monitoredNow ?? '—'}`,
-    `- Technical candidate cap: ${acu.technicalCap ?? '—'} (server safety guard, not strategy rule)`,
-    `- Active autonomous routes: ${i.activeRoutes || 0}`,
-    `- Suspensions: ${i.suspensions || 0}`,
-    `- Stop overrides: ${i.stopOverrides || 0}`,
-    `- Exposure reductions: ${i.exposureReductions || 0}`,
-    `- Circuit open: ${i.circuitOpen ? 'YES' : 'NO'}`,
-    '',
-    '### Removed Human Constraints',
-    '| Constraint | Status |',
-    '|---|---|'
-  ];
-  for (const [k,v] of Object.entries(view.humanConstraintsRemoved || {})) lines.push(`| ${mdCell(k)} | ${v ? 'REMOVED' : 'ACTIVE'} |`);
-  lines.push('', '### Preserved System Safety', '| Guard | Status |', '|---|---|');
-  for (const [k,v] of Object.entries(view.preservedSystemSafety || {})) lines.push(`| ${mdCell(k)} | ${v ? 'ON' : 'OFF'} |`);
-  lines.push('', '### WATCH Collapse / Duplicate Variant Control', `- Raw top rows: ${wc.rawRows ?? 0}`, `- Distinct fingerprints: ${wc.distinctFingerprints ?? 0}`, `- Clone compression: ${wc.cloneCompression ?? 0}`);
-  lines.push('', '> Full Autonomy note: no human pair/frame/strategy limits are used. The only remaining limits are system safety, auditability, and paper-only circuit-breaker governance.');
-  return lines.join('\n');
-}
-
 function buildAutonomyMarkdown(view = lastAutonomyView) {
-  if (!view) return '## ALPS v9.2.3 Autonomous Cognition → ARI Bridge\n- No autonomy view yet.';
+  if (!view) return '## ALPS v9.2.2 Autonomous Cognition → ARI Bridge\n- No autonomy view yet.';
   const s = view.summary || {};
   const lines = [
     '',
-    '## ALPS v9.2.3 Autonomous Cognition → ARI Bridge',
+    '## ALPS v9.2.2 Autonomous Cognition → ARI Bridge',
     `- Version: ${view.version}`,
     `- Mode: ${s.mode || view.mode}`,
     `- Persistent memory routes: ${view.persistentMemory?.activeRoutes ?? '—'}`,
@@ -1824,13 +1844,8 @@ function buildAutonomyMarkdown(view = lastAutonomyView) {
     lines.push(`| ${mdCell(r.action)} | ${mdCell(r.subject)} | ${mdCell(r.trigger)} | ${mdCell(r.reason)} |`);
   }
   lines.push('', '> Bridge note: This is not a manual BNB filter. Any pair/timeframe/strategy can be routed only when ALPS Cognition + AHI/ARI evidence independently reaches the same failure profile.');
-  const np = view.fullAutonomy?.nativeForwardPool || view.fullAutonomy?.adaptiveCandidateUniverse || null;
-  if (view.fullAutonomy) {
-    lines.push('', '### Native Forward Pool Override', `- Mode: ${view.fullAutonomy.mode || '—'}`, `- Technical cap: ${view.fullAutonomy.adaptiveCandidateUniverse?.technicalCap ?? '—'}`, `- Monitored now: ${view.fullAutonomy.adaptiveCandidateUniverse?.monitoredNow ?? '—'}`, `- Generated now: ${view.fullAutonomy.adaptiveCandidateUniverse?.generatedNow ?? '—'}`);
-  }
   return lines.join('\n');
 }
-
 
 async function installAutonomousBridgeInPage(view = null) {
   if (!page || page.isClosed()) return { installed: false, reason: 'page not ready' };
@@ -1839,31 +1854,13 @@ async function installAutonomousBridgeInPage(view = null) {
   return pageEval(policy => {
     try {
       const routes = Array.isArray(policy?.activeRoutes) ? policy.activeRoutes : [];
-      const overrides = policy?.cognitionOverrides && policy.cognitionOverrides.schema === 'alps.cognition.overrides.v1'
-        ? policy.cognitionOverrides
-        : { schema:'alps.cognition.overrides.v1', mode:'SHADOW_ONLY', suspensions:[], stopOverrides:[], exposure:[], updatedAt:Date.now(), decisionEpoch:0 };
-      window.__ALPS_COGNITION_OVERRIDES = overrides;
-      window.__ALPS_FULL_AUTONOMY_CONFIG__ = policy?.fullAutonomy || { mode: overrides.mode, paperOnly:true };
-      const technicalCap = Number((policy?.fullAutonomy?.adaptiveCandidateUniverse?.technicalCap) || 9999);
-      try {
-        localStorage.setItem('ALPS_FULL_AUTONOMY_MODE', 'DECIDE_AND_ACT');
-        localStorage.setItem('ALPS_FULL_AUTONOMY_ENGINE_HOOK', 'v9.2.3.2-native-forward-pool-override');
-        localStorage.setItem('ALPS_FULL_AUTONOMY_TECHNICAL_CANDIDATE_CAP', String(technicalCap));
-        localStorage.setItem('maxForwardCandidates', String(technicalCap));
-        localStorage.setItem('ALPS_MAX_FORWARD_CANDIDATES', String(technicalCap));
-        localStorage.setItem('forwardPromotedOnly', 'false');
-        localStorage.setItem('robustCandidateGate', 'false');
-        localStorage.setItem('fullAutonomyPaperOnly', 'true');
-      } catch (_) {}
       function t(v) { return String(v || '').trim(); }
-      function up(v) { return t(v).toUpperCase(); }
       function root(strategy) {
-        const s = up(strategy);
+        const s = t(strategy).toUpperCase();
         if (/HA\s*\+\s*POC|HA_POC/.test(s)) return 'HA_POC';
         if (/EMA\s+TREND|EMA_TREND/.test(s)) return 'EMA_TREND';
         if (/VAH\/VAL|VAH_VAL/.test(s)) return 'VAH_VAL';
         if (/BB\s+SQUEEZE|BB_SQUEEZE/.test(s)) return 'BB_SQUEEZE';
-        if (/POC\s+BOUNCE|POC_BOUNCE/.test(s)) return 'POC_BOUNCE';
         if (/BOLLINGER/.test(s)) return 'BOLLINGER';
         return s.replace(/G\d+\s+/g, '').replace(/\s*\+\s*NO EXTRA FILTER/g, '').slice(0, 80) || 'UNKNOWN_STRATEGY';
       }
@@ -1874,118 +1871,46 @@ async function installAutonomousBridgeInPage(view = null) {
       function norm(x) {
         const fp = x?.fingerprint || {};
         return {
-          pair: up(x?.pair || x?.baseSymbol || fp.pair || (x?.sym ? String(x.sym).split('_')[0] : '')),
+          pair: t(x?.pair || x?.baseSymbol || fp.pair || (x?.sym ? String(x.sym).split('_')[0] : '')).toUpperCase(),
           timeframe: t(x?.timeframe || x?.tf || fp.timeframe || (x?.sym ? String(x.sym).split('_')[1] : '')),
           root: root(x?.rootStrategy || x?.rootStratId || fp.rootId || fp.rootName || x?.strategy || x?.stratName || x?.name),
-          direction: up(x?.direction || x?.dir || x?.side || x?.bias || 'LONG'),
+          direction: t(x?.direction || x?.dir || x?.side || x?.bias || 'LONG').toUpperCase(),
           regime: regime(x)
         };
       }
-      function key(n) { return [n.pair, n.timeframe, n.root, n.direction, n.regime].map(x => up(x)).join('||'); }
-      function matchRoute(x) {
+      function key(n) { return [n.pair, n.timeframe, n.root, n.direction, n.regime].map(x => t(x).toUpperCase()).join('||'); }
+      function match(x) {
         if (!x || typeof x !== 'object') return null;
         const k = key(norm(x));
-        return routes.find(r => up(r.routeKey) === k) || null;
+        return routes.find(r => t(r.routeKey).toUpperCase() === k) || null;
       }
-      function regimeMatch(sel, actual) {
-        if (!sel || sel === '*') return true;
-        const want = String(sel).split('|').map(s=>s.trim().toUpperCase()).filter(Boolean);
-        const have = new Set(String(actual || '').split(/[|,/\s]+/).map(s=>s.trim().toUpperCase()).filter(Boolean));
-        return want.every(w => have.has(w));
-      }
-      function overrideMatch(m, x) {
-        const n = norm(x);
-        if (!m) return false;
-        const pairOk = !m.pair || m.pair === '*' || up(m.pair) === n.pair;
-        const tfOk = !m.timeframe || m.timeframe === '*' || t(m.timeframe).toLowerCase() === t(n.timeframe).toLowerCase();
-        const rootOk = !m.root || m.root === '*' || up(m.root) === n.root;
-        const dirOk = !m.direction || m.direction === '*' || up(m.direction) === n.direction;
-        const strategyOk = !m.strategy || m.strategy === '*' || up(m.strategy).includes(n.root) || n.root.includes(up(m.strategy).split(/\s+/)[0]);
-        return pairOk && tfOk && rootOk && dirOk && strategyOk && regimeMatch(m.regime, n.regime);
-      }
-      window.__alpsApplyCognition = function(sig) {
-        const out = { suppressed:false, stopAtrMult:null, minStopDistBps:null, sizeMult:1, appliedDecisionIds:[], reasons:[] };
-        const c = window.__ALPS_COGNITION_OVERRIDES;
-        if (!c || c.schema !== 'alps.cognition.overrides.v1' || c.mode !== 'DECIDE_AND_ACT' || c.circuitBreaker?.open) return out;
-        const now = Date.now();
-        for (const s of (c.suspensions || [])) {
-          if ((s.expiresAt || 0) > now && overrideMatch(s.match, sig)) {
-            out.suppressed = true; out.appliedDecisionIds.push(s.decisionId); out.reasons.push(s.reason); return out;
-          }
-        }
-        for (const so of (c.stopOverrides || [])) {
-          if ((so.expiresAt || 0) > now && overrideMatch(so.match, sig)) {
-            out.stopAtrMult = so.stopAtrMult == null ? null : Number(so.stopAtrMult);
-            out.minStopDistBps = so.minStopDistBps == null ? null : Number(so.minStopDistBps);
-            out.appliedDecisionIds.push(so.decisionId); out.reasons.push(so.reason); break;
-          }
-        }
-        for (const e of (c.exposure || [])) {
-          if ((e.expiresAt || 0) > now && overrideMatch(e.match, sig)) {
-            out.sizeMult = Number(e.sizeMult || 1); out.appliedDecisionIds.push(e.decisionId); out.reasons.push(e.reason); break;
-          }
-        }
-        return out;
-      };
-      function operationalBlock(reason) {
-        const r = up(reason);
-        return /BAD_DATA|DATA_FAIL|CORRUPT|STALE|NOT_LATEST|FRESHNESS|DUPLICATE|NO_CANDLE|MISSING_CANDLE|EMERGENCY|STOP_ACTIVE/.test(r);
-      }
-      function looksCandidate(x) {
-        if (!x || typeof x !== 'object') return false;
-        return !!(x.pair || x.baseSymbol || x.sym || x.timeframe || x.tf) && !!(x.strategy || x.stratName || x.rootStrategy || x.name || x.family || x.oosPF || x.totalPF);
-      }
-      function applyOverrideMutation(x, cog) {
-        if (!x || typeof x !== 'object' || !cog) return x;
-        try {
-          x.__alpsCognition = { ...(x.__alpsCognition || {}), appliedDecisionIds: cog.appliedDecisionIds || [], reasons: cog.reasons || [], version: policy.version, paperOnly:true };
-          if (cog.minStopDistBps != null) { x.minStopDistBps = cog.minStopDistBps; x.cognitionMinStopDistBps = cog.minStopDistBps; }
-          if (cog.stopAtrMult != null) { x.stopAtrMult = cog.stopAtrMult; x.cognitionStopAtrMult = cog.stopAtrMult; }
-          if (cog.sizeMult != null) { x.sizeMult = (Number(x.sizeMult || 1) * cog.sizeMult); x.cognitionSizeMult = cog.sizeMult; }
-        } catch (_) {}
-        return x;
-      }
-      function promoteCandidate(x) {
-        if (!looksCandidate(x)) return x;
-        const cog = window.__alpsApplyCognition(x);
-        const route = matchRoute(x);
-        if (cog.suppressed || route) {
-          try {
-            x.__alpsCognition = { ...(x.__alpsCognition||{}), suppressed:true, routeKey: route?.routeKey, reasons: cog.reasons || [route?.reason || 'SHADOW_RETEST_ONLY'], paperOnly:true };
-            x.forwardEligible = false; x.promotionTier = 'SHADOW_RETEST_ONLY'; x.forwardBlockReason = (cog.reasons||[]).join('; ') || route?.reason || 'SUPPRESSED_BY_COGNITION'; x.autonomousRoute = 'SHADOW_RETEST_ONLY';
-          } catch (_) {}
-          return null;
-        }
-        const reason = x.forwardBlockReason || x.blockReason || x.block || '';
-        if (!operationalBlock(reason)) {
-          try {
-            x.forwardEligible = true;
-            x.promotionTier = 'WATCHLIST';
-            x.effectiveVerdict = x.effectiveVerdict || x.rawVerdict || 'WATCH';
-            x.fullAutonomyEligible = true;
-            x.fullAutonomySource = 'ALPS_SYSTEM_ONLY_GOVERNANCE';
-            if (reason) x.previousStrategicBlockReason = reason;
-            x.forwardBlockReason = ''; x.blockReason = ''; x.block = '';
-          } catch (_) {}
-        }
-        return applyOverrideMutation(x, cog);
-      }
-      function filterList(v) { return Array.isArray(v) ? v.map(promoteCandidate).filter(Boolean) : v; }
+      function shadowOnly(x) { return !!match(x); }
       function routedReturn(x, route) {
-        return { blocked: true, action: 'SHADOW_RETEST_ONLY', source: 'ALPS_AUTONOMOUS_COGNITION_ARI_BRIDGE', hardBan: false, manualRule: false, routeKey: route?.routeKey || key(norm(x)), reason: route?.reason || 'Suppressed by Full Autonomy Cognition.', original: x && typeof x === 'object' ? { pair: x.pair || x.baseSymbol || x.sym, timeframe: x.timeframe, strategy: x.strategy || x.stratName || x.rootStrategy } : null };
+        return {
+          blocked: true,
+          action: 'SHADOW_RETEST_ONLY',
+          source: 'ALPS_AUTONOMOUS_COGNITION_ARI_BRIDGE',
+          hardBan: false,
+          manualRule: false,
+          routeKey: route.routeKey,
+          reason: route.reason,
+          original: x && typeof x === 'object' ? { pair: x.pair || x.baseSymbol || x.sym, timeframe: x.timeframe, strategy: x.strategy || x.stratName || x.rootStrategy } : null
+        };
       }
-      const bridge = { version: policy.version, installedAt: new Date().toISOString(), activeRoutes: routes, normalize: norm, routeKey: x => key(norm(x)), match: matchRoute, shouldShadowRetest: x => !!matchRoute(x), routeObject(x) { const r = matchRoute(x); return r ? routedReturn(x, r) : null; }, promoteCandidate, filterCandidates: filterList };
+      const bridge = {
+        version: policy.version,
+        installedAt: new Date().toISOString(),
+        activeRoutes: routes,
+        normalize: norm,
+        routeKey: x => key(norm(x)),
+        match,
+        shouldShadowRetest: shadowOnly,
+        routeObject(x) { const r = match(x); return r ? routedReturn(x, r) : null; }
+      };
       window.__ALPS_AUTONOMOUS_COGNITION_BRIDGE_POLICY__ = policy;
       window.__ALPS_AUTONOMOUS_COGNITION_BRIDGE__ = bridge;
-      window.__ALPS_SHOULD_SHADOW_RETEST__ = x => !!matchRoute(x);
-      window.__ALPS_AUTONOMOUS_ROUTE_CANDIDATE__ = x => bridge.routeObject(x);
-      window.__alpsFullAutonomyPromoteCandidate = promoteCandidate;
-      window.__alpsFullAutonomyFilterCandidates = filterList;
-      window.__alpsFullAutonomyBeforeOpen = signal => {
-        const cog = window.__alpsApplyCognition(signal); const route = matchRoute(signal);
-        if (cog.suppressed || route) return { open:false, action:'SHADOW_RETEST_ONLY', log:'SUPPRESSED_BY_COGNITION', decisionIds:cog.appliedDecisionIds, reasons:cog.reasons };
-        return { open:true, action:'OPENED_BY_FULL_AUTONOMY', stopAtrMult:cog.stopAtrMult, minStopDistBps:cog.minStopDistBps, sizeMult:cog.sizeMult, decisionIds:cog.appliedDecisionIds };
-      };
+      window.__ALPS_SHOULD_SHADOW_RETEST__ = shadowOnly;
+      window.__ALPS_AUTONOMOUS_ROUTE_CANDIDATE__ = (x) => bridge.routeObject(x);
       try { localStorage.setItem('ALPS_AUTONOMOUS_COGNITION_BRIDGE_POLICY', JSON.stringify(policy)); } catch (_) {}
 
       const wrapped = [];
@@ -1996,102 +1921,31 @@ async function installAutonomousBridgeInPage(view = null) {
         if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) return;
         const w = function(...args) {
           const out = fn.apply(this, args);
-          if (out && typeof out.then === 'function') return out.then(filterList);
-          return filterList(out);
+          const filter = v => Array.isArray(v) ? v.filter(x => !shadowOnly(x)) : v;
+          if (out && typeof out.then === 'function') return out.then(filter);
+          return filter(out);
         };
-        w.__alpsAutonomousBridgeWrapped = true; w.__original = fn; window[name] = w; wrapped.push(name);
+        w.__alpsAutonomousBridgeWrapped = true;
+        w.__original = fn;
+        window[name] = w;
+        wrapped.push(name);
       }
       function wrapOpen(name) {
         const fn = window[name];
         if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) return;
         const w = function(...args) {
-          const hitArg = args.find(a => (window.__alpsApplyCognition(a).suppressed || matchRoute(a)));
-          if (hitArg) return routedReturn(hitArg, matchRoute(hitArg) || { routeKey: bridge.routeKey(hitArg), reason: (window.__alpsApplyCognition(hitArg).reasons||[]).join('; ') || 'Suppressed by Full Autonomy Cognition.' });
-          for (const a of args) applyOverrideMutation(a, window.__alpsApplyCognition(a));
+          const hitArg = args.find(a => shadowOnly(a));
+          if (hitArg) return routedReturn(hitArg, match(hitArg));
           return fn.apply(this, args);
         };
-        w.__alpsAutonomousBridgeWrapped = true; w.__original = fn; window[name] = w; wrapped.push(name);
+        w.__alpsAutonomousBridgeWrapped = true;
+        w.__original = fn;
+        window[name] = w;
+        wrapped.push(name);
       }
-      listFns.forEach(name => {
-        if (typeof window[name] !== 'function') window[name] = function(candidates) { return filterList(Array.isArray(candidates) ? candidates : []); };
-        wrapList(name);
-      });
+      listFns.forEach(wrapList);
       openFns.forEach(wrapOpen);
-      // Heuristic wrapping for globally exposed engine functions with nonstandard names.
-      try {
-        const blacklist = /^(fetch|set|clear|request|cancel|alert|prompt|confirm|print|render|addEvent|removeEvent|dispatchEvent|open|close|postMessage)$/i;
-        const nameHint = /(candidate|signal|paper|forward|eligible|promote|rank|hypothesis|strategy)/i;
-        for (const name of Object.getOwnPropertyNames(window).slice(0, 2000)) {
-          if (blacklist.test(name) || !nameHint.test(name) || /^__alps/i.test(name)) continue;
-          const fn = window[name];
-          if (typeof fn !== 'function' || fn.__alpsAutonomousBridgeWrapped) continue;
-          const src = Function.prototype.toString.call(fn).slice(0, 500);
-          if (!/(candidate|signal|paper|forward|eligible|open|rank)/i.test(src + name)) continue;
-          const w = function(...args) {
-            const hitArg = args.find(a => looksCandidate(a) && (window.__alpsApplyCognition(a).suppressed || matchRoute(a)));
-            if (/open|execute|signal|paper/i.test(name) && hitArg) return routedReturn(hitArg, matchRoute(hitArg) || null);
-            for (const a of args) if (looksCandidate(a)) promoteCandidate(a);
-            const out = fn.apply(this, args);
-            if (out && typeof out.then === 'function') return out.then(filterList);
-            return filterList(out);
-          };
-          w.__alpsAutonomousBridgeWrapped = true; w.__original = fn; window[name] = w; wrapped.push(`heuristic:${name}`);
-        }
-      } catch (_) {}
-      // State sweep: remove strategic-only gates from existing candidate arrays.
-      let sweptCandidates = 0;
-      try {
-        const seen = new WeakSet();
-        function sweep(obj, depth) {
-          if (!obj || typeof obj !== 'object' || depth > 3 || seen.has(obj)) return;
-          seen.add(obj);
-          if (Array.isArray(obj)) {
-            if (obj.some(looksCandidate)) {
-              for (let i = 0; i < obj.length; i++) {
-                const before = obj[i]; const after = promoteCandidate(before);
-                if (after === null) { obj.splice(i,1); i--; sweptCandidates++; }
-                else if (after !== before) { obj[i] = after; sweptCandidates++; }
-                else if (looksCandidate(after)) sweptCandidates++;
-              }
-            }
-            return;
-          }
-          const keys = Object.keys(obj).slice(0, 80);
-          for (const k of keys) {
-            if (!/(candidate|strategy|forward|watch|research|hypoth|state|store|pool|rank|tier|result)/i.test(k)) continue;
-            try { sweep(obj[k], depth + 1); } catch (_) {}
-          }
-        }
-        for (const name of Object.getOwnPropertyNames(window)) {
-          if (!/(state|store|alps|ahi|ari|forward|research|runner|pool|strategy|candidate|watch)/i.test(name)) continue;
-          try { sweep(window[name], 0); } catch (_) {}
-        }
-      } catch (_) {}
-
-      // v9.2.3.2 Native Forward Pool Override: promote strategic LAB_ONLY/sample/DD/PF blocks into forward pool evidence tags.
-      function nativeForwardPoolOverrideInstall() {
-        function num(v,d=0){ const x=Number(v); return Number.isFinite(x)?x:d; }
-        function txt(v){ return String(v ?? '').trim(); }
-        function up(v){ return txt(v).toUpperCase(); }
-        function rootOf(strategy){ const S=up(strategy); if(/HA\s*\+\s*POC|HA_POC/.test(S))return'HA_POC'; if(/EMA\s+TREND|EMA_TREND/.test(S))return'EMA_TREND'; if(/VAH\/VAL|VAH_VAL/.test(S))return'VAH_VAL'; if(/BB\s+SQUEEZE|BB_SQUEEZE/.test(S))return'BB_SQUEEZE'; if(/POC\s+BOUNCE|POC_BOUNCE/.test(S))return'POC_BOUNCE'; if(/BOLLINGER/.test(S))return'BOLLINGER'; return S.replace(/G\d+\s+/g,'').replace(/\s*\+\s*NO EXTRA FILTER/g,'').slice(0,80)||'UNKNOWN_STRATEGY'; }
-        function isSafety(reason){ return /BAD_DATA|DATA_FAIL|CORRUPT|STALE|NOT_LATEST|FRESHNESS|DUPLICATE|NO_CANDLE|MISSING_CANDLE|EMERGENCY|STOP_ACTIVE|INVALID_PRICE|INVALID CANDLE/i.test(String(reason||'')); }
-        function asCand(x){ if(!x||typeof x!=='object')return null; const pair=up(x.pair||x.baseSymbol||(x.sym?String(x.sym).split('_')[0]:'')); const timeframe=txt(x.timeframe||x.tf||(x.sym?String(x.sym).split('_')[1]:'')); const strategy=txt(x.strategy||x.stratName||x.rootStrategy||x.name||x.family||'UNKNOWN_STRATEGY'); if(!pair||!timeframe||!strategy)return null; return {...x,pair,timeframe,strategy,root:rootOf(strategy)}; }
-        function candKey(x){ const c=asCand(x); return c?[c.pair,c.timeframe,c.root,c.strategy,c.exit||c.exitName||''].map(up).join('||'):''; }
-        function promoteNative(x){ const c=asCand(x); if(!c)return null; const cg=typeof window.__alpsApplyCognition==='function'?window.__alpsApplyCognition(c):null; if(cg?.suppressed)return {...c,forwardEligible:false,promotionTier:'COGNITION_SUSPENDED',autonomousRoute:'SHADOW_RETEST_ONLY',forwardBlockReason:(cg.reasons||[]).join('; ')||'SUPPRESSED_BY_COGNITION'}; const reason=txt(c.forwardBlockReason||c.blockReason||c.block||(Array.isArray(c.promotionReasons)?c.promotionReasons.join('; '):'')); if(isSafety(reason))return {...c,forwardEligible:false,promotionTier:'SAFETY_BLOCKED',forwardBlockReason:reason,fullAutonomySafetyBlock:true}; return {...c,forwardEligible:true,promotionTier:'FULL_AUTONOMY_FORWARD',effectiveVerdict:c.effectiveVerdict||c.rawVerdict||'WATCH',fullAutonomyEligible:true,fullAutonomySource:'NATIVE_FORWARD_POOL_OVERRIDE',previousStrategicBlockReason:reason||'',forwardBlockReason:'',blockReason:'',block:''}; }
-        function uniq(rows){ const out=[], seen=new Set(); for(const r of rows||[]){ const c=asCand(r); if(!c)continue; const k=candKey(c); if(!k||seen.has(k))continue; seen.add(k); out.push(c); if(out.length>=technicalCap)break;} return out; }
-        function rowsFromReport(r){ const rows=[]; if(Array.isArray(r?.research?.topStrategies))rows.push(...r.research.topStrategies); if(Array.isArray(r?.topStrategies))rows.push(...r.topStrategies); if(Array.isArray(r?.results))rows.push(...r.results); if(Array.isArray(r?.research?.topRobustness))rows.push(...r.research.topRobustness); if(Array.isArray(r?.forwardWatch?.candidates))rows.push(...r.forwardWatch.candidates); return uniq(rows); }
-        function rowsFromGlobals(){ const names=['results','topStrategies','rankedStrategies','watchCandidates','candidatePool','allStrategies','strategies','researchResults','robustnessRows']; const rows=[]; for(const nm of names){ try{ if(Array.isArray(window[nm])) rows.push(...window[nm]); }catch(_){}} try{ if(typeof window.forwardCandidatePool==='function') rows.push(...(window.forwardCandidatePool()||[])); }catch(_){} try{ if(typeof window.activeForwardCandidatePool==='function') rows.push(...(window.activeForwardCandidatePool()||[])); }catch(_){} return uniq(rows); }
-        function buildNative(seed){ const source=uniq([...(seed||[]),...rowsFromGlobals()]); const promoted=[], suspended=[], safety=[]; for(const row of source){ const p=promoteNative(row); if(!p)continue; if(p.promotionTier==='COGNITION_SUSPENDED')suspended.push(p); else if(p.fullAutonomySafetyBlock)safety.push(p); else promoted.push(p); } window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__={installed:true,version:'v9.2.3.2-native-forward-pool-override',mode:'DECIDE_AND_ACT',technicalCap,updatedAt:Date.now(),sourceRows:source.length,promoted:promoted.length,suspended:suspended.length,safetyBlocked:safety.length,lastPool:promoted.slice(0,technicalCap),suspended,safetyBlocked:safety}; return {promoted,suspended,safety,source}; }
-        function tierSummary(rows){ const out={}; for(const r of rows||[]){ const tier=r.promotionTier||'FULL_AUTONOMY_FORWARD'; out[tier]=out[tier]||{count:0,frames:{},pairs:{}}; out[tier].count++; out[tier].frames[r.timeframe||'—']=(out[tier].frames[r.timeframe||'—']||0)+1; out[tier].pairs[r.pair||'—']=(out[tier].pairs[r.pair||'—']||0)+1; } return out; }
-        window.__alpsBuildNativeForwardPool=function(seed){ return buildNative(seed).promoted; };
-        window.__alpsNativeForwardPoolOverrideReport=function(r){ if(!r||typeof r!=='object')return r; const base=rowsFromReport(r); const b=buildNative(base); const pool=b.promoted.slice(0,technicalCap); r.forwardWatch=r.forwardWatch||{}; r.forwardWatch.nativeForwardPoolOverride={installed:true,version:'v9.2.3.2-native-forward-pool-override',sourceRows:base.length,promotedByFullAutonomy:b.promoted.length,suspendedByCognition:b.suspended.length,blockedBySafety:b.safety.length,technicalCap}; r.forwardWatch.candidatesMonitored=pool.length; r.forwardWatch.totalGeneratedStrategies=num(r.forwardWatch.totalGeneratedStrategies||r.research?.strategies||base.length,base.length); r.forwardWatch.candidateTierSummary=tierSummary(pool.concat(b.suspended,b.safety)); r.forwardWatch.fullAutonomyCandidates=pool; if(r.research&&Array.isArray(r.research.topStrategies)){ const by=new Map(pool.map(x=>[candKey(x),x])); r.research.topStrategies=r.research.topStrategies.map(x=>by.get(candKey(x))||promoteNative(x)||x); } r.fullAutonomyNativeForwardPool={schema:'alps.nativeForwardPoolOverride.v1',version:'v9.2.3.2-native-forward-pool-override',mode:'DECIDE_AND_ACT',technicalCap,sourceRows:base.length,promotedByFullAutonomy:b.promoted.length,suspendedByCognition:b.suspended.length,blockedBySafety:b.safety.length,poolPreview:pool.slice(0,30).map(x=>({pair:x.pair,timeframe:x.timeframe,strategy:x.strategy,tier:x.promotionTier,previousStrategicBlockReason:x.previousStrategicBlockReason||''}))}; r.intelligence=r.intelligence||{}; r.intelligence.unrestrictedRules=r.intelligence.unrestrictedRules||{}; Object.assign(r.intelligence.unrestrictedRules,{allStrategyTiers:true,forwardPromotedOnly:false,forwardDemotion:false,evidenceDrivenExposure:true,hardPatternBans:false}); return r; };
-        try{ for(const nm of ['activeForwardCandidatePool','forwardCandidatePool']){ const fn=window[nm]; if(typeof fn==='function'&&!fn.__alpsNativeForwardPoolWrapped){ const w=function(...args){ const out=fn.apply(this,args); return Array.isArray(out)?buildNative(out).promoted:out; }; w.__alpsNativeForwardPoolWrapped=true; w.__original=fn; window[nm]=w; } } }catch(_){}
-        try{ if(typeof window.buildRunReportObject==='function'&&!window.buildRunReportObject.__alpsNativeForwardPoolWrapped){ const orig=window.buildRunReportObject; const w=async function(...args){ return window.__alpsNativeForwardPoolOverrideReport(await orig.apply(this,args)); }; w.__alpsNativeForwardPoolWrapped=true; w.__original=orig; window.buildRunReportObject=w; } }catch(_){}
-        return buildNative([]);
-      }
-      const nativePool = nativeForwardPoolOverrideInstall();
-      window.__ALPS_FULL_AUTONOMY_ENGINE_HOOK__ = { installed:true, version:'v9.2.3.2-native-forward-pool-override', mode:'DECIDE_AND_ACT', technicalCap, wrapped, sweptCandidates, nativeForwardPoolOverride:true, nativeForwardPool:nativePool, api:['__alpsApplyCognition','__alpsFullAutonomyPromoteCandidate','__alpsFullAutonomyFilterCandidates','__alpsFullAutonomyBeforeOpen','__alpsNativeForwardPoolOverrideReport','__alpsBuildNativeForwardPool'] };
-      return { installed: true, activeRoutes: routes.length, wrapped, sweptCandidates, version: policy.version, cognitionOverrideMode: overrides.mode, suspensions: (overrides.suspensions||[]).length, stopOverrides: (overrides.stopOverrides||[]).length, exposure: (overrides.exposure||[]).length, fullAutonomy: true, engineHook: window.__ALPS_FULL_AUTONOMY_ENGINE_HOOK__ };
+      return { installed: true, activeRoutes: routes.length, wrapped, version: policy.version };
     } catch (e) {
       return { installed: false, error: e.message };
     }
@@ -2202,7 +2056,12 @@ function computeForwardStatus(h = {}) {
 
 function enhanceHealth(h = {}) {
   const forward = computeForwardStatus(h);
-  const out = { ...h, ...forward, recoveryPatch: RECOVERY_PATCH_VERSION };
+  const out = { ...h, ...forward, recoveryPatch: RECOVERY_PATCH_VERSION, dataSource: h.dataSource || 'LIVE SNAPSHOT' };
+  if (!out.nativeForwardPool && lastNativeForwardPoolView) out.nativeForwardPool = lastNativeForwardPoolView;
+  if (!out.fullAutonomy && lastFullAutonomyView) out.fullAutonomy = lastFullAutonomyView;
+  if (!out.engineHook && lastEngineHookView) out.engineHook = lastEngineHookView;
+  if (!out.circuitBreaker && lastCircuitBreakerView) out.circuitBreaker = lastCircuitBreakerView;
+  if (!out.chart && lastChartView) out.chart = lastChartView;
   if (forward.forwardStale) out.status = 'STALE_FORWARD';
   return out;
 }
@@ -2305,7 +2164,7 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState), fullAutonomy: lastAutonomyView?.fullAutonomy || autonomyState?.lastView?.fullAutonomy || null } }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) } }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/export-recovery-state') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -2358,16 +2217,6 @@ async function createServer() {
         const rows = raw.split('\n').filter(Boolean).slice(-200).map(line => { try { return JSON.parse(line); } catch (_) { return { raw: line }; } });
         return send(res, 200, { schema: 'alps.cognition.ledger.tail.v1', version: COGNITION_PATCH_VERSION, seq: cognitionState.seq, hashHead: cognitionState.prevHash, rows });
       }
-      if (url.pathname === '/runner/full-autonomy.json') {
-        await loadAutonomyState();
-        await collectReport().catch(() => null);
-        return send(res, 200, lastAutonomyView?.fullAutonomy || autonomyState.lastView?.fullAutonomy || { error: 'No full autonomy view yet' });
-      }
-      if (url.pathname === '/runner/full-autonomy.md') {
-        await loadAutonomyState();
-        await collectReport().catch(() => null);
-        return send(res, 200, buildFullAutonomyMarkdown(lastAutonomyView?.fullAutonomy || autonomyState.lastView?.fullAutonomy), 'text/markdown; charset=utf-8');
-      }
       if (url.pathname === '/runner/autonomy.json') {
         if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
         await loadAutonomyState();
@@ -2413,6 +2262,21 @@ async function createServer() {
         const result = await runCommand(body.command || body.action || 'tick', body.args || {});
         return send(res, result.ok ? 200 : 500, result);
       }
+      if (url.pathname === '/runner/native-forward-pool.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await collectReport().catch(() => null);
+        return send(res, 200, lastNativeForwardPoolView || { error: 'No native forward pool view yet' });
+      }
+      if (url.pathname === '/runner/full-autonomy.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await collectReport().catch(() => null);
+        return send(res, 200, lastFullAutonomyView || { error: 'No full autonomy view yet' });
+      }
+      if (url.pathname === '/runner/v930.json') {
+        if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
+        await collectReport().catch(() => null);
+        return send(res, 200, { version: FINAL_V930_VERSION, fullAutonomy: lastFullAutonomyView, nativeForwardPool: lastNativeForwardPoolView, engineHook: lastEngineHookView, circuitBreaker: lastCircuitBreakerView, counterfactual: lastCounterfactualView, chart: lastChartView, dataSource: 'LIVE SNAPSHOT' });
+      }
       if (url.pathname.startsWith('/runner/')) return send(res, 404, { error: 'Unknown runner endpoint' });
       return serveStatic(req, res, url);
     } catch (e) {
@@ -2425,6 +2289,232 @@ async function createServer() {
   browserServerReady = true;
   log(`ALPS static/API server listening on ${HOST}:${PORT}`);
   return server;
+}
+
+
+async function installV930InitScripts() {
+  if (!context) return;
+  const content = `(() => {
+    if (window.__ALPS_V930_BOOT_GUARD__) return;
+    window.__ALPS_V930_BOOT_GUARD__ = true;
+    window.__ALPS_V930_ERRORS__ = [];
+    function safeColor(input) {
+      const raw = String(input == null ? '' : input).trim();
+      if (!raw) return 'rgba(0,0,0,0)';
+      if (/^rgbaa\s*\(/i.test(raw)) {
+        const nums = raw.match(/[-+]?\d*\.?\d+/g) || [];
+        const r = Math.max(0, Math.min(255, Number(nums[0] || 0)));
+        const g = Math.max(0, Math.min(255, Number(nums[1] || 0)));
+        const b = Math.max(0, Math.min(255, Number(nums[2] || 0)));
+        const a = Math.max(0, Math.min(1, Number(nums[nums.length - 1] || 1)));
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+      }
+      return raw;
+    }
+    window.safeAddColorStop = function safeAddColorStop(gradient, offset, color) {
+      try { gradient.addColorStop(offset, safeColor(color)); return true; }
+      catch (err) {
+        window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'addColorStop', message: String(err && err.message || err), color: String(color) });
+        try { gradient.addColorStop(offset, 'rgba(0,0,0,0)'); return false; } catch (_) { return false; }
+      }
+    };
+    try {
+      const proto = window.CanvasGradient && window.CanvasGradient.prototype;
+      if (proto && !proto.__alpsV930Patched) {
+        const original = proto.addColorStop;
+        proto.addColorStop = function(offset, color) {
+          try { return original.call(this, offset, safeColor(color)); }
+          catch (err) {
+            window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'CanvasGradient.addColorStop', message: String(err && err.message || err), color: String(color) });
+            try { return original.call(this, offset, 'rgba(0,0,0,0)'); } catch (_) { return undefined; }
+          }
+        };
+        proto.__alpsV930Patched = true;
+      }
+    } catch (err) { window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'boot-guard', message: String(err && err.message || err) }); }
+    window.safeCanvasDraw = function safeCanvasDraw(fn) { try { return typeof fn === 'function' ? fn() : null; } catch (err) { window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'canvas', message: String(err && err.message || err) }); return null; } };
+    window.safeReportBuild = function safeReportBuild(fn) { try { return typeof fn === 'function' ? fn() : null; } catch (err) { window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'report', message: String(err && err.message || err) }); return null; } };
+    window.safeBoot = function safeBoot(fn) { try { return typeof fn === 'function' ? fn() : null; } catch (err) { window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'boot', message: String(err && err.message || err) }); return null; } };
+    window.safeModuleInit = window.safeBoot;
+    window.safeJsonParse = function safeJsonParse(raw, fallback) { try { return JSON.parse(raw); } catch (_) { return fallback; } };
+    window.safeDomUpdate = function safeDomUpdate(fn) { try { return typeof fn === 'function' ? fn() : null; } catch (err) { window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'dom', message: String(err && err.message || err) }); return null; } };
+    window.addEventListener('error', ev => { try { window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'window.error', message: String(ev.message || ev.error || '') }); } catch (_) {} }, true);
+    window.addEventListener('unhandledrejection', ev => { try { window.__ALPS_V930_ERRORS__.push({ at: Date.now(), type: 'unhandledrejection', message: String((ev.reason && ev.reason.message) || ev.reason || '') }); } catch (_) {} }, true);
+  })();`;
+  try { await context.addInitScript({ content }); } catch (_) {}
+  try { if (page && !page.isClosed()) await page.addInitScript({ content }); } catch (_) {}
+}
+
+async function installV930StableAutonomyInPage() {
+  if (!page || page.isClosed()) return { installed: false, safe: true, reason: 'page not ready' };
+  try {
+    const policy = {
+      version: FINAL_V930_VERSION,
+      technicalCap: FINAL_V930_TECHNICAL_CAP,
+      routes: safeArray(lastAutonomyView?.activeRoutes || autonomyMemoryState?.activeRoutes || [])
+    };
+    const status = await pageEval(policy => {
+      const status = window.__ALPS_FINAL_V930__ || {
+        version: policy.version,
+        installed: false,
+        safe: true,
+        wrappedFunctions: [],
+        fallbackActive: false,
+        lastError: '',
+        nativeForwardPool: null,
+        fullAutonomy: null,
+        engineHook: null
+      };
+      window.__ALPS_FINAL_V930__ = status;
+      status.version = policy.version;
+      status.installed = true;
+      status.safe = true;
+      status.policy = { technicalCap: policy.technicalCap, routeCount: Array.isArray(policy.routes) ? policy.routes.length : 0 };
+      function arr(v) { return Array.isArray(v) ? v : []; }
+      function text(v) { return String(v == null ? '' : v); }
+      function key(c) { return [c && (c.sym || c.pair || c.baseSymbol || ''), c && (c.timeframe || c.tf || ''), c && (c.strategy || c.stratName || c.name || ''), c && (c.exit || c.exitName || '')].map(text).join('||').toUpperCase(); }
+      function evidenceLabels(c) {
+        const raw = [c && c.forwardBlockReason, c && c.robustnessReason, c && c.sampleFlag, c && c.promotionTier, c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].concat(arr(c && c.promotionReasons)).map(text).join(' | ');
+        const labels = [];
+        if (/LAB_ONLY/i.test(raw)) labels.push('LAB_ONLY');
+        if (/sample|LOW_SAMPLE|OOS/i.test(raw)) labels.push('SAMPLE');
+        if (/DD|drawdown/i.test(raw)) labels.push('DRAWDOWN');
+        if (/PF/i.test(raw)) labels.push('PF_GATE');
+        if (/WATCH/i.test(raw)) labels.push('WATCH');
+        if (/DISCARD/i.test(raw)) labels.push('DISCARD_CONTEXT');
+        return Array.from(new Set(labels));
+      }
+      function safetyReason(c) {
+        const raw = [c && c.forwardBlockReason, c && c.lastRejectedReason, c && c.reason, c && c.blockReason, c && c.freshness, c && c.status, c && c.dataStatus].concat(arr(c && c.promotionReasons)).map(text).join(' | ').toUpperCase();
+        if (/EMERGENCY/.test(raw)) return 'EMERGENCY_STOP';
+        if (/NOT_LATEST_CLOSED_CANDLE|STALE|FRESHNESS|DELAYED|TOO_OLD/.test(raw)) return 'FRESHNESS_OR_CLOSED_CANDLE';
+        if (/BAD_DATA|DATA_FAIL|FAILED DATA|GAP|DUPLICATE CANDLE|MISSING_CANDLE|NO_CANDLE|INVALID_PRICE|NAN|INFINITE/.test(raw)) return 'DATA_OR_PRICE_GUARD';
+        if (/DUPLICATE_SIGNAL|SAME_SETUP|LITERAL_DUPLICATE/.test(raw)) return 'DUPLICATE_SETUP_GUARD';
+        return '';
+      }
+      function routeMatch(route, c) {
+        const pair = text(c && (c.pair || c.baseSymbol || c.symbol || c.sym)).toUpperCase();
+        const tf = text(c && (c.timeframe || c.tf)).toUpperCase();
+        const strat = text(c && (c.strategy || c.stratName || c.name)).toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+        const rp = text(route && route.pair).toUpperCase();
+        const rt = text(route && route.timeframe).toUpperCase();
+        const rr = text(route && (route.root || route.strategy)).toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+        return (!rp || pair.includes(rp)) && (!rt || tf === rt) && (!rr || strat.includes(rr));
+      }
+      function classify(c) {
+        const safety = safetyReason(c || {});
+        const labels = evidenceLabels(c || {});
+        if (safety) return { tier: safety === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: safety, evidenceLabels: labels };
+        const route = arr(policy.routes).find(r => /SHADOW|SUSPEND/i.test(text(r && r.action)) && routeMatch(r, c || {}));
+        if (route) return { tier: 'COGNITION_SUSPENDED', safetyReason: '', evidenceLabels: labels.concat(['COGNITION_ROUTE']), routeKey: route.routeKey || '' };
+        if ((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: labels };
+        if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|'))) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: labels.concat(['PROMOTED_BY_AUTONOMY']) };
+        if (/DISCARD/i.test([c && c.rawVerdict, c && c.effectiveVerdict].map(text).join('|')) && Number(c && c.oosPF || 0) > 1 && Number(c && c.oosTrades || 0) >= 10) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: labels.concat(['SANDBOX_RETEST']) };
+        return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: labels };
+      }
+      function sourceRows() {
+        try {
+          if (Array.isArray(globalThis.results) && globalThis.results.length) return globalThis.results;
+        } catch (_) {}
+        try {
+          if (typeof results !== 'undefined' && Array.isArray(results) && results.length) return results;
+        } catch (_) {}
+        return [];
+      }
+      function supplement(originalRows) {
+        const out = [];
+        const seen = new Set(arr(originalRows).map(key));
+        for (const c of sourceRows()) {
+          const k = key(c);
+          if (!k || seen.has(k)) continue;
+          const cls = classify(c);
+          if (cls.tier === 'SAFETY_BLOCKED' || cls.tier === 'DATA_BLOCKED' || cls.tier === 'COGNITION_SUSPENDED') continue;
+          const copy = Object.assign({}, c, {
+            __alpsV930Tier: cls.tier,
+            __alpsV930EvidenceLabels: cls.evidenceLabels,
+            promotionTier: cls.tier === 'FULL_AUTONOMY_FORWARD' ? 'FULL_AUTONOMY_FORWARD' : (c.promotionTier || cls.tier),
+            forwardEligible: true,
+            forwardBlockReason: ''
+          });
+          out.push(copy); seen.add(k);
+          if (out.length + arr(originalRows).length >= Number(policy.technicalCap || 360)) break;
+        }
+        return out;
+      }
+      function buildNative(report) {
+        const top = arr(report && report.research && report.research.topStrategies).length ? report.research.topStrategies : sourceRows().slice(0, policy.technicalCap || 360);
+        const rows = [];
+        const seen = new Set();
+        for (const c of top) {
+          const k = key(c); if (!k || seen.has(k)) continue; seen.add(k);
+          const cls = classify(c);
+          rows.push({ key: k, pair: c.pair || c.baseSymbol || text(c.sym).split('_')[0], timeframe: c.timeframe || '', strategy: c.strategy || c.stratName || '', tier: cls.tier, evidenceLabels: cls.evidenceLabels, safetyReason: cls.safetyReason, oosPF: c.oosPF, oosTrades: c.oosTrades, score: c.score, originalPromotionTier: c.promotionTier, originalForwardEligible: c.forwardEligible === true, originalBlockReason: c.forwardBlockReason || '' });
+          if (rows.length >= Number(policy.technicalCap || 360)) break;
+        }
+        const count = t => rows.filter(x => x.tier === t).length;
+        return { schema: 'alps.nativeForwardPool.view.v1', version: policy.version, installed: true, totalCandidates: rows.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'), blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'), evidenceLabels: Array.from(new Set(rows.flatMap(r => r.evidenceLabels || []))), candidates: rows.slice(0, 50) };
+      }
+      function patchPoolFunction(name) {
+        try {
+          const original = globalThis[name] || (typeof window !== 'undefined' ? window[name] : null);
+          if (typeof original !== 'function' || original.__alpsV930Wrapped) return false;
+          const wrapped = function(...args) {
+            try {
+              const base = arr(original.apply(this, args));
+              const extra = supplement(base);
+              const all = base.concat(extra);
+              return all.slice(0, Number(policy.technicalCap || 360));
+            } catch (err) {
+              status.safe = true;
+              status.fallbackActive = true;
+              status.lastError = String(err && err.message || err);
+              return original.apply(this, args);
+            }
+          };
+          wrapped.__alpsV930Wrapped = true;
+          try { globalThis[name] = wrapped; } catch (_) { window[name] = wrapped; }
+          if (!status.wrappedFunctions.includes(name)) status.wrappedFunctions.push(name);
+          return true;
+        } catch (err) { status.lastError = String(err && err.message || err); status.fallbackActive = true; return false; }
+      }
+      patchPoolFunction('forwardCandidatePool');
+      patchPoolFunction('activeForwardCandidatePool');
+      try {
+        const originalReport = globalThis.buildRunReportObject || window.buildRunReportObject;
+        if (typeof originalReport === 'function' && !originalReport.__alpsV930Wrapped) {
+          const wrappedReport = async function(...args) {
+            const report = await originalReport.apply(this, args);
+            try {
+              const nfp = buildNative(report || {});
+              report.nativeForwardPool = nfp;
+              report.fullAutonomyNativeForwardPool = nfp;
+              report.fullAutonomy = { schema: 'alps.fullAutonomy.view.v1', version: policy.version, enabled: true, mode: 'DECIDE_AND_ACT_PAPER_ONLY', paperOnly: true, liveCapitalExecution: false, humanStrategicRestrictionsRemoved: true, safetyGuardsPreserved: true, lastDecision: nfp.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_POOL_READY' : 'WAIT_FOR_EVIDENCE' };
+              report.engineHook = { schema: 'alps.engineHook.view.v1', version: policy.version, installed: true, safe: true, lastError: status.lastError || '', wrappedFunctions: status.wrappedFunctions.slice(), fallbackActive: !!status.fallbackActive };
+              report.circuitBreaker = { schema: 'alps.circuitBreaker.view.v1', version: policy.version, enabled: true, open: false, reason: '', fallbackMode: 'ADVANCED_MODULES_ACTIVE', disabledModules: [] };
+              report.chart = { schema: 'alps.chart.view.v1', version: policy.version, ready: true, selectedPair: (nfp.candidates[0] && nfp.candidates[0].pair) || 'BTCUSDT', selectedTimeframe: (nfp.candidates[0] && nfp.candidates[0].timeframe) || '1h', candlesLoaded: Number(report && report.data && report.data.candlesLoaded || 0), candidateTradesShown: nfp.totalCandidates, openTradesShown: Number(report && report.forwardWatch && report.forwardWatch.openPositions || 0), closedTradesShown: Number(report && report.forwardWatch && report.forwardWatch.closedTrades || 0), lastError: '' };
+              report.v930 = { version: policy.version, dataSource: 'LIVE SNAPSHOT', liveCapitalExecution: false };
+              status.nativeForwardPool = nfp;
+              status.fullAutonomy = report.fullAutonomy;
+              status.engineHook = report.engineHook;
+            } catch (err) { status.lastError = String(err && err.message || err); status.fallbackActive = true; }
+            return report;
+          };
+          wrappedReport.__alpsV930Wrapped = true;
+          globalThis.buildRunReportObject = wrappedReport;
+          if (!status.wrappedFunctions.includes('buildRunReportObject')) status.wrappedFunctions.push('buildRunReportObject');
+        }
+      } catch (err) { status.lastError = String(err && err.message || err); status.fallbackActive = true; }
+      status.installed = true;
+      status.safe = true;
+      status.engineHook = { installed: true, safe: true, version: policy.version, lastError: status.lastError || '', wrappedFunctions: status.wrappedFunctions.slice(), fallbackActive: !!status.fallbackActive };
+      return status;
+    }, policy);
+    lastEngineHookView = buildEngineHookView(status?.engineHook || status || {});
+    return lastEngineHookView;
+  } catch (e) {
+    lastEngineHookView = buildEngineHookView({ installed: false, safe: true, lastError: e.message, fallbackActive: true, wrappedFunctions: [] });
+    return lastEngineHookView;
+  }
 }
 
 async function launchAppPage(options = {}) {
@@ -2463,9 +2553,11 @@ async function launchAppPage(options = {}) {
         lastHealth.lastError = info.message;
         log('[pageerror]', info.message);
       });
+      await installV930InitScripts().catch(e => log('v9.3 boot guard install failed:', e.message));
       await page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 120_000 });
       await page.waitForLoadState('load', { timeout: 120_000 }).catch(() => null);
       await page.waitForFunction(() => typeof buildRunReportObject === 'function' || typeof startWatch === 'function', null, { timeout: 120_000 }).catch(() => null);
+      await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install after load failed:', e.message));
       lastLaunchError = null;
       delete lastHealth.pageLaunchError;
       Object.assign(lastHealth, { status: 'PAGE_LOADED', lastError: '', pageReady: true, launchAttempts });
@@ -2510,9 +2602,8 @@ async function getPageHealth() {
       fwRunning: val(() => !!fwRunning, false),
       labRunning: val(() => !!labRunning, false),
       rtPrepared: val(() => !!rtPrepared, false),
-      candidates: val(() => (window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__?.lastPool?.length) || (typeof activeForwardCandidatePool === 'function' ? activeForwardCandidatePool().length : 0), 0),
-      officialCandidates: val(() => (window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__?.lastPool?.length) || (typeof forwardCandidatePool === 'function' ? forwardCandidatePool().length : 0), 0),
-      nativeForwardPoolOverride: val(() => window.__ALPS_NATIVE_FORWARD_POOL_OVERRIDE__ || null, null),
+      candidates: val(() => typeof activeForwardCandidatePool === 'function' ? activeForwardCandidatePool().length : 0, 0),
+      officialCandidates: val(() => typeof forwardCandidatePool === 'function' ? forwardCandidatePool().length : 0, 0),
       results: val(() => (results || []).length, 0),
       paperSignals: val(() => (paperSignals || []).length, 0),
       openPositions: val(() => (openPositions || []).length, 0),
@@ -2526,7 +2617,13 @@ async function getPageHealth() {
       fwRefreshRunning: val(() => !!fwRefreshRunning, false),
       emergencyStopActive: val(() => !!emergencyStopActive, false),
       preflight: val(() => preflightStatus, ''),
-      engineReady: val(() => !!engineReady, false)
+      engineReady: val(() => !!engineReady, false),
+      nativeForwardPool: val(() => window.__ALPS_FINAL_V930__?.nativeForwardPool || null, null),
+      fullAutonomy: val(() => window.__ALPS_FINAL_V930__?.fullAutonomy || null, null),
+      engineHook: val(() => window.__ALPS_FINAL_V930__?.engineHook || null, null),
+      circuitBreaker: val(() => ({ enabled: true, open: false, reason: '', fallbackMode: 'ADVANCED_MODULES_ACTIVE', disabledModules: [] }), null),
+      chart: val(() => window.__ALPS_FINAL_V930__?.chart || null, null),
+      dataSource: 'LIVE SNAPSHOT'
     };
   });
 }
@@ -2657,6 +2754,7 @@ async function collectPageTradeLedgers() {
 }
 
 async function ensureRuntimeStarted() {
+  await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install before health failed:', e.message));
   const h = await getPageHealth();
   Object.assign(lastHealth, enhanceHealth(h), { status: enhanceHealth(h).forwardStale ? 'STALE_FORWARD' : 'LOADED', lastError: '' });
 
@@ -2695,8 +2793,10 @@ async function runnerTick(reason = 'server-runner tick') {
       }
     }
     await ensureRuntimeStarted();
+    await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install before catch-up failed:', e.message));
     const before = enhanceHealth(await getPageHealth());
     await installAutonomousBridgeInPage().catch(e => log('Autonomous bridge install before catch-up failed:', e.message));
+    await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy reinstall after bridge failed:', e.message));
 
     if (before.fwRunning && !before.fwRefreshRunning) {
       await pageEval(async reasonText => {
@@ -2726,11 +2826,9 @@ async function runnerTick(reason = 'server-runner tick') {
 
 async function collectReport() {
   if (!page || page.isClosed()) throw new Error('ALPS page is not ready');
-  await installAutonomousBridgeInPage().catch(e => ({ installed:false, preInstallError:e.message }));
-  const report = await pageEval(async () => {
+  let report = await pageEval(async () => {
     if (typeof buildRunReportObject !== 'function') throw new Error('buildRunReportObject not available');
-    let r = await buildRunReportObject();
-    if (typeof window.__alpsNativeForwardPoolOverrideReport === 'function') r = window.__alpsNativeForwardPoolOverrideReport(r);
+    const r = await buildRunReportObject();
     r.serverRunner = {
       enabled: true,
       mode: 'server-side-chromium-wrapper',
@@ -2739,6 +2837,9 @@ async function collectReport() {
     };
     return r;
   });
+
+  const pageV930Status = await installV930StableAutonomyInPage().catch(e => ({ installed: false, safe: true, lastError: e.message, fallbackActive: true, wrappedFunctions: [] }));
+  report = enrichReportV930(report, pageV930Status);
 
   const rawTradeLedgers = await collectPageTradeLedgers().catch(e => ({
     openTrades: [],
@@ -2753,6 +2854,8 @@ async function collectReport() {
   report.alpsCognition = await updateCognitionState(report, lastTradeExport);
   report.alpsAutonomousBridge = await updateAutonomousBridgeState(report, report.alpsCognition);
   report.autonomousBridgeInstall = await installAutonomousBridgeInPage(report.alpsAutonomousBridge).catch(e => ({ installed: false, error: e.message }));
+  await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install during report failed:', e.message));
+  report = enrichReportV930(report, lastEngineHookView || report.engineHook || {});
 
   let md = '';
   try {
@@ -2769,6 +2872,7 @@ async function collectReport() {
   lastReport = report;
   await recordSnapshot(snapshotFromReport(report, 'report'));
   md = `${md}\n\n${buildTradesMarkdown(lastTradeExport)}\n\n${buildTradeVaultMarkdown()}\n\n${buildCognitionMarkdown(report.alpsCognition)}\n\n${buildAutonomyMarkdown(report.alpsAutonomousBridge)}`;
+  md = `${md}\n\n${buildV930Markdown(report)}`;
   md = appendRecoveryMarkdown(md);
   lastReportMarkdown = md;
   lastHealth.lastReportAt = Date.now();
@@ -2777,6 +2881,8 @@ async function collectReport() {
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
