@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.4.0 Recovery Forward Core
+ * ALPS Server Runner — v9.4.2 Dedup Integrity Fix (on v9.4.1 Live Paper Evidence Collector)
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.4.0-recovery-forward-core';
+const RECOVERY_PATCH_VERSION = 'v9.4.2-dedup-integrity-fix';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.4.0-recovery-forward-core';
+const COGNITION_PATCH_VERSION = 'v9.4.2-dedup-integrity-fix';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.4.0-recovery-forward-core';
+const AUTONOMY_PATCH_VERSION = 'v9.4.2-dedup-integrity-fix';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -342,9 +342,9 @@ let lastOOSEvidenceRows = [];
 let lastRecoveryForwardCoreView = null;
 
 
-// ALPS v9.4.0 Recovery Forward Core
+// ALPS v9.4.1 Live Paper Evidence Collector
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.4.0-recovery-forward-core';
+const FINAL_V930_VERSION = 'v9.4.2-dedup-integrity-fix';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -440,11 +440,13 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
     fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
     watchForward: count('WATCH_FORWARD'),
+    experimentalForward: count('EXPERIMENTAL_FORWARD'),
     researchSandbox: count('RESEARCH_SANDBOX'),
     cognitionSuspended: count('COGNITION_SUSPENDED'),
     safetyBlocked: count('SAFETY_BLOCKED'),
     dataBlocked: count('DATA_BLOCKED'),
     promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
+    promotedToExperimental: count('EXPERIMENTAL_FORWARD'),
     blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'),
     evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
     candidates: selected.slice(0, 50),
@@ -547,7 +549,7 @@ function buildChartView(report = {}) {
 }
 
 
-// ALPS v9.4.0 Recovery Forward Core
+// ALPS v9.4.1 Live Paper Evidence Collector
 // Adds three decision-layer controls above the stable v9.3.0 runtime:
 // 1) minimum-evidence gate BEFORE cluster dedup, 2) cluster dedup before the forward pool,
 // 3) quantitative FULL_AUTONOMY_FORWARD promotion, 4) mutation stagnation governor that moves selection budget to exploration.
@@ -576,7 +578,7 @@ function v931ClusterKey(c = {}) {
   const pair = textValue(c.pair || c.baseSymbol || c.symbol || c.sym).toUpperCase().split('_')[0];
   const tf = textValue(c.timeframe || c.tf).toUpperCase();
   const exit = textValue(c.exit || c.exitName || '').toUpperCase().replace(/[^A-Z0-9.]+/g, '_').slice(0, 24);
-  return [pair, tf, v931StrategyRoot(c), exit, 'PF' + v931Round(c.oosPF, 2), 'OOS' + v931Round(c.oosTrades, 0)].join('|');
+  return [pair, tf, v931StrategyRoot(c), exit].join('|');
 }
 function v931PosteriorPFProbability(pf, nEff) {
   const p = v931Num(pf, 0);
@@ -634,6 +636,14 @@ function v931EvidenceTier(c = {}) {
   return 'NO_OOS_EVIDENCE';
 }
 
+function v931ExitRoot(c = {}) {
+  const raw = textValue(c.exit || c.exitName || '').toUpperCase();
+  if (/ATR/.test(raw)) return 'ATR_TRAIL';
+  if (/3R|2\.5R/.test(raw)) return 'HIGH_R_FIXED';
+  if (/2R/.test(raw)) return '2R_FIXED';
+  if (/1R/.test(raw)) return '1R_FIXED';
+  return raw.replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24) || 'GENERIC_EXIT';
+}
 function v94CanonicalPair(value) { return textValue(value).toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 function v94CanonicalTf(value) { const raw = textValue(value).toLowerCase().trim(); return raw.replace('minutes','m').replace('minute','m').replace('hours','h').replace('hour','h').replace(/\s+/g, ''); }
 function v94CandidateBridgeKey(c = {}) { return [v94CanonicalPair(c.pair || c.baseSymbol || c.symbol || c.sym || ''), v94CanonicalTf(c.timeframe || c.tf || c.frame || ''), v931StrategyRoot(c), v931ExitRoot(c)].join('|'); }
@@ -682,12 +692,79 @@ function v94ApplyOosEvidenceToRows(rows = [], evidenceRows = []) {
   const byLoose = new Map(); for (const row of safeArray(evidenceRows)) if (!byLoose.has(row.looseKey)) byLoose.set(row.looseKey, row);
   return safeArray(rows).map(row => { if (!row || typeof row !== 'object' || v931HasMinimumEvidence(row)) return row; const ev = byKey.get(v94CandidateBridgeKey(row)) || byLoose.get(v94CandidateLooseKey(row)); if (!ev) return row; row.oosPF = ev.oosPF; row.oosTrades = ev.oosTrades; if (row.totalTrades == null) row.totalTrades = ev.totalTrades; if (row.rollingMinPF == null && ev.rollingMinPF != null) row.rollingMinPF = ev.rollingMinPF; if (row.stress5 == null && ev.stress5 != null) row.stress5 = ev.stress5; if (row.oosDD == null && ev.oosDD != null) row.oosDD = ev.oosDD; row.__alpsOosEvidenceMatched = true; row.__alpsOosEvidenceSource = ev.source; row.forwardEligible = true; row.forwardBlockReason = ''; row.blockReason = ''; if (!/WATCHLIST|FORWARD/i.test(textValue(row.promotionTier))) row.promotionTier = 'WATCHLIST_OOS_EVIDENCE_BRIDGE'; return row; });
 }
-function v94ForwardEligibleCountFromView(view = lastNativeForwardPoolView || {}) { return n(view.fullAutonomyForward, 0) + n(view.watchForward, 0); }
+function v94ForwardEligibleCountFromView(view = lastNativeForwardPoolView || {}) { return n(view.fullAutonomyForward, 0) + n(view.watchForward, 0) + n(view.experimentalForward, 0); }
+function v941ExperimentalCountFromView(view = lastNativeForwardPoolView || {}) { return n(view.experimentalForward, 0); }
+function v941IsForwardTier(tier = '') { return /^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(textValue(tier)); }
 function v94BuildRecoveryForwardCoreView(report = {}) {
-  const bridge = report.oosEvidenceBridge || lastOOSEvidenceBridgeView || {}; const pool = report.nativeForwardPool || lastNativeForwardPoolView || {}; const eligible = v94ForwardEligibleCountFromView(pool); const data = report.data || {}; const rawStrategies = n(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || 0, 0); const pairFrames = n(data.pairFrames || report.dataPairFrames || lastHealth?.dataPairFrames || 0, 0);
+  const bridge = report.oosEvidenceBridge || lastOOSEvidenceBridgeView || {};
+  const pool = report.nativeForwardPool || lastNativeForwardPoolView || {};
+  const eligible = v94ForwardEligibleCountFromView(pool);
+  const experimental = v941ExperimentalCountFromView(pool);
+  const verified = n(pool.fullAutonomyForward, 0) + n(pool.watchForward, 0);
+  const data = report.data || {};
+  const rawStrategies = n(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || 0, 0);
+  const pairFrames = n(data.pairFrames || report.dataPairFrames || lastHealth?.dataPairFrames || 0, 0);
   const noEvidence = pairFrames >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && rawStrategies > 0 && eligible === 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0;
-  const view = { schema: 'alps.recoveryForwardCore.view.v1', version: FINAL_V930_VERSION, installed: true, bootChain: 'DATA_LOAD -> RESEARCH -> OOS_EVIDENCE_BRIDGE -> FORWARD_START', pairFrames, rawResearchStrategies: rawStrategies, eligibleForwardCandidates: eligible, oosEvidenceBridge: bridge, forwardDecision: eligible > 0 ? 'START_FORWARD_WHEN_FRESH' : (noEvidence ? 'NO_EVIDENCE_AVAILABLE' : 'WAITING_FOR_BOOT_OR_EVIDENCE'), honestFailure: noEvidence, paperOnly: true, liveCapitalExecution: false };
+  const forwardDecision = verified > 0 ? 'START_VERIFIED_FORWARD_WHEN_FRESH'
+    : experimental > 0 ? 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE'
+    : noEvidence ? 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE'
+    : 'WAITING_FOR_BOOT_OR_EVIDENCE';
+  const view = {
+    schema: 'alps.recoveryForwardCore.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    bootChain: 'DATA_LOAD -> RESEARCH -> EXPERIMENTAL_FORWARD -> PAPER_EVIDENCE -> DECISION_ACTUATOR -> VERIFIED_FORWARD',
+    pairFrames,
+    rawResearchStrategies: rawStrategies,
+    eligibleForwardCandidates: eligible,
+    verifiedForwardCandidates: verified,
+    experimentalForwardCandidates: experimental,
+    oosEvidenceBridge: bridge,
+    forwardDecision,
+    honestFailure: noEvidence,
+    paperOnly: true,
+    liveCapitalExecution: false,
+    note: 'v9.4.1 does not wait for historical OOS to exist. It collects live paper evidence under EXPERIMENTAL_FORWARD and only promotes later with real outcomes.'
+  };
   lastRecoveryForwardCoreView = view; return view;
+}
+
+function v941CandidateMutationPlan(c = {}) {
+  const root = v931StrategyRoot(c);
+  const tf = textValue(c.timeframe || c.tf || '').toLowerCase();
+  const exit = textValue(c.exit || c.exitName || '').toUpperCase();
+  const plans = [];
+  if (!/ATR/.test(exit)) plans.push('TEST_ATR_TRAIL_EXIT');
+  if (!/2R|2.5R|3R/.test(exit)) plans.push('TEST_HIGHER_R_EXIT');
+  if (/5m|15m/.test(tf)) plans.push('TEST_SLOWER_TIMEFRAME');
+  if (/4h/.test(tf)) plans.push('TEST_1H_EXECUTION_VARIANT');
+  if (/VAH_VAL|EMA_TREND|BB_SQUEEZE|RSI_DIVERGENCE_ZONE/.test(root)) plans.push('TEST_REGIME_FILTER_VARIANT');
+  return plans.slice(0, 4);
+}
+function v941BuildDecisionActuatorView(nativeView = {}, report = {}) {
+  const candidates = safeArray(nativeView.candidates);
+  const experimental = candidates.filter(c => c.tier === 'EXPERIMENTAL_FORWARD');
+  const verified = candidates.filter(c => c.tier === 'WATCH_FORWARD' || c.tier === 'FULL_AUTONOMY_FORWARD');
+  const suspended = candidates.filter(c => c.tier === 'COGNITION_SUSPENDED');
+  const mutationPlans = experimental.slice(0, 30).map(c => ({ key: c.key, pair: c.pair, timeframe: c.timeframe, strategy: c.strategy, exit: c.exit, plan: v941CandidateMutationPlan(c) }));
+  const closed = n(report?.forwardWatch?.closedTrades || report?.intelligence?.ledger?.closed || 0, 0);
+  return {
+    schema: 'alps.decisionActuator.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    mode: 'PAPER_LEARNING_ACTUATOR',
+    decisionsApplied: experimental.length + verified.length + suspended.length,
+    experimentalForward: experimental.length,
+    verifiedForward: verified.length,
+    trustAdjusted: closed > 0 ? 'PENDING_AFTER_LEDGER_SYNC' : 0,
+    mutationsCreated: mutationPlans.reduce((sum, x) => sum + safeArray(x.plan).length, 0),
+    shadowRoutesCreated: 0,
+    suspendedPatterns: suspended.length,
+    exitChangesTested: mutationPlans.filter(x => safeArray(x.plan).some(p => /EXIT|R_EXIT/.test(p))).length,
+    timeframeChangesTested: mutationPlans.filter(x => safeArray(x.plan).some(p => /TIMEFRAME|EXECUTION/.test(p))).length,
+    mutationPlans,
+    rule: 'Actuator turns selected research rows into paper experiments, tags them NOT_OOS_VERIFIED, and plans exit/timeframe/regime mutations. Real promotion still requires paper/OOS evidence.'
+  };
 }
 function v931RankCandidate(c = {}) {
   const m = v931EvidenceMetrics(c);
@@ -774,14 +851,9 @@ function classifyCandidateV930(c = {}, routes = []) {
   if (safety) return { tier: safety === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: safety, evidenceLabels: qLabels, quantitative: metrics };
   const suspended = routes.find(r => String(r.action || '').toUpperCase().includes('SHADOW') && autonomyRouteMatchesCandidate(r, c));
   if (suspended) return { tier: 'COGNITION_SUSPENDED', safetyReason: '', evidenceLabels: qLabels.concat(['COGNITION_ROUTE']), routeKey: suspended.routeKey || '', quantitative: metrics };
-  if (metrics.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['PROMOTED_BY_AUTONOMY']), quantitative: metrics };
-  if (hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS','OOS_EVIDENCE_READY']), quantitative: metrics };
-  if ((c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS']), quantitative: metrics };
-  if ((c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) && !hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['FORWARD_HELD_NO_OOS']), quantitative: metrics };
-  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|')) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS']), quantitative: metrics };
-  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['WAITING_FOR_MIN_EVIDENCE']), quantitative: metrics };
-  if (/DISCARD/i.test([c.rawVerdict, c.effectiveVerdict].map(textValue).join('|')) && hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['SANDBOX_RETEST']), quantitative: metrics };
-  return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: qLabels.concat(['NO_FORWARD_WITHOUT_OOS']), quantitative: metrics };
+  if (metrics.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['PROMOTED_BY_AUTONOMY','OOS_VERIFIED_FORWARD']), quantitative: metrics };
+  if (hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['MIN_EVIDENCE_PASS','OOS_EVIDENCE_READY','OOS_VERIFIED_FORWARD']), quantitative: metrics };
+  return { tier: 'EXPERIMENTAL_FORWARD', safetyReason: '', evidenceLabels: qLabels.concat(['NOT_OOS_VERIFIED','LIVE_PAPER_EVIDENCE_COLLECTION','EXPERIMENTAL_FORWARD']), quantitative: metrics, experimental: true };
 }
 function buildNativeForwardPoolView(report = {}, routes = []) {
   const top = safeArray(report?.research?.topStrategies);
@@ -792,8 +864,8 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
   const selected = [];
   const seen = new Set();
   const quotas = mutationGovernor.active
-    ? ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','RESEARCH_SANDBOX']
-    : ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','RESEARCH_SANDBOX'];
+    ? ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','EXPERIMENTAL_FORWARD','RESEARCH_SANDBOX']
+    : ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','EXPERIMENTAL_FORWARD','RESEARCH_SANDBOX'];
   const classified = deduped.rows.map(c => ({ c, cls: classifyCandidateV930(c, routes), key: v931ClusterKey(c) }));
   for (const tier of quotas) {
     for (const item of classified) {
@@ -820,11 +892,13 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
         score: c.score,
         originalPromotionTier: c.promotionTier,
         originalForwardEligible: c.forwardEligible === true,
-        originalBlockReason: c.forwardBlockReason || ''
+        originalBlockReason: c.forwardBlockReason || '',
+        experimental: cls.tier === 'EXPERIMENTAL_FORWARD',
+        learningStage: cls.tier === 'EXPERIMENTAL_FORWARD' ? 'LIVE_PAPER_EVIDENCE_COLLECTION' : (cls.tier === 'WATCH_FORWARD' ? 'OOS_VERIFIED_WATCH' : cls.tier)
       });
-      if (selected.length >= 20) break;
+      if (selected.length >= FINAL_V930_TECHNICAL_CAP) break;
     }
-    if (selected.length >= 20) break;
+    if (selected.length >= FINAL_V930_TECHNICAL_CAP) break;
   }
   const count = tier => selected.filter(x => x.tier === tier).length;
   const quantPassed = selected.filter(x => x.quantitative?.promote).length;
@@ -838,11 +912,13 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
     fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
     watchForward: count('WATCH_FORWARD'),
+    experimentalForward: count('EXPERIMENTAL_FORWARD'),
     researchSandbox: count('RESEARCH_SANDBOX'),
     cognitionSuspended: count('COGNITION_SUSPENDED'),
     safetyBlocked: count('SAFETY_BLOCKED'),
     dataBlocked: count('DATA_BLOCKED'),
     promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
+    promotedToExperimental: count('EXPERIMENTAL_FORWARD'),
     blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'),
     quantitativePromotion: {
       installed: true,
@@ -853,9 +929,10 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     duplicateCompression: deduped.stats,
     oosEvidenceBridge: bridgeBundle.view,
     mutationGovernor,
+    decisionActuator: null,
     evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
     candidates: selected.slice(0, 50),
-    note: 'v9.4.0: Recovery Forward Core maps real OOS evidence into candidates before classification. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; no evidence now reports NO_EVIDENCE_AVAILABLE instead of silent paused forward.'
+    note: 'v9.4.1: Live Paper Evidence Collector starts EXPERIMENTAL_FORWARD for non-safety candidates when verified OOS is unavailable. It never labels those candidates OOS-verified; it marks them NOT_OOS_VERIFIED and collects real paper evidence.'
   };
 }
 function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
@@ -863,7 +940,8 @@ function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
   if (nativeView?.duplicateCompression?.compressedRows > 0) decisions.push({ action: 'DEDUP_FORWARD_POOL', reason: `${nativeView.duplicateCompression.compressedRows} near-duplicate rows compressed before forward selection.` });
   if (nativeView?.promotedByFullAutonomy > 0) decisions.push({ action: 'OPEN_PAPER_CANDIDATE_AUTHORITY', reason: `${nativeView.promotedByFullAutonomy} candidates passed quantitative FULL_AUTONOMY_FORWARD rule.` });
   if (nativeView?.mutationGovernor?.active) decisions.push({ action: 'REBUILD', reason: 'Mutation stagnation detected; selection budget moved toward exploration representatives.' });
-  if (!decisions.length) decisions.push({ action: 'WAIT_FOR_EVIDENCE', reason: 'No non-eligible candidate passed quantitative promotion yet.' });
+  if (nativeView?.experimentalForward > 0) decisions.push({ action: 'EXPERIMENTAL_FORWARD_COLLECT_EVIDENCE', reason: `${nativeView.experimentalForward} non-OOS-verified candidates admitted to paper evidence collection.` });
+  if (!decisions.length) decisions.push({ action: 'WAIT_FOR_CANDIDATES', reason: 'No candidate rows available yet.' });
   return {
     schema: 'alps.fullAutonomy.view.v1',
     version: FINAL_V930_VERSION,
@@ -879,7 +957,7 @@ function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
     },
     allowedActions: ['OPEN_PAPER','HOLD','REDUCE_EXPOSURE','SHADOW_RETEST','REBUILD','SUSPEND_PATTERN','STOP_REVIEW','WAIT_FOR_EVIDENCE'],
     decisions,
-    lastDecision: decisions[0]?.action || 'WAIT_FOR_EVIDENCE',
+    lastDecision: decisions[0]?.action || 'WAIT_FOR_CANDIDATES',
     quantitativePromotion: nativeView?.quantitativePromotion || null,
     duplicateCompression: nativeView?.duplicateCompression || null,
     mutationGovernor: nativeView?.mutationGovernor || null,
@@ -891,6 +969,8 @@ function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
 function enrichReportV930(report = {}, pageStatus = null) {
   const routes = safeArray(report?.alpsAutonomousBridge?.activeRoutes || lastAutonomyView?.activeRoutes || autonomyMemoryState?.activeRoutes);
   const nativeView = buildNativeForwardPoolView(report, routes);
+  const decisionActuator = v941BuildDecisionActuatorView(nativeView, report);
+  nativeView.decisionActuator = decisionActuator;
   const fullAutonomy = buildFullAutonomyView(report, nativeView, routes);
   const mutationGovernor = nativeView?.mutationGovernor || v931BuildMutationGovernor(report);
   const engineHook = buildEngineHookView(pageStatus || report?.engineHook || {});
@@ -901,11 +981,13 @@ function enrichReportV930(report = {}, pageStatus = null) {
   report.fullAutonomyNativeForwardPool = nativeView;
   report.oosEvidenceBridge = nativeView?.oosEvidenceBridge || lastOOSEvidenceBridgeView || null;
   report.recoveryForwardCore = v94BuildRecoveryForwardCoreView(report);
+  report.decisionActuator = decisionActuator;
+  report.livePaperEvidenceCollector = { schema: 'alps.livePaperEvidenceCollector.view.v1', version: FINAL_V930_VERSION, installed: true, experimentalForward: nativeView.experimentalForward || 0, verifiedForward: (nativeView.watchForward || 0) + (nativeView.fullAutonomyForward || 0), mode: nativeView.experimentalForward > 0 ? 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE' : 'WAITING_FOR_CANDIDATES', paperOnly: true, liveCapitalExecution: false, rule: 'Paper experiments are allowed without historical OOS, but are explicitly NOT_OOS_VERIFIED until real paper outcomes prove them.' };
   report.fullAutonomy = fullAutonomy;
   report.engineHook = engineHook;
   report.counterfactual = counterfactual;
   report.mutationGovernor = mutationGovernor;
-  report.decisionIntelligence = { schema: 'alps.decisionIntelligence.view.v1', version: FINAL_V930_VERSION, duplicateCompression: nativeView?.duplicateCompression || null, quantitativePromotion: nativeView?.quantitativePromotion || null, oosEvidenceBridge: report.oosEvidenceBridge || null, mutationGovernor };
+  report.decisionIntelligence = { schema: 'alps.decisionIntelligence.view.v1', version: FINAL_V930_VERSION, duplicateCompression: nativeView?.duplicateCompression || null, quantitativePromotion: nativeView?.quantitativePromotion || null, oosEvidenceBridge: report.oosEvidenceBridge || null, decisionActuator, mutationGovernor };
   report.circuitBreaker = circuitBreaker;
   report.chart = chart;
   report.v930 = { version: FINAL_V930_VERSION, dataSource: 'LIVE SNAPSHOT', liveCapitalExecution: false, appStableBase: 'v9.2.2-persistent-autonomous-memory' };
@@ -928,7 +1010,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.4.0 Recovery Forward Core\n`;
+  let md = `## ALPS v9.4.1 Live Paper Evidence Collector\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -940,6 +1022,7 @@ function buildV930Markdown(report = {}) {
   md += `| Tier | Count |\n|---|---:|\n`;
   md += `| FULL_AUTONOMY_FORWARD | ${nfp.fullAutonomyForward || 0} |\n`;
   md += `| WATCH_FORWARD | ${nfp.watchForward || 0} |\n`;
+  md += `| EXPERIMENTAL_FORWARD | ${nfp.experimentalForward || 0} |\n`;
   md += `| RESEARCH_SANDBOX | ${nfp.researchSandbox || 0} |\n`;
   md += `| COGNITION_SUSPENDED | ${nfp.cognitionSuspended || 0} |\n`;
   md += `| SAFETY_BLOCKED | ${nfp.safetyBlocked || 0} |\n`;
@@ -970,7 +1053,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.4.0 Recovery Forward Core\n`;
+  let md = `## ALPS v9.4.1 Live Paper Evidence Collector\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -982,6 +1065,7 @@ function buildV930Markdown(report = {}) {
   md += `| Tier | Count |\n|---|---:|\n`;
   md += `| FULL_AUTONOMY_FORWARD | ${nfp.fullAutonomyForward || 0} |\n`;
   md += `| WATCH_FORWARD | ${nfp.watchForward || 0} |\n`;
+  md += `| EXPERIMENTAL_FORWARD | ${nfp.experimentalForward || 0} |\n`;
   md += `| RESEARCH_SANDBOX | ${nfp.researchSandbox || 0} |\n`;
   md += `| COGNITION_SUSPENDED | ${nfp.cognitionSuspended || 0} |\n`;
   md += `| SAFETY_BLOCKED | ${nfp.safetyBlocked || 0} |\n`;
@@ -994,6 +1078,16 @@ function buildV930Markdown(report = {}) {
   md += line('Mutation governor', mg.mode || '—') + '\n';
   md += line('Zero-improvement logs', mg.zeroImprovementLogs ?? 0) + '\n';
   md += line('Missing-edge hypotheses observed', mg.missingEdgeGenerated ?? 0) + '\n';
+  const da = report.decisionActuator || nfp.decisionActuator || {};
+  const lpec = report.livePaperEvidenceCollector || {};
+  md += `\n### Live Paper Evidence Collector / Decision Actuator\n`;
+  md += line('Collector mode', lpec.mode || '—') + '\n';
+  md += line('Experimental forward', nfp.experimentalForward || lpec.experimentalForward || 0) + '\n';
+  md += line('Verified forward', (nfp.watchForward || 0) + (nfp.fullAutonomyForward || 0)) + '\n';
+  md += line('Decisions applied', da.decisionsApplied ?? 0) + '\n';
+  md += line('Mutations planned', da.mutationsCreated ?? 0) + '\n';
+  md += line('Exit variants planned', da.exitChangesTested ?? 0) + '\n';
+  md += line('Timeframe variants planned', da.timeframeChangesTested ?? 0) + '\n';
   if (Array.isArray(dc.topClusters) && dc.topClusters.length) {
     md += `\n#### Top Compressed Clusters\n| Size | Cluster |\n|---:|---|\n`;
     for (const c of dc.topClusters.slice(0, 8)) md += `| ${c.size} | ${String(c.key || '').replace(/\|/g, ' / ')} |\n`;
@@ -1016,7 +1110,7 @@ function buildV930Markdown(report = {}) {
   md += line('Progress age', `${rw.progressAgeMin ?? 0} min / threshold ${rw.bootWatchdogMin ?? Math.round(BOOT_WATCHDOG_MS/60000)} min`) + '\n';
   md += line('Target pair-frames', rw.targetPairFrames ?? BOOT_WATCHDOG_TARGET_PAIRFRAMES) + '\n';
   md += line('Last action', rw.lastAction || '—') + '\n';
-  md += `\n> v9.4.0 note: Recovery Forward Core starts the forward watcher only when real OOS evidence produces WATCH_FORWARD/FULL_AUTONOMY_FORWARD. If no evidence exists, it reports NO_EVIDENCE_AVAILABLE clearly. It does not fabricate OOS, force entries, or bypass closed-candle/freshness safety.\n`;
+  md += `\n> v9.4.1 note: Live Paper Evidence Collector starts the forward watcher for verified or experimental paper candidates. If no historical OOS exists, it marks candidates NOT_OOS_VERIFIED and collects paper evidence. It does not fabricate OOS, force entries, or bypass closed-candle/freshness safety.\n`;
   return md;
 }
 
@@ -2467,10 +2561,14 @@ function computeForwardStatus(h = {}) {
   const lastForwardAgeMs = computeForwardAge(h.lastForwardRefresh);
   const stale = !!h.fwRunning && lastForwardAgeMs != null && lastForwardAgeMs > FORWARD_STALE_MS;
   const noLedger = n(h.paperSignals, 0) === 0 && n(h.openPositions, 0) === 0 && n(h.closedTrades, 0) === 0;
+  const pool = h.nativeForwardPool || lastNativeForwardPoolView || {};
+  const experimentalForward = n(pool.experimentalForward, 0);
   let status = 'IDLE';
   if (stale) status = 'STALE_FORWARD';
+  else if (h.fwRunning && experimentalForward > 0) status = 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE';
   else if (h.fwRunning && noLedger) status = 'WAITING_FOR_FRESH_CANDLE';
   else if (h.fwRunning) status = 'LIVE_FORWARD';
+  else if (experimentalForward > 0) status = 'EXPERIMENTAL_FORWARD_READY';
   else if (h.labRunning) status = 'LAB_RUNNING';
   return {
     forwardStatus: status,
@@ -2499,9 +2597,9 @@ function enhanceHealth(h = {}) {
   const monitored = n(out.candidatesMonitored ?? out.bootDiagnostics?.candidatesMonitored ?? out.candidates, 0);
   if (forward.forwardStale) out.status = 'STALE_FORWARD';
   if (!out.fwRunning && pairFrames >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && rawStrategies > 0 && monitored > 0 && eligibleForward === 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0) {
-    out.forwardStatus = 'NO_EVIDENCE_AVAILABLE';
+    out.forwardStatus = 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE';
     out.noEvidenceAvailable = true;
-    out.status = 'NO_EVIDENCE_AVAILABLE';
+    out.status = 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE';
   }
   out.runnerWatchdog = lastRunnerWatchdogView || buildRunnerWatchdogView(out);
   return out;
@@ -2586,7 +2684,7 @@ function buildRunnerWatchdogView(h = lastHealth || {}) {
       proxyOK: h.proxyOK ?? d.proxyOK ?? null,
       recentLogs: d.recentLogs || []
     },
-    rule: 'If Chromium remains LOADED/LAB_RUNNING with partial data, fwRunning=false, lastForwardRefresh=0, and no research/forward progress for the threshold window, Recovery Forward Core starts forward only for OOS-evidence candidates; otherwise it declares NO_EVIDENCE_AVAILABLE. It never fabricates trades or bypasses closed-candle/freshness safety.'
+    rule: 'If Chromium remains LOADED/LAB_RUNNING with partial data, fwRunning=false, lastForwardRefresh=0, and no research/forward progress for the threshold window, Live Paper Evidence Collector starts forward for verified or experimental paper candidates; candidates without historical OOS are marked NOT_OOS_VERIFIED and used only to collect paper evidence. It never fabricates trades or bypasses closed-candle/freshness safety.'
   };
 }
 
@@ -2612,9 +2710,9 @@ async function maybeRecoverStuckBoot(h = lastHealth || {}, options = {}) {
   const bridge = h.oosEvidenceBridge || lastOOSEvidenceBridgeView || {};
   const noEvidenceAvailable = n(diag.pairFrames, 0) >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && n(diag.rawResearchStrategies, 0) > 0 && (n(diag.candidatesMonitored, 0) > 0 || n(h.candidates, 0) > 0) && eligibleForward <= 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0;
   if (noEvidenceAvailable) {
-    lastRunnerWatchdogView = { ...view, state: 'NO_EVIDENCE_AVAILABLE', lastAction: 'HOLD_FORWARD_NO_OOS_EVIDENCE', actionSource, restarts: bootWatchdogRestarts };
-    lastRecoveryForwardCoreView = { ...(lastRecoveryForwardCoreView || {}), installed: true, version: FINAL_V930_VERSION, forwardDecision: 'NO_EVIDENCE_AVAILABLE', honestFailure: true, eligibleForwardCandidates: 0, oosEvidenceBridge: bridge, paperOnly: true, liveCapitalExecution: false };
-    log(`Recovery Forward Core honest hold: no real OOS evidence for forward candidates. pairFrames=${diag.pairFrames} rawStrategies=${diag.rawResearchStrategies} candidates=${n(h.candidates,0)}`);
+    lastRunnerWatchdogView = { ...view, state: 'WAITING_FOR_CANDIDATE_ROWS', lastAction: 'HOLD_NO_CANDIDATE_ROWS', actionSource, restarts: bootWatchdogRestarts };
+    lastRecoveryForwardCoreView = { ...(lastRecoveryForwardCoreView || {}), installed: true, version: FINAL_V930_VERSION, forwardDecision: 'WAITING_FOR_CANDIDATE_ROWS', honestFailure: false, eligibleForwardCandidates: 0, oosEvidenceBridge: bridge, paperOnly: true, liveCapitalExecution: false };
+    log(`Live Paper Evidence Collector waiting: no eligible candidate rows are available yet. pairFrames=${diag.pairFrames} rawStrategies=${diag.rawResearchStrategies} candidates=${n(h.candidates,0)}`);
     return false;
   }
   const hasReadyResearch = eligibleForward > 0;
@@ -3151,7 +3249,8 @@ async function installV930StableAutonomyInPage() {
           if (rows.length >= Number(policy.technicalCap || 360)) break;
         }
         const count = t => rows.filter(x => x.tier === t).length;
-        return { schema: 'alps.nativeForwardPool.view.v1', version: policy.version, installed: true, totalCandidates: rows.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'), blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'), evidenceLabels: Array.from(new Set(rows.flatMap(r => r.evidenceLabels || []))), candidates: rows.slice(0, 50) };
+        return { schema: 'alps.nativeForwardPool.view.v1', version: policy.version, installed: true, totalCandidates: rows.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), experimentalForward: count('EXPERIMENTAL_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
+    promotedToExperimental: count('EXPERIMENTAL_FORWARD'), blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'), evidenceLabels: Array.from(new Set(rows.flatMap(r => r.evidenceLabels || []))), candidates: rows.slice(0, 50) };
       }
       function patchPoolFunction(name) {
         try {
@@ -3245,7 +3344,7 @@ async function installV930StableAutonomyInPage() {
           const pair = text(c && (c.pair || c.baseSymbol || c.symbol || c.sym)).toUpperCase().split('_')[0];
           const tf = text(c && (c.timeframe || c.tf)).toUpperCase();
           const exit = text(c && (c.exit || c.exitName || '')).toUpperCase().replace(/[^A-Z0-9.]+/g, '_').slice(0, 24);
-          return [pair, tf, root(c), exit, 'PF' + round(c && c.oosPF, 2), 'OOS' + round(c && c.oosTrades, 0)].join('|');
+          return [pair, tf, root(c), exit].join('|');
         }
         function posterior(pf, nEff) { const p = num(pf, 0), n = Math.max(0, num(nEff, 0)); if (!(p > 0) || !(n > 0)) return 0; const z = Math.log(Math.max(p, 0.0001)) * Math.sqrt(Math.max(1, n)) / 1.15; return Math.max(0, Math.min(1, 1 / (1 + Math.exp(-z)))); }
         function metrics(c) {
@@ -3277,16 +3376,13 @@ async function installV930StableAutonomyInPage() {
           const s = safety(c || {}); const m = metrics(c || {}); const hasEvidence = hasMinEvidence(c || {}); const ls = labels(c || {}).concat(m.promote ? ['QUANT_PASS'] : [evidenceTier(c || {})]);
           if (s) return { tier: s === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: s, evidenceLabels: ls, quantitative: m };
           if (m.promote) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['PROMOTED_BY_AUTONOMY']), quantitative: m };
-          if (((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['MIN_EVIDENCE_PASS']), quantitative: m };
-          if (((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) && !hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['FORWARD_HELD_NO_OOS']), quantitative: m };
-          if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|')) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['MIN_EVIDENCE_PASS']), quantitative: m };
-          if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|'))) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['WAITING_FOR_MIN_EVIDENCE']), quantitative: m };
-          if (/DISCARD/i.test([c && c.rawVerdict, c && c.effectiveVerdict].map(text).join('|')) && hasEvidence) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['SANDBOX_RETEST']), quantitative: m };
-          return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: ls.concat(['NO_FORWARD_WITHOUT_OOS']), quantitative: m };
+          if (((c && c.forwardEligible === true) || /WATCHLIST|FORWARD/i.test(text(c && c.promotionTier))) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['MIN_EVIDENCE_PASS','OOS_VERIFIED_FORWARD']), quantitative: m };
+          if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c && c.rawVerdict, c && c.effectiveVerdict, c && c.robustnessFinal].map(text).join('|')) && hasEvidence) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['MIN_EVIDENCE_PASS','OOS_VERIFIED_FORWARD']), quantitative: m };
+          return { tier: 'EXPERIMENTAL_FORWARD', safetyReason: '', evidenceLabels: ls.concat(['NOT_OOS_VERIFIED','LIVE_PAPER_EVIDENCE_COLLECTION','EXPERIMENTAL_FORWARD']), quantitative: m };
         }
         function hasMinEvidence(c) { const m = metrics(c || {}); return m.oosPF > 0 && m.oosTrades >= 10; }
         function evidenceTier(c) { const m = metrics(c || {}); if (m.promote) return 'QUANT_PASS'; if (hasMinEvidence(c)) return 'EVIDENCE_READY'; return 'NO_OOS_EVIDENCE'; }
-        function rank(c) { const m = metrics(c); const dd = num(c && (c.oosDD ?? c.ddBps), 0); const evidenceBonus = hasMinEvidence(c) ? 1000 : -5000; const promotedBonus = m.promote ? 1500 : 0; return evidenceBonus + promotedBonus + num(c && c.score, 0) + m.posteriorPFgt1 * 100 + m.oosPF * 10 + m.nEffOOS * 0.4 + ((c && c.forwardEligible === true) ? 30 : 0) - dd / 5000; }
+        function rank(c) { const m = metrics(c); const dd = num(c && (c.oosDD ?? c.ddBps), 0); const evidenceBonus = hasMinEvidence(c) ? 1000 : 0; const promotedBonus = m.promote ? 1500 : 0; return evidenceBonus + promotedBonus + num(c && c.score, 0) + m.posteriorPFgt1 * 100 + m.oosPF * 10 + m.nEffOOS * 0.4 + ((c && c.forwardEligible === true) ? 30 : 0) - dd / 5000; }
         function dedup(rows) {
           const clusters = new Map();
           for (const c of arr(rows).filter(Boolean)) {
@@ -3303,35 +3399,37 @@ async function installV930StableAutonomyInPage() {
         }
         function sourceRows() { try { if (Array.isArray(globalThis.results) && globalThis.results.length) return globalThis.results; } catch (_) {} try { if (typeof results !== 'undefined' && Array.isArray(results) && results.length) return results; } catch (_) {} return []; }
         function promoteInPlace(c, cls) {
-          if (!c || !/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(text(cls && cls.tier))) return false;
+          if (!c || !/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(text(cls && cls.tier))) return false;
           const tier = text(cls.tier);
           c.__alpsV931Tier = tier; c.__alpsV931EvidenceLabels = cls.evidenceLabels; c.__alpsV931Quantitative = cls.quantitative; c.__alpsV931AuthoritativeForward = true;
           c.forwardEligible = true; c.eligible = true; c.forwardBlockReason = ''; c.blockReason = ''; c.promotionBlocked = false; c.promotionGateBlocked = false; c.promotionStatus = tier; c.promotionGateSummary = tier; c.candidateTier = tier;
           if (tier === 'FULL_AUTONOMY_FORWARD') c.promotionTier = 'FULL_AUTONOMY_FORWARD';
+          if (tier === 'EXPERIMENTAL_FORWARD') { c.promotionTier = 'EXPERIMENTAL_FORWARD'; c.__alpsLearningStage = 'LIVE_PAPER_EVIDENCE_COLLECTION'; c.__alpsNotOosVerified = true; }
           if (c.promotionGate && typeof c.promotionGate === 'object') { c.promotionGate.forwardEligible = true; c.promotionGate.eligible = true; c.promotionGate.blocked = false; c.promotionGate.blockReason = ''; c.promotionGate.reason = ''; c.promotionGate.status = tier; c.promotionGate.summary = tier; }
           return true;
         }
         function buildNativeFromRows(rows) {
           const d = dedup(rows); const out = []; const seen = new Set();
-          for (const tier of ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','RESEARCH_SANDBOX']) {
+          for (const tier of ['FULL_AUTONOMY_FORWARD','WATCH_FORWARD','EXPERIMENTAL_FORWARD','RESEARCH_SANDBOX']) {
             for (const c of d.rows) {
-              const ck = clusterKey(c); if (seen.has(ck)) continue; const cls = classify(c); if (cls.tier !== tier) continue; seen.add(ck); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(cls.tier)) promoteInPlace(c, cls);
+              const ck = clusterKey(c); if (seen.has(ck)) continue; const cls = classify(c); if (cls.tier !== tier) continue; seen.add(ck); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(cls.tier)) promoteInPlace(c, cls);
               out.push({ key: key(c), clusterKey: ck, clusterSize: Number(c.__alpsV931ClusterSize || 1), pair: c.pair || c.baseSymbol || text(c.sym).split('_')[0], timeframe: c.timeframe || '', strategy: c.strategy || c.stratName || '', exit: c.exit || c.exitName || '', tier: cls.tier, evidenceLabels: cls.evidenceLabels, safetyReason: cls.safetyReason, quantitative: cls.quantitative, oosPF: c.oosPF, oosTrades: c.oosTrades, score: c.score, originalPromotionTier: c.promotionTier, originalForwardEligible: c.forwardEligible === true, originalBlockReason: c.forwardBlockReason || '' });
-              if (out.length >= 20) break;
+              if (out.length >= Number(policy.technicalCap || 360)) break;
             }
-            if (out.length >= 20) break;
+            if (out.length >= Number(policy.technicalCap || 360)) break;
           }
           const count = t => out.filter(x => x.tier === t).length;
-          return { schema:'alps.nativeForwardPool.view.v1', version: policy.version, installed:true, poolViewCap:20, totalCandidates: out.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'), blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'), quantitativePromotion:{ installed:true, rule:'nEff_OOS>=25 AND P(PF>1)>=0.90 AND rolling/stress pass', passed: out.filter(x=>x.quantitative && x.quantitative.promote).length, thresholds:{ nEffOOS:25, posteriorPFgt1:0.90, rollingMinPF:0.60, fallbackPF:1.80, fallbackStress5:1.20 } }, duplicateCompression: d.stats, evidenceLabels: Array.from(new Set(out.flatMap(x=>x.evidenceLabels||[]))), candidates: out };
+          return { schema:'alps.nativeForwardPool.view.v1', version: policy.version, installed:true, poolViewCap:Number(policy.technicalCap || 360), totalCandidates: out.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), experimentalForward: count('EXPERIMENTAL_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
+    promotedToExperimental: count('EXPERIMENTAL_FORWARD'), blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'), quantitativePromotion:{ installed:true, rule:'nEff_OOS>=25 AND P(PF>1)>=0.90 AND rolling/stress pass', passed: out.filter(x=>x.quantitative && x.quantitative.promote).length, thresholds:{ nEffOOS:25, posteriorPFgt1:0.90, rollingMinPF:0.60, fallbackPF:1.80, fallbackStress5:1.20 } }, duplicateCompression: d.stats, evidenceLabels: Array.from(new Set(out.flatMap(x=>x.evidenceLabels||[]))), candidates: out };
         }
         function mutationGovernorFromReport(report) {
           const logs = arr(report && report.recentLogs); let z=0, c=0, m=0; for (const line of logs) { const t=text(line); if (/0 improvements/i.test(t)) { z++; c++; } const mm=t.match(/Missing Edge:\s*(\d+)\s*hypotheses/i); if (mm) m += Number(mm[1]||0); }
           const active = c >= 12 || z >= 12;
           return { schema:'alps.mutationGovernor.view.v1', version: policy.version, installed:true, mode: active ? 'EXPLORATION_REBALANCE' : 'NORMAL_MUTATION', active, zeroImprovementLogs:z, consecutiveZeroImprovement:c, missingEdgeGenerated:m, trigger: active ? 'ZERO_IMPROVEMENT_STAGNATION' : '', action: active ? 'Selection budget rebalanced to cluster representatives and under-covered hypotheses.' : 'Observe' };
         }
-        function applyNow() { let mutated=0; const native = buildNativeFromRows(sourceRows()); for (const c of sourceRows()) { const cls=classify(c); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(cls.tier) && promoteInPlace(c, cls)) mutated++; } status.nativeForwardPool = native; status.fullAutonomy = { schema:'alps.fullAutonomy.view.v1', version: policy.version, enabled:true, mode:'DECIDE_AND_ACT_PAPER_ONLY', paperOnly:true, liveCapitalExecution:false, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, decisions:[ native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} rows compressed`} : {action:'WAIT_FOR_EVIDENCE', reason:'Awaiting fresh closed-candle signal'} ], lastDecision: native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : 'WAIT_FOR_EVIDENCE', nativeForwardPool:{ totalCandidates:native.totalCandidates, promotedByFullAutonomy:native.promotedByFullAutonomy, blockedBySafety:native.blockedBySafety } }; status.nativeExecutionControl = { installed:true, authoritative:true, version:policy.version, mutatedCandidates:mutated, lastAppliedAt:Date.now(), rule:'Minimum-evidence rows are selected before dedup. PFNA/OOSNA rows remain RESEARCH_SANDBOX; only evidence-ready WATCH_FORWARD and quantitative FULL_AUTONOMY_FORWARD are written back as forward-eligible.' }; status.engineHook = { installed:true, safe:true, version:policy.version, lastError:status.lastError||'', wrappedFunctions:arr(status.wrappedFunctions), fallbackActive:!!status.fallbackActive, nativeExecutionControl:status.nativeExecutionControl }; status.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:status.mutationGovernor || null }; return native; }
+        function applyNow() { let mutated=0; const native = buildNativeFromRows(sourceRows()); for (const c of sourceRows()) { const cls=classify(c); if (/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(cls.tier) && promoteInPlace(c, cls)) mutated++; } status.nativeForwardPool = native; status.fullAutonomy = { schema:'alps.fullAutonomy.view.v1', version: policy.version, enabled:true, mode:'DECIDE_AND_ACT_PAPER_ONLY', paperOnly:true, liveCapitalExecution:false, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, decisions:[ native.experimentalForward ? {action:'EXPERIMENTAL_FORWARD_COLLECT_EVIDENCE', reason:`${native.experimentalForward} candidates are collecting paper evidence`} : (native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} rows compressed`} : {action:'WAIT_FOR_CANDIDATES', reason:'Awaiting candidate rows'}) ], lastDecision: native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : (native.experimentalForward ? 'EXPERIMENTAL_FORWARD_COLLECT_EVIDENCE' : 'WAIT_FOR_CANDIDATES'), nativeForwardPool:{ totalCandidates:native.totalCandidates, promotedByFullAutonomy:native.promotedByFullAutonomy, blockedBySafety:native.blockedBySafety } }; status.nativeExecutionControl = { installed:true, authoritative:true, version:policy.version, mutatedCandidates:mutated, lastAppliedAt:Date.now(), rule:'v9.4.1 writes EXPERIMENTAL_FORWARD candidates back as forward-eligible for paper evidence collection. They remain NOT_OOS_VERIFIED until real OOS/paper evidence promotes them.' }; status.engineHook = { installed:true, safe:true, version:policy.version, lastError:status.lastError||'', wrappedFunctions:arr(status.wrappedFunctions), fallbackActive:!!status.fallbackActive, nativeExecutionControl:status.nativeExecutionControl }; status.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, livePaperEvidenceCollector:{ installed:true, experimentalForward:native.experimentalForward||0, mode:native.experimentalForward?'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE':'WAITING_FOR_CANDIDATES' }, mutationGovernor:status.mutationGovernor || null }; return native; }
         function patchPool(name) {
-          try { const original = globalThis[name] || window[name]; if (typeof original !== 'function' || original.__alpsV931Wrapped) return false; const wrapped = function(...args) { try { const base = arr(original.apply(this,args)); const combined = base.concat(sourceRows()); const native = buildNativeFromRows(combined); const out = native.candidates.map(x => Object.assign({}, combined.find(c => key(c) === x.key) || {}, { __alpsV931Tier:x.tier, forwardEligible:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(x.tier), forwardBlockReason:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD)$/.test(x.tier)?'':(x.originalBlockReason||''), candidateTier:x.tier, promotionStatus:x.tier, promotionGateSummary:x.tier })); status.nativeForwardPool = native; return out.slice(0, Number(policy.technicalCap || 360)); } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return original.apply(this,args); } }; wrapped.__alpsV931Wrapped = true; try { globalThis[name]=wrapped; } catch(_) { window[name]=wrapped; } if (!status.wrappedFunctions.includes(name+':v931')) status.wrappedFunctions.push(name+':v931'); return true; } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return false; }
+          try { const original = globalThis[name] || window[name]; if (typeof original !== 'function' || original.__alpsV931Wrapped) return false; const wrapped = function(...args) { try { const base = arr(original.apply(this,args)); const combined = base.concat(sourceRows()); const native = buildNativeFromRows(combined); const out = native.candidates.map(x => Object.assign({}, combined.find(c => key(c) === x.key) || {}, { __alpsV931Tier:x.tier, forwardEligible:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(x.tier), forwardBlockReason:/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(x.tier)?'':(x.originalBlockReason||''), candidateTier:x.tier, promotionStatus:x.tier, promotionGateSummary:x.tier })); status.nativeForwardPool = native; return out.slice(0, Number(policy.technicalCap || 360)); } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return original.apply(this,args); } }; wrapped.__alpsV931Wrapped = true; try { globalThis[name]=wrapped; } catch(_) { window[name]=wrapped; } if (!status.wrappedFunctions.includes(name+':v931')) status.wrappedFunctions.push(name+':v931'); return true; } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; return false; }
         }
         patchPool('forwardCandidatePool'); patchPool('activeForwardCandidatePool');
         try { const originalReport = globalThis.buildRunReportObject || window.buildRunReportObject; if (typeof originalReport === 'function' && !originalReport.__alpsV931Wrapped) { const wrappedReport = async function(...args) { const report = await originalReport.apply(this,args); try { const native = buildNativeFromRows(arr(report && report.research && report.research.topStrategies).length ? report.research.topStrategies : sourceRows()); const mg = mutationGovernorFromReport(report); status.mutationGovernor = mg; status.nativeForwardPool = native; report.nativeForwardPool = native; report.fullAutonomyNativeForwardPool = native; report.mutationGovernor = mg; report.decisionIntelligence = { schema:'alps.decisionIntelligence.view.v1', version:policy.version, duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:mg }; report.fullAutonomy = Object.assign({}, status.fullAutonomy || {}, { version:policy.version, enabled:true, paperOnly:true, liveCapitalExecution:false, decisions:[ native.duplicateCompression.compressedRows ? {action:'DEDUP_FORWARD_POOL', reason:`${native.duplicateCompression.compressedRows} duplicate rows compressed before forward pool.`} : {action:'WAIT_FOR_EVIDENCE', reason:'No compression required.'}, mg.active ? {action:'REBUILD', reason:'Mutation stagnation moved selection to exploration representatives.'} : null ].filter(Boolean), lastDecision: mg.active ? 'EXPLORATION_REBALANCE' : (native.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_QUANT_PASS' : 'WAIT_FOR_EVIDENCE'), duplicateCompression:native.duplicateCompression, quantitativePromotion:native.quantitativePromotion, mutationGovernor:mg }); report.nativeExecutionControl = status.nativeExecutionControl; report.engineHook = status.engineHook; } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; } return report; }; wrappedReport.__alpsV931Wrapped = true; globalThis.buildRunReportObject = wrappedReport; if (!status.wrappedFunctions.includes('buildRunReportObject:v931')) status.wrappedFunctions.push('buildRunReportObject:v931'); } } catch(err) { status.lastError=String(err&&err.message||err); status.fallbackActive=true; }
@@ -3551,12 +3649,12 @@ async function applyOosEvidenceBridgeToPage(reason = 'apply') {
   } catch (e) { log(`OOS evidence bridge page apply failed (${reason}):`, e.message); return { mutated: 0, error: e.message }; }
 }
 
-async function startForwardIfEligible(reason = 'recovery-forward-core') {
+async function startForwardIfEligible(reason = 'live-paper-evidence-collector') {
   const pool = lastNativeForwardPoolView || lastHealth?.nativeForwardPool || {}; const eligible = v94ForwardEligibleCountFromView(pool);
   if (!eligible || !page || page.isClosed()) return false;
   const h = await getPageHealth().catch(() => lastHealth || {}); if (h?.fwRunning || h?.emergencyStopActive) return !!h?.fwRunning;
-  log(`Recovery Forward Core starting Browser Runner. eligibleForward=${eligible} reason=${reason}`);
-  await pageEval(async reasonText => { try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {} try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {} try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {} try { if (typeof startWatch === 'function') await startWatch(); } catch (_) {} try { if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText || 'recovery-forward-core'); } catch (_) {} try { if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false); } catch (_) {} try { if (typeof renderAll === 'function') renderAll(); } catch (_) {} return true; }, reason).catch(e => log('Recovery Forward Core startWatch failed:', e.message));
+  log(`Live Paper Evidence Collector starting Browser Runner. eligibleForward=${eligible} reason=${reason}`);
+  await pageEval(async reasonText => { try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {} try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {} try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {} try { if (typeof startWatch === 'function') await startWatch(); } catch (_) {} try { if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText || 'live-paper-evidence-collector'); } catch (_) {} try { if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false); } catch (_) {} try { if (typeof renderAll === 'function') renderAll(); } catch (_) {} return true; }, reason).catch(e => log('Live Paper Evidence Collector startWatch failed:', e.message));
   return true;
 }
 
@@ -3713,7 +3811,7 @@ async function ensureRuntimeStarted() {
   if (AUTO_START_WATCH && eligibleForward > 0 && !refreshed.fwRunning && !refreshed.emergencyStopActive) {
     await startForwardIfEligible('ensure-runtime-eligible-forward');
   } else if (AUTO_START_WATCH && refreshed.candidates && eligibleForward <= 0) {
-    log(`Recovery Forward Core holding forward start: candidates=${refreshed.candidates}, eligibleForward=${eligibleForward}. No PFNA/OOSNA rows are admitted.`);
+    log(`Live Paper Evidence Collector holding forward start: candidates=${refreshed.candidates}, eligibleForward=${eligibleForward}. No PFNA/OOSNA rows are admitted.`);
   }
 }
 
@@ -3747,7 +3845,7 @@ async function runnerTick(reason = 'server-runner tick') {
     }
 
     const after = enhanceHealth(await getPageHealth());
-    Object.assign(lastHealth, after, { status: after.forwardStale ? 'STALE_FORWARD' : (after.fwRunning ? 'RUNNING' : (after.labRunning ? 'LAB_RUNNING' : 'READY')), lastTickAt: Date.now(), lastError: '' });
+    Object.assign(lastHealth, after, { status: after.status || (after.forwardStale ? 'STALE_FORWARD' : (after.fwRunning ? 'RUNNING' : (after.labRunning ? 'LAB_RUNNING' : 'READY'))), lastTickAt: Date.now(), lastError: '' });
     await maybeRecoverStuckBoot(lastHealth);
     await recordSnapshot(snapshotFromMetrics(lastHealth, 'tick'));
     await maybeRecoverStaleForward();
@@ -3820,7 +3918,7 @@ async function collectReport() {
   lastReportMarkdown = md;
   try {
     const reportHealth = enhanceHealth(await getPageHealth());
-    Object.assign(lastHealth, reportHealth, { status: reportHealth.forwardStale ? 'STALE_FORWARD' : (reportHealth.fwRunning ? 'RUNNING' : (reportHealth.labRunning ? 'LAB_RUNNING' : 'LOADED')), lastError: '' });
+    Object.assign(lastHealth, reportHealth, { status: reportHealth.status || (reportHealth.forwardStale ? 'STALE_FORWARD' : (reportHealth.fwRunning ? 'RUNNING' : (reportHealth.labRunning ? 'LAB_RUNNING' : 'LOADED'))), lastError: '' });
     await maybeRecoverStuckBoot(lastHealth, { source: 'collect-report-action-executor' }).catch(e => log('Runner watchdog action from report failed:', e.message));
   } catch (e) {
     log('Runner watchdog report health refresh skipped:', e.message);
