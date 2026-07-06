@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.3.1.1 Evidence-Gated Decision Intelligence
+ * ALPS Server Runner — v9.3.1.2 Runner Watchdog
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
+const RECOVERY_PATCH_VERSION = 'v9.3.1.2-runner-watchdog';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
+const COGNITION_PATCH_VERSION = 'v9.3.1.2-runner-watchdog';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
+const AUTONOMY_PATCH_VERSION = 'v9.3.1.2-runner-watchdog';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -285,6 +285,12 @@ const MAX_SNAPSHOT_HISTORY = Number(process.env.ALPS_SNAPSHOT_HISTORY_LIMIT || 5
 const AUTO_RELOAD_STALE_FORWARD = String(process.env.ALPS_AUTO_RELOAD_STALE_FORWARD || '1') !== '0';
 const STALE_RECOVERY_COOLDOWN_MS = Number(process.env.ALPS_STALE_RECOVERY_COOLDOWN_MS || 30 * 60 * 1000);
 const RESET_PROFILE_ON_LAUNCH_ERROR = String(process.env.ALPS_RESET_PROFILE_ON_LAUNCH_ERROR || '1') !== '0';
+const AUTO_BOOT_WATCHDOG = String(process.env.ALPS_BOOT_WATCHDOG || '1') !== '0';
+const BOOT_WATCHDOG_MS = Number(process.env.ALPS_BOOT_WATCHDOG_MS || 10 * 60 * 1000);
+const BOOT_WATCHDOG_COOLDOWN_MS = Number(process.env.ALPS_BOOT_WATCHDOG_COOLDOWN_MS || 8 * 60 * 1000);
+const BOOT_WATCHDOG_TARGET_PAIRFRAMES = Number(process.env.ALPS_BOOT_WATCHDOG_TARGET_PAIRFRAMES || 35);
+const BOOT_WATCHDOG_MIN_PAIRFRAMES = Number(process.env.ALPS_BOOT_WATCHDOG_MIN_PAIRFRAMES || 1);
+const BOOT_WATCHDOG_MIN_BOOT_AGE_MS = Number(process.env.ALPS_BOOT_WATCHDOG_MIN_BOOT_AGE_MS || 8 * 60 * 1000);
 
 
 let staticBaseUrl = '';
@@ -325,11 +331,16 @@ let recoveryState = null;
 let lastStaleRecoveryAt = 0;
 let lastLaunchError = null;
 let launchAttempts = 0;
+let lastBootProgressSignature = '';
+let lastBootProgressAt = Date.now();
+let lastBootWatchdogAt = 0;
+let bootWatchdogRestarts = 0;
+let lastRunnerWatchdogView = null;
 
 
-// ALPS v9.3.1.1 Evidence-Gated Decision Intelligence
+// ALPS v9.3.1.2 Runner Watchdog
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.3.1.1-evidence-gated-decision-intelligence';
+const FINAL_V930_VERSION = 'v9.3.1.2-runner-watchdog';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -532,7 +543,7 @@ function buildChartView(report = {}) {
 }
 
 
-// ALPS v9.3.1.1 Evidence-Gated Decision Intelligence
+// ALPS v9.3.1.2 Runner Watchdog
 // Adds three decision-layer controls above the stable v9.3.0 runtime:
 // 1) minimum-evidence gate BEFORE cluster dedup, 2) cluster dedup before the forward pool,
 // 3) quantitative FULL_AUTONOMY_FORWARD promotion, 4) mutation stagnation governor that moves selection budget to exploration.
@@ -780,7 +791,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     mutationGovernor,
     evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
     candidates: selected.slice(0, 50),
-    note: 'v9.3.1.1: minimum OOS evidence is required before WATCH_FORWARD. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; dedup then selects cluster representatives; quantitative promotion is explicit.'
+    note: 'v9.3.1.2: minimum OOS evidence is required before WATCH_FORWARD, and the runner watchdog restarts stuck Chromium boot/loading sessions. PFNA/OOSNA rows stay in RESEARCH_SANDBOX; dedup then selects cluster representatives; quantitative promotion is explicit.'
   };
 }
 function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
@@ -832,6 +843,7 @@ function enrichReportV930(report = {}, pageStatus = null) {
   report.circuitBreaker = circuitBreaker;
   report.chart = chart;
   report.v930 = { version: FINAL_V930_VERSION, dataSource: 'LIVE SNAPSHOT', liveCapitalExecution: false, appStableBase: 'v9.2.2-persistent-autonomous-memory' };
+  report.runnerWatchdog = buildRunnerWatchdogView(lastHealth || {});
   lastNativeForwardPoolView = nativeView;
   lastFullAutonomyView = fullAutonomy;
   lastEngineHookView = engineHook;
@@ -848,7 +860,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1.1 Evidence-Gated Decision Intelligence\n`;
+  let md = `## ALPS v9.3.1.2 Runner Watchdog\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -890,7 +902,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.3.1.1 Evidence-Gated Decision Intelligence\n`;
+  let md = `## ALPS v9.3.1.2 Runner Watchdog\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -928,7 +940,15 @@ function buildV930Markdown(report = {}) {
   md += line('Selected pair', ch.selectedPair) + '\n';
   md += line('Selected timeframe', ch.selectedTimeframe) + '\n';
   md += line('Candles loaded', ch.candlesLoaded) + '\n';
-  md += `\n> v9.3.1 note: the pool is deduped before forward selection, FULL_AUTONOMY_FORWARD requires explicit quantitative evidence, and stagnant mutation cycles trigger exploration rebalancing. Operational safety remains a hard boundary.\n`;
+  const rw = report.runnerWatchdog || buildRunnerWatchdogView(lastHealth || {});
+  md += `\n### Runner Watchdog\n`;
+  md += line('Installed', rw.installed ? 'YES' : 'NO') + '\n';
+  md += line('State', rw.state || '—') + '\n';
+  md += line('Restarts', rw.restarts ?? 0) + '\n';
+  md += line('Progress age', `${rw.progressAgeMin ?? 0} min / threshold ${rw.bootWatchdogMin ?? Math.round(BOOT_WATCHDOG_MS/60000)} min`) + '\n';
+  md += line('Target pair-frames', rw.targetPairFrames ?? BOOT_WATCHDOG_TARGET_PAIRFRAMES) + '\n';
+  md += line('Last action', rw.lastAction || '—') + '\n';
+  md += `\n> v9.3.1.2 note: the pool remains evidence-gated, and Runner Watchdog only restarts stuck Chromium loading/research sessions. It does not fabricate trades, force entries, or bypass closed-candle/freshness safety.\n`;
   return md;
 }
 
@@ -2403,7 +2423,140 @@ function enhanceHealth(h = {}) {
   if (!out.circuitBreaker && lastCircuitBreakerView) out.circuitBreaker = lastCircuitBreakerView;
   if (!out.chart && lastChartView) out.chart = lastChartView;
   if (forward.forwardStale) out.status = 'STALE_FORWARD';
+  out.runnerWatchdog = lastRunnerWatchdogView || buildRunnerWatchdogView(out);
   return out;
+}
+
+function bootProgressSignature(h = {}) {
+  const d = h.bootDiagnostics || {};
+  return [
+    h.fwRunning ? 'fw1' : 'fw0',
+    n(h.lastForwardRefresh, 0),
+    n(h.dataPairFrames ?? d.pairFrames, 0),
+    n(h.candlesLoaded ?? d.candlesLoaded, 0),
+    n(h.rawResearchStrategies ?? d.researchStrategies, 0),
+    n(h.rawResearchCycles ?? d.researchCycles, 0),
+    n(h.candidatesMonitored ?? d.candidatesMonitored, 0),
+    n(h.totalGeneratedStrategies ?? d.totalGeneratedStrategies, 0),
+    n(h.results, 0),
+    String(h.runnerStateStatus || d.runnerStateStatus || '')
+  ].join('|');
+}
+
+function isBootOrLabStuckCandidate(h = {}) {
+  const d = h.bootDiagnostics || {};
+  const pairFrames = n(h.dataPairFrames ?? d.pairFrames, 0);
+  const candlesLoaded = n(h.candlesLoaded ?? d.candlesLoaded, 0);
+  const rawStrategies = n(h.rawResearchStrategies ?? d.researchStrategies, 0);
+  const cycles = n(h.rawResearchCycles ?? d.researchCycles, 0);
+  const monitored = n(h.candidatesMonitored ?? d.candidatesMonitored, 0);
+  const generated = n(h.totalGeneratedStrategies ?? d.totalGeneratedStrategies, 0);
+  const noForwardStarted = !h.fwRunning && !h.fwRefreshRunning && !n(h.lastForwardRefresh, 0);
+  const hasPartialData = pairFrames >= BOOT_WATCHDOG_MIN_PAIRFRAMES || candlesLoaded > 0;
+  const incompleteData = pairFrames > 0 && pairFrames < BOOT_WATCHDOG_TARGET_PAIRFRAMES;
+  const noResearchProgress = rawStrategies === 0 && cycles === 0 && monitored === 0 && generated === 0;
+  const pausedRunner = String(h.runnerStateStatus || d.runnerStateStatus || '').toLowerCase() === 'paused';
+  return AUTO_BOOT_WATCHDOG && hasPartialData && noForwardStarted && (incompleteData || noResearchProgress || pausedRunner);
+}
+
+function updateBootProgress(h = {}) {
+  const sig = bootProgressSignature(h);
+  if (!lastBootProgressSignature || sig !== lastBootProgressSignature) {
+    lastBootProgressSignature = sig;
+    lastBootProgressAt = Date.now();
+  }
+  return sig;
+}
+
+function buildRunnerWatchdogView(h = lastHealth || {}) {
+  const d = h.bootDiagnostics || {};
+  const pairFrames = n(h.dataPairFrames ?? d.pairFrames, 0);
+  const candlesLoaded = n(h.candlesLoaded ?? d.candlesLoaded, 0);
+  const rawStrategies = n(h.rawResearchStrategies ?? d.researchStrategies, 0);
+  const monitored = n(h.candidatesMonitored ?? d.candidatesMonitored, 0);
+  const ageMs = Math.max(0, Date.now() - (lastBootProgressAt || Date.now()));
+  const stuckCandidate = isBootOrLabStuckCandidate(h);
+  const shouldRestart = stuckCandidate && ageMs >= BOOT_WATCHDOG_MS && Date.now() - lastBootWatchdogAt >= BOOT_WATCHDOG_COOLDOWN_MS;
+  return {
+    schema: 'alps.runnerWatchdog.view.v1',
+    version: RECOVERY_PATCH_VERSION,
+    installed: true,
+    active: AUTO_BOOT_WATCHDOG,
+    state: h.fwRunning ? 'FORWARD_RUNNING' : (shouldRestart ? 'RESTART_DUE' : (stuckCandidate ? 'WATCHING_BOOT_PROGRESS' : 'OBSERVE')),
+    lastAction: lastRunnerWatchdogView?.lastAction || '',
+    restarts: bootWatchdogRestarts,
+    progressAgeMs: ageMs,
+    progressAgeMin: Math.round(ageMs / 60000),
+    bootWatchdogMs: BOOT_WATCHDOG_MS,
+    bootWatchdogMin: Math.round(BOOT_WATCHDOG_MS / 60000),
+    cooldownMs: BOOT_WATCHDOG_COOLDOWN_MS,
+    targetPairFrames: BOOT_WATCHDOG_TARGET_PAIRFRAMES,
+    diagnostics: {
+      status: h.status || '',
+      forwardStatus: h.forwardStatus || '',
+      fwRunning: !!h.fwRunning,
+      labRunning: !!h.labRunning,
+      lastForwardRefresh: n(h.lastForwardRefresh, 0),
+      pairFrames,
+      candlesLoaded,
+      dataPairs: h.dataPairs || d.pairs || [],
+      rawResearchStrategies: rawStrategies,
+      candidatesMonitored: monitored,
+      runnerStateStatus: h.runnerStateStatus || d.runnerStateStatus || '',
+      proxyOK: h.proxyOK ?? d.proxyOK ?? null,
+      recentLogs: d.recentLogs || []
+    },
+    rule: 'If Chromium remains LOADED/LAB_RUNNING with partial data, fwRunning=false, lastForwardRefresh=0, and no research/forward progress for the threshold window, reload the page and restart research safely. It never fabricates trades or bypasses closed-candle/freshness safety.'
+  };
+}
+
+async function maybeRecoverStuckBoot(h = lastHealth || {}) {
+  updateBootProgress(h);
+  const view = buildRunnerWatchdogView(h);
+  lastRunnerWatchdogView = view;
+  if (!AUTO_BOOT_WATCHDOG || !isBootOrLabStuckCandidate(h)) return false;
+  if (Date.now() - (lastHealth.startedAt || Date.now()) < BOOT_WATCHDOG_MIN_BOOT_AGE_MS) return false;
+  if (view.progressAgeMs < BOOT_WATCHDOG_MS) return false;
+  if (Date.now() - lastBootWatchdogAt < BOOT_WATCHDOG_COOLDOWN_MS) return false;
+
+  lastBootWatchdogAt = Date.now();
+  bootWatchdogRestarts += 1;
+  lastRunnerWatchdogView = { ...view, state: 'RESTARTING_CHROMIUM_PAGE', lastAction: 'RELOAD_STUCK_BOOT_OR_LAB' };
+  log(`Runner watchdog recovery: stuck boot/lab detected. pairFrames=${view.diagnostics.pairFrames}/${BOOT_WATCHDOG_TARGET_PAIRFRAMES} candles=${view.diagnostics.candlesLoaded} rawStrategies=${view.diagnostics.rawResearchStrategies} monitored=${view.diagnostics.candidatesMonitored}`);
+
+  try { await collectReport().catch(() => null); } catch (_) {}
+
+  try {
+    if (page && !page.isClosed()) {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 120_000 }).catch(e => log('Runner watchdog page reload failed:', e.message));
+      await page.waitForLoadState('load', { timeout: 120_000 }).catch(() => null);
+      await page.waitForFunction(() => typeof buildRunReportObject === 'function' || typeof startLab === 'function' || typeof startWatch === 'function', null, { timeout: 120_000 }).catch(() => null);
+    } else {
+      await launchAppPage({ allowProfileReset: false });
+    }
+    await installV930StableAutonomyInPage().catch(e => log('Runner watchdog autonomy reinstall failed:', e.message));
+    await pageEval(async () => {
+      try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {}
+      try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {}
+      try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {}
+      try {
+        // Restart research only; do not force paper entries. Browser Runner starts later only after real candidates exist.
+        if (typeof startLab === 'function' && !globalThis.labRunning) startLab();
+      } catch (_) {}
+      return true;
+    }).catch(e => log('Runner watchdog runtime restart hook failed:', e.message));
+    const fresh = enhanceHealth(await getPageHealth());
+    updateBootProgress(fresh);
+    Object.assign(lastHealth, fresh, { status: 'WATCHDOG_RECOVERING', lastTickAt: Date.now(), lastError: '' });
+    lastRunnerWatchdogView = { ...buildRunnerWatchdogView(lastHealth), lastAction: 'RELOADED_AND_RESTARTED_RESEARCH' };
+    await recordSnapshot(snapshotFromMetrics(lastHealth, 'runner-watchdog-recovery')).catch(() => null);
+    return true;
+  } catch (e) {
+    lastHealth.lastError = `Runner watchdog recovery failed: ${e.message}`;
+    lastRunnerWatchdogView = { ...lastRunnerWatchdogView, state: 'RECOVERY_ERROR', lastAction: 'RECOVERY_FAILED', error: e.message };
+    log(lastHealth.lastError);
+    return false;
+  }
 }
 
 function buildRecoveryView() {
@@ -2504,8 +2657,9 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) } }); }
+      if (url.pathname === '/runner/health') { await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}) }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
+      if (url.pathname === '/runner/watchdog') { return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/export-recovery-state') { await loadRecoveryState(); return send(res, 200, recoveryState); }
       if (url.pathname === '/runner/import-recovery-state' && req.method === 'POST') {
@@ -3157,11 +3311,26 @@ async function pageEval(fn, arg) {
 }
 
 async function getPageHealth() {
-  return pageEval(() => {
+  return pageEval(async () => {
     function val(expr, fallback) { try { return expr(); } catch (_) { return fallback; } }
+    function num(x, fallback = 0) { const v = Number(x); return Number.isFinite(v) ? v : fallback; }
     const closed = val(() => closedTrades || [], []);
     const wins = closed.filter(x => Number(x.pnl || 0) > 0).length;
     const losses = closed.filter(x => Number(x.pnl || 0) <= 0).length;
+
+    let diagReport = null;
+    try {
+      if (typeof buildRunReportObject === 'function') diagReport = await buildRunReportObject();
+    } catch (_) {
+      diagReport = null;
+    }
+    const data = diagReport && typeof diagReport === 'object' ? (diagReport.data || {}) : {};
+    const research = diagReport && typeof diagReport === 'object' ? (diagReport.research || {}) : {};
+    const fw = diagReport && typeof diagReport === 'object' ? (diagReport.forwardWatch || {}) : {};
+    const runtime = diagReport && typeof diagReport === 'object' ? (diagReport.runtime || {}) : {};
+    const rawPairs = Array.isArray(data.pairs) ? data.pairs : [];
+    const recentLogs = Array.isArray(diagReport?.recentLogs) ? diagReport.recentLogs.slice(0, 12) : [];
+
     return {
       appVersion: val(() => APP_VERSION, ''),
       fwRunning: val(() => !!fwRunning, false),
@@ -3191,7 +3360,32 @@ async function getPageHealth() {
       chart: val(() => window.__ALPS_FINAL_V930__?.chart || null, null),
       mutationGovernor: val(() => window.__ALPS_FINAL_V930__?.mutationGovernor || null, null),
       decisionIntelligence: val(() => window.__ALPS_FINAL_V930__?.decisionIntelligence || null, null),
-      dataSource: 'LIVE SNAPSHOT'
+      dataSource: 'LIVE SNAPSHOT',
+      candlesLoaded: num(data.candlesLoaded, 0),
+      dataPairFrames: num(data.pairFrames, 0),
+      dataPairs: rawPairs,
+      dataPairCount: rawPairs.length,
+      rawResearchStrategies: num(research.strategies, 0),
+      rawResearchCycles: num(research.researchCycles, 0),
+      rawMutationRounds: num(research.mutationRounds, 0),
+      candidatesMonitored: num(fw.candidatesMonitored, 0),
+      totalGeneratedStrategies: num(fw.totalGeneratedStrategies, 0),
+      latestClosedCandleTs: fw?.freshness?.latestClosedCandleTs || null,
+      runnerStateStatus: runtime?.runnerState?.status || '',
+      proxyOK: runtime?.proxyOK ?? null,
+      bootDiagnostics: {
+        pairFrames: num(data.pairFrames, 0),
+        candlesLoaded: num(data.candlesLoaded, 0),
+        pairs: rawPairs,
+        researchStrategies: num(research.strategies, 0),
+        researchCycles: num(research.researchCycles, 0),
+        candidatesMonitored: num(fw.candidatesMonitored, 0),
+        totalGeneratedStrategies: num(fw.totalGeneratedStrategies, 0),
+        runnerStateStatus: runtime?.runnerState?.status || '',
+        proxyOK: runtime?.proxyOK ?? null,
+        reportGeneratedAt: diagReport?.meta?.generatedAt || null,
+        recentLogs
+      }
     };
   });
 }
@@ -3377,6 +3571,7 @@ async function runnerTick(reason = 'server-runner tick') {
 
     const after = enhanceHealth(await getPageHealth());
     Object.assign(lastHealth, after, { status: after.forwardStale ? 'STALE_FORWARD' : (after.fwRunning ? 'RUNNING' : (after.labRunning ? 'LAB_RUNNING' : 'READY')), lastTickAt: Date.now(), lastError: '' });
+    await maybeRecoverStuckBoot(lastHealth);
     await recordSnapshot(snapshotFromMetrics(lastHealth, 'tick'));
     await maybeRecoverStaleForward();
     await maybeNotify(lastHealth);
@@ -3499,6 +3694,7 @@ async function runCommand(command, args = {}) {
   if (command === 'autonomy') { await collectReport().catch(() => null); return { ok: true, autonomousBridge: lastAutonomyView || autonomyState?.lastView || null }; }
   if (command === 'recovery') { await loadRecoveryState(); return { ok: true, recovery: buildRecoveryView(), state: recoveryState }; }
   if (command === 'recover-forward') { lastHealth = enhanceHealth({ ...lastHealth, forwardStale: true }); await maybeRecoverStaleForward(); return { ok: true, health: lastHealth, recovery: buildRecoveryView() }; }
+  if (command === 'watchdog') { await maybeRecoverStuckBoot(lastHealth || {}); return { ok: true, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}), health: lastHealth }; }
   if (command === 'reload') {
     await page.reload({ waitUntil: 'domcontentloaded' });
     await ensureRuntimeStarted();
