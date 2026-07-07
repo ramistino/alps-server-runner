@@ -330,6 +330,8 @@ let autonomyMemoryState = null;
 let lastAutonomyView = null;
 let lastNotifyCounts = { paperSignals: 0, closedTrades: 0, openPositions: 0 };
 let tickBusy = false;
+let shuttingDown = false;
+let runnerInterval = null;
 let recoveryState = null;
 let lastStaleRecoveryAt = 0;
 let lastLaunchError = null;
@@ -3497,6 +3499,31 @@ function errorInfo(err) {
   };
 }
 
+function isPageClosedRuntimeError(err) {
+  const message = String(err && err.message ? err.message : (err || ''));
+  return /Target page, context or browser has been closed|Execution context was destroyed|Cannot find context with specified id|Protocol error.*Target closed|Page closed|Browser has been closed|ALPS page closed during evaluation/i.test(message);
+}
+
+async function markPageClosedForRelaunch(reason, err) {
+  if (shuttingDown) return;
+  const info = errorInfo(err || new Error(reason || 'page closed'));
+  Object.assign(lastHealth, {
+    status: 'PAGE_CLOSED_RELAUNCH_PENDING',
+    pageReady: false,
+    lastError: `PAGE_CLOSED_RELAUNCH_PENDING: ${info.message}`,
+    pageLifecycleRecovery: {
+      installed: true,
+      version: FINAL_V930_VERSION,
+      reason: String(reason || 'page-closed'),
+      capturedAt: Date.now(),
+      error: info
+    }
+  });
+  try { if (context) await context.close(); } catch (_) {}
+  context = null;
+  page = null;
+}
+
 async function closeBrowserContextSafe() {
   try { if (context) await context.close(); } catch (_) {}
   context = null;
@@ -6314,7 +6341,30 @@ async function launchAppPage(options = {}) {
       await closeBrowserContextSafe();
       log(`Launching ALPS Chromium context. attempt=${attempt} profile=${PROFILE_DIR}`);
       context = await chromium.launchPersistentContext(PROFILE_DIR, launchArgs);
+      try {
+        context.on('close', () => {
+          if (shuttingDown) return;
+          Object.assign(lastHealth, {
+            status: 'PAGE_CONTEXT_CLOSED',
+            pageReady: false,
+            lastError: 'Chromium browser context closed; next tick will relaunch.'
+          });
+          context = null;
+          page = null;
+        });
+      } catch (_) {}
       page = context.pages()[0] || await context.newPage();
+      try {
+        page.on('close', () => {
+          if (shuttingDown) return;
+          Object.assign(lastHealth, {
+            status: 'PAGE_CLOSED_RELAUNCH_PENDING',
+            pageReady: false,
+            lastError: 'Chromium page closed; next tick will relaunch before page.evaluate.'
+          });
+          page = null;
+        });
+      } catch (_) {}
       page.on('console', msg => {
         const text = msg.text();
         if (/ALPS|PAPER SIGNAL|Runner|error|failed|Wake|catch-up/i.test(text)) log('[page]', text.slice(0, 500));
@@ -6359,8 +6409,20 @@ async function launchAppPage(options = {}) {
 }
 
 async function pageEval(fn, arg) {
-  if (!page) throw new Error('ALPS page is not ready');
-  return page.evaluate(fn, arg);
+  if (shuttingDown) throw new Error('ALPS runner is shutting down');
+  if (!page || page.isClosed()) {
+    page = null;
+    throw new Error('ALPS page is not ready');
+  }
+  try {
+    return await page.evaluate(fn, arg);
+  } catch (e) {
+    if (isPageClosedRuntimeError(e)) {
+      await markPageClosedForRelaunch('pageEval-target-page-closed', e);
+      throw new Error('ALPS page closed during evaluation; relaunch required');
+    }
+    throw e;
+  }
 }
 
 async function getPageHealth() {
@@ -7436,6 +7498,11 @@ async function collectPageTradeLedgers() {
 }
 
 async function ensureRuntimeStarted() {
+  if (shuttingDown) return;
+  if (!page || page.isClosed()) {
+    const relaunched = await launchAppPage({ allowProfileReset: false });
+    if (!relaunched) throw new Error(lastHealth.lastError || 'PAGE_RELAUNCH_FAILED_BEFORE_RUNTIME');
+  }
   await loadForwardLatchState().catch(() => null);
   await v1000InstallPageAuthorityHooks('ensure-runtime-start').catch(e => log('v10 state authority hooks ensure failed:', e.message));
   await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install before health failed:', e.message));
@@ -7474,6 +7541,7 @@ async function ensureRuntimeStarted() {
 }
 
 async function runnerTick(reason = 'server-runner tick') {
+  if (shuttingDown) return { ok: true, skipped: 'runner shutting down' };
   if (tickBusy) return { ok: true, skipped: 'tick already running' };
   tickBusy = true;
   try {
@@ -7517,6 +7585,11 @@ async function runnerTick(reason = 'server-runner tick') {
     if (Date.now() - (lastHealth.lastReportAt || 0) > REPORT_EVERY_MS) await collectReport().catch(e => log('Report collection failed:', e.message));
     return { ok: true, health: lastHealth };
   } catch (e) {
+    if (isPageClosedRuntimeError(e)) {
+      await markPageClosedForRelaunch('runner-tick-page-closed', e).catch(() => null);
+      log('Runner tick page lifecycle recovery:', e.message);
+      return { ok: false, recovery: 'PAGE_CLOSED_RELAUNCH_PENDING', error: e.message, health: lastHealth };
+    }
     lastHealth.status = 'ERROR';
     lastHealth.lastError = e.message;
     log('Runner tick error:', e.stack || e.message);
@@ -7789,17 +7862,24 @@ async function main() {
   } else {
     log('ALPS web API is online in recovery-only mode because the browser page could not launch. Open /runner/health and /runner/recovery for details.');
   }
-  setInterval(() => runnerTick('server-runner interval').catch(e => log('Interval tick failed:', errorInfo(e))), TICK_MS);
+  runnerInterval = setInterval(() => {
+    if (!shuttingDown) runnerTick('server-runner interval').catch(e => log('Interval tick failed:', errorInfo(e)));
+  }, TICK_MS);
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   log('ALPS Server Runner is active. Health:', `http://127.0.0.1:${PORT}/runner/health`);
 }
 
 async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log('Shutting down ALPS Server Runner...');
+  try { if (runnerInterval) clearInterval(runnerInterval); } catch (_) {}
   try { if (page && !page.isClosed()) await collectReport().catch(() => null); } catch (_) {}
   try { await saveRecoveryState(); } catch (_) {}
   try { if (context) await context.close(); } catch (_) {}
+  context = null;
+  page = null;
   process.exit(0);
 }
 
