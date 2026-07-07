@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v10.1.7-feature-materializer-candle-visibility-bridge';
+const RECOVERY_PATCH_VERSION = 'v10.1.7b-open-bootstrap-gate-feature-finalizer';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v10.1.7-feature-materializer-candle-visibility-bridge';
+const COGNITION_PATCH_VERSION = 'v10.1.7b-open-bootstrap-gate-feature-finalizer';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v10.1.7-feature-materializer-candle-visibility-bridge';
+const AUTONOMY_PATCH_VERSION = 'v10.1.7b-open-bootstrap-gate-feature-finalizer';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.7-feature-materializer-candle-visibility-bridge';
+const FINAL_V930_VERSION = 'v10.1.7b-open-bootstrap-gate-feature-finalizer';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -1415,7 +1415,7 @@ function v947BuildPipelineTruthView(report = {}, nativeView = {}, latchView = {}
   const forwardReadiness = v947BuildForwardReadiness(report, nativeView, latchView);
   const e2e = v947BuildE2EPipelineTrace(report, nativeView, latchView);
   const zero = v947BuildZeroOutputDiagnostics(report);
-  const view = { schema: 'alps.pipelineTruthRecovery.view.v1', version: FINAL_V930_VERSION, installed: true, paperOnly: true, liveCapitalExecution: false, effectivePatchVersion: FINAL_V930_VERSION, patchManifest: { patch: 'ALPS v10.1.7 Feature Materializer + Candle Visibility Bridge', filesExpected: ['runner.js','alpsTradeExport.js'], appUrlChanged: false, modules: ['RuntimeTruthSync','DataMilestoneRetry','DiscoveryRetry','OutputMaterializer','StoreInventory','ClosedCandleMap','SymbolLoadStatus','GateMatrix','ZeroOutputDiagnostics','E2EPipelineTrace','ForwardReadiness','ZonePersistenceEntry','NumericGuardHotfix','RejectedReasonBreakdown','FeatureVisibility','ClosedCandleMapBuilder','RealCandleDiscoveryMaterializer','ForwardStartRecovery','PaperEntryDecisionRecovery'] }, canonicalMetrics: canonical, masterRuntimeState: v947BuildMasterRuntimeState(report, nativeView, latchView), reportFreshness: { reportGeneratedAt, healthSnapshotAt: healthAt, runnerCollectedAt: new Date().toISOString(), snapshotMismatch: !!(report?.data?.pairFrames && canonical.pairFrames && n(report.data.pairFrames,0) !== canonical.pairFrames) }, symbolLoadStatus, closedCandleMap, storeInventory: lastStoreInventoryView || v947BuildStoreInventoryView(null), discoveryOutput: lastDiscoveryOutputView, gateMatrix, forwardReadiness, e2ePipelineTrace: e2e, zeroOutputDiagnostics: zero, materializer: { materializedRows: lastMaterializedRows.length, sources: lastMaterializedRowSources, rule: 'Only existing page/report rows are materialized. No synthetic strategy/candidate/OOS/trade rows are created.' } };
+  const view = { schema: 'alps.pipelineTruthRecovery.view.v1', version: FINAL_V930_VERSION, installed: true, paperOnly: true, liveCapitalExecution: false, effectivePatchVersion: FINAL_V930_VERSION, patchManifest: { patch: 'ALPS v10.1.7b Open Bootstrap Gate + Feature Finalizer', filesExpected: ['runner.js','alpsTradeExport.js'], appUrlChanged: false, modules: ['RuntimeTruthSync','DataMilestoneRetry','DiscoveryRetry','OutputMaterializer','StoreInventory','ClosedCandleMap','SymbolLoadStatus','GateMatrix','ZeroOutputDiagnostics','E2EPipelineTrace','ForwardReadiness','ZonePersistenceEntry','NumericGuardHotfix','RejectedReasonBreakdown','FeatureVisibility','ClosedCandleMapBuilder','RealCandleDiscoveryMaterializer','ForwardStartRecovery','PaperEntryDecisionRecovery'] }, canonicalMetrics: canonical, masterRuntimeState: v947BuildMasterRuntimeState(report, nativeView, latchView), reportFreshness: { reportGeneratedAt, healthSnapshotAt: healthAt, runnerCollectedAt: new Date().toISOString(), snapshotMismatch: !!(report?.data?.pairFrames && canonical.pairFrames && n(report.data.pairFrames,0) !== canonical.pairFrames) }, symbolLoadStatus, closedCandleMap, storeInventory: lastStoreInventoryView || v947BuildStoreInventoryView(null), discoveryOutput: lastDiscoveryOutputView, gateMatrix, forwardReadiness, e2ePipelineTrace: e2e, zeroOutputDiagnostics: zero, materializer: { materializedRows: lastMaterializedRows.length, sources: lastMaterializedRowSources, rule: 'Only existing page/report rows are materialized. No synthetic strategy/candidate/OOS/trade rows are created.' } };
   lastPipelineTruthView = view; return view;
 }
 
@@ -5524,23 +5524,12 @@ function v1015ShouldBootstrapMarketDataFromHealth(health = {}) {
     safeArray(v1000ActiveRows()).length
   );
   if (rowsNow > 0) return false;
-  const candles = v946MaxNumber(
-    health.candlesLoaded,
-    health?.data?.candlesLoaded,
-    health?.bootDiagnostics?.candlesLoaded,
-    lastHealth?.candlesLoaded,
-    lastHealth?.data?.candlesLoaded,
-    lastHealth?.bootDiagnostics?.candlesLoaded
-  );
-  const pairFrames = v946MaxNumber(
-    health.dataPairFrames,
-    health?.data?.pairFrames,
-    health?.bootDiagnostics?.pairFrames,
-    lastHealth?.dataPairFrames,
-    lastHealth?.data?.pairFrames,
-    lastHealth?.bootDiagnostics?.pairFrames
-  );
-  return candles > 0 || pairFrames > 0 || !lastV1012ServerCandleBootstrapView;
+  // v10.1.7b: open the bootstrap gate when the pipeline is empty.
+  // The old condition required browser-visible candles before calling the server candle bootstrap.
+  // That was logically inverted: the bootstrap exists specifically for browser candle-blindness.
+  // Therefore, when rows/candidates are zero we attempt real market-data bootstrap and record attempts,
+  // even if health/runtime snapshots currently report candlesLoaded=0.
+  return true;
 }
 
 async function v1015HealthMarketDataBootstrap(healthTruth = {}, reason = 'health-endpoint-v1015-market-data-bootstrap') {
@@ -5633,6 +5622,11 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
     liveCapitalExecution: false,
     realCandlesOnly: true,
     noSyntheticRows: true,
+    queuedAt: healthTruth?.v1017FeatureMaterializer?.queuedAt || null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    attempts: [],
+    lastError: '',
     before: {
       candidates: v952Num(healthTruth.candidates),
       nativePoolRows: v952Num(healthTruth?.nativeForwardPool?.totalCandidates || lastNativeForwardPoolView?.totalCandidates),
@@ -5746,7 +5740,9 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
         return { ...task, ...r };
       });
       for (const f of fetched) {
-        out.candleGroups.push({ pair:f.symbol, timeframe:f.tf, requestedSymbol:f.requestedSymbol || f.symbol, sourceSymbol:f.sourceSymbol, sourceName:f.sourceName || '', assetProxy:f.assetProxy || '', status:f.status || (f.error ? 'ERROR' : ''), rows:safeArray(f.rows).length, latestClosedCandleTs:(safeArray(f.rows).slice(-1)[0] || {}).t || null, attempts:f.attempts || [], error:f.error || '' });
+        const attemptView = { pair:f.symbol, timeframe:f.tf, requestedSymbol:f.requestedSymbol || f.symbol, sourceSymbol:f.sourceSymbol, sourceName:f.sourceName || '', assetProxy:f.assetProxy || '', status:f.status || (f.error ? 'ERROR' : ''), rows:safeArray(f.rows).length, latestClosedCandleTs:(safeArray(f.rows).slice(-1)[0] || {}).t || null, attempts:f.attempts || [], error:f.error || '' };
+        out.candleGroups.push(attemptView);
+        out.attempts.push(attemptView);
         if (safeArray(f.rows).length < 120) continue;
         const made = v1012RowsForGroup(f.symbol, f.tf, f.rows, `${f.sourceName || 'v1017.fastMarketData'}.${f.sourceSymbol || f.symbol}.${f.tf}`);
         for (const row of made.rows) { row.requestedSymbol = f.symbol; row.sourceSymbol = f.sourceSymbol; row.marketDataSource = f.sourceName || 'v1017Fast'; row.assetProxy = f.assetProxy || ''; row.__alpsV1017FeatureMaterializer = true; row.paperOnly = true; row.liveCapitalExecution = false; }
@@ -5769,8 +5765,8 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
     out.candidateRowsAfter = out.rows.length;
 
     if (out.rows.length > 0) {
-      v1000CommitRows(out.rows, 'v10.1.7-feature-materializer-candle-visibility-bridge', { observedRows: out.rows.length, featureRows: out.featureRows.length, closedCandlePairFrames: out.closedCandlePairFrames });
-      v944MergeForwardLatch(out.rows, 'v10.1.7-feature-materializer-candle-visibility-bridge');
+      v1000CommitRows(out.rows, 'v10.1.7b-open-bootstrap-gate-feature-finalizer', { observedRows: out.rows.length, featureRows: out.featureRows.length, closedCandlePairFrames: out.closedCandlePairFrames });
+      v944MergeForwardLatch(out.rows, 'v10.1.7b-open-bootstrap-gate-feature-finalizer');
       const activeRows = safeArray(v1000ActiveRows());
       lastNativeForwardPoolView = v952BuildNativePoolFromRows(activeRows.length ? activeRows : out.rows, lastNativeForwardPoolView || {});
       lastForwardLatchView = v944BuildForwardLatchView();
@@ -5818,6 +5814,7 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
   } catch (e) {
     out.status = 'FAILED';
     out.error = textValue(e && e.message || e).slice(0, 300);
+    out.lastError = out.error;
   }
   out.after = {
     candidates: v952Num(healthTruth.candidates),
@@ -5827,6 +5824,9 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
     paperEntrySeen: v952Num(healthTruth?.paperEntryActivation?.candidatesSeen || lastV948EntryEngineView?.candidatesSeen),
     paperEntryScanned: v952Num(healthTruth?.paperEntryActivation?.scanned || lastV948EntryEngineView?.scanned)
   };
+  out.finishedAt = new Date().toISOString();
+  if (!Array.isArray(out.attempts)) out.attempts = [];
+  out.sourcesUsed = safeArray(out.sourcesUsed);
   healthTruth.v1017FeatureMaterializer = out;
   lastV1017FeatureMaterializerView = out;
   return out;
@@ -5926,6 +5926,7 @@ async function v1016HealthPaperEntryRescan(healthTruth = {}, reason = 'health-en
 // or Market Data Vision recovery is busy. Heavy recovery work is moved to the
 // background so mobile dashboard/report checks do not hang or time out.
 let v1016HealthEndpointRecoveryBusy = false;
+let v1016HealthBackgroundRecoveryState = { status: 'IDLE', runs: 0, queuedAt: null, startedAt: null, finishedAt: null, lastError: '' };
 function v1016TimeoutView(schema, status, error, extra = {}) {
   return {
     schema,
@@ -5953,15 +5954,27 @@ async function v1016WithTimeout(promise, ms, label) {
 }
 function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health-endpoint-background-recovery') {
   if (v1016HealthEndpointRecoveryBusy || shuttingDown) {
-    return { queued: false, reason: v1016HealthEndpointRecoveryBusy ? 'ALREADY_RUNNING' : 'SHUTTING_DOWN' };
+    return { queued: false, reason: v1016HealthEndpointRecoveryBusy ? 'ALREADY_RUNNING' : 'SHUTTING_DOWN', state: v1016HealthBackgroundRecoveryState };
   }
   v1016HealthEndpointRecoveryBusy = true;
+  const queuedAt = new Date().toISOString();
+  v1016HealthBackgroundRecoveryState = { status: 'QUEUED', runs: (v1016HealthBackgroundRecoveryState.runs || 0) + 1, queuedAt, startedAt: null, finishedAt: null, lastError: '' };
   const seed = { ...(seedHealthTruth || {}) };
+  const runningView = { schema:'alps.v1017FeatureMaterializer.view.v1', version: FINAL_V930_VERSION, installed:true, status:'QUEUED_WAITING_BACKGROUND_WORKER', queuedAt, startedAt:null, finishedAt:null, attempts:[], sourcesUsed:[], paperOnly:true, liveCapitalExecution:false, rule:'v10.1.7b queues a real background worker; this placeholder must be replaced by RUNNING/COMPLETED/FAILED on the next health/report.' };
+  seed.v1017FeatureMaterializer = runningView;
+  lastV1017FeatureMaterializerView = runningView;
+  lastHealth = { ...(lastHealth || {}), v1017FeatureMaterializer: runningView, effectivePatchVersion: FINAL_V930_VERSION };
   setTimeout(async () => {
     try {
+      const startedAt = new Date().toISOString();
+      v1016HealthBackgroundRecoveryState = { ...v1016HealthBackgroundRecoveryState, status: 'RUNNING', startedAt };
+      lastV1017FeatureMaterializerView = { ...runningView, status:'RUNNING_BACKGROUND_WORKER', startedAt };
+      lastHealth = { ...(lastHealth || {}), v1017FeatureMaterializer:lastV1017FeatureMaterializerView, effectivePatchVersion: FINAL_V930_VERSION };
       await v1016WithTimeout(v1017FeatureMaterializerCandleVisibilityBridge(seed, reason + '-v1017-feature-materializer'), 90000, 'V1017_FEATURE_MATERIALIZER_BACKGROUND_TIMEOUT').catch(e => {
-        seed.v1017FeatureMaterializer = v1016TimeoutView('alps.v1017FeatureMaterializer.view.v1', 'BACKGROUND_FAILED_OR_TIMED_OUT', e && e.message || e);
+        seed.v1017FeatureMaterializer = v1016TimeoutView('alps.v1017FeatureMaterializer.view.v1', 'BACKGROUND_FAILED_OR_TIMED_OUT', e && e.message || e, { queuedAt, startedAt, finishedAt:new Date().toISOString(), attempts:safeArray(seed?.v1017FeatureMaterializer?.attempts), sourcesUsed:safeArray(seed?.v1017FeatureMaterializer?.sourcesUsed) });
+        lastV1017FeatureMaterializerView = seed.v1017FeatureMaterializer;
       });
+      if (seed.v1017FeatureMaterializer) lastV1017FeatureMaterializerView = seed.v1017FeatureMaterializer;
       const v1017RowsNow = Math.max(v952Num(seed.candidates), v952Num(seed?.nativeForwardPool?.totalCandidates), v952Num(seed?.forwardLatch?.size), safeArray(v1000ActiveRows()).length);
       if (v1017RowsNow <= 0) {
         await v1016WithTimeout(v1015HealthMarketDataBootstrap(seed, reason + '-v1015-market-data-fallback'), 25000, 'V1015_HEALTH_BACKGROUND_TIMEOUT').catch(e => {
@@ -5973,6 +5986,8 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
       await v1016WithTimeout(v1016HealthPaperEntryRescan(seed, reason + '-v1016-paper-entry-rescan'), 18000, 'V1016_PAPER_ENTRY_BACKGROUND_TIMEOUT').catch(e => {
         seed.v1016HealthPaperEntryRescan = v1016TimeoutView('alps.v1016HealthPaperEntryRescan.view.v1', 'BACKGROUND_FAILED_OR_TIMED_OUT', e && e.message || e);
       });
+      const finishedAt = new Date().toISOString();
+      v1016HealthBackgroundRecoveryState = { ...v1016HealthBackgroundRecoveryState, status: 'COMPLETED_OR_RECORDED', finishedAt, lastError: '' };
       lastHealth = {
         ...(lastHealth || {}),
         ...(seed || {}),
@@ -5983,23 +5998,26 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
           installed: true,
           status: 'BACKGROUND_RECOVERY_COMPLETED_OR_RECORDED',
           reason,
-          completedAt: new Date().toISOString(),
+          state: v1016HealthBackgroundRecoveryState,
+          completedAt: finishedAt,
           paperOnly: true,
           liveCapitalExecution: false
         }
       };
     } catch (e) {
+      const finishedAt = new Date().toISOString();
+      v1016HealthBackgroundRecoveryState = { ...v1016HealthBackgroundRecoveryState, status: 'FAILED', finishedAt, lastError: textValue(e && e.message || e).slice(0,240) };
       lastHealth = {
         ...(lastHealth || {}),
         effectivePatchVersion: FINAL_V930_VERSION,
-        v1016HealthFastResponseGuard: v1016TimeoutView('alps.v1016HealthFastResponseGuard.view.v1', 'BACKGROUND_RECOVERY_CRASH_GUARDED', e && e.message || e, { reason })
+        v1016HealthFastResponseGuard: v1016TimeoutView('alps.v1016HealthFastResponseGuard.view.v1', 'BACKGROUND_RECOVERY_CRASH_GUARDED', e && e.message || e, { reason, state: v1016HealthBackgroundRecoveryState })
       };
       log('v10.1.6 health background recovery guarded:', e && e.message || e);
     } finally {
       v1016HealthEndpointRecoveryBusy = false;
     }
   }, 0);
-  return { queued: true, reason };
+  return { queued: true, reason, state: v1016HealthBackgroundRecoveryState };
 }
 
 async function createServer() {
@@ -6024,9 +6042,9 @@ async function createServer() {
         let healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
         const healthBackgroundQueue = v1016QueueHealthEndpointRecovery(healthTruth, 'health-endpoint-fast-response-background-recovery');
         healthTruth.v1016HealthFastResponseGuard = { schema:'alps.v1016HealthFastResponseGuard.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_QUEUED' : 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_' + healthBackgroundQueue.reason, queue: healthBackgroundQueue, rule:'/runner/health does not block on Chromium, Market Data Vision, or Paper Entry rescan. Heavy recovery runs in background and updates next health response.', paperOnly:true, liveCapitalExecution:false };
-        if (!healthTruth.v1017FeatureMaterializer) healthTruth.v1017FeatureMaterializer = lastV1017FeatureMaterializerView || { schema:'alps.v1017FeatureMaterializer.view.v1', version: FINAL_V930_VERSION, installed:true, status:'BACKGROUND_QUEUED_FAST_HEALTH_RESPONSE', paperOnly:true, liveCapitalExecution:false };
-        if (!healthTruth.v1015HealthMarketDataBootstrap) healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status:'BACKGROUND_QUEUED_FAST_HEALTH_RESPONSE', paperOnly:true, liveCapitalExecution:false };
-        if (!healthTruth.v1016HealthPaperEntryRescan) healthTruth.v1016HealthPaperEntryRescan = { schema:'alps.v1016HealthPaperEntryRescan.view.v1', version: FINAL_V930_VERSION, installed:true, status:'BACKGROUND_QUEUED_FAST_HEALTH_RESPONSE', paperOnly:true, liveCapitalExecution:false };
+        if (!healthTruth.v1017FeatureMaterializer) healthTruth.v1017FeatureMaterializer = lastV1017FeatureMaterializerView || { schema:'alps.v1017FeatureMaterializer.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), queuedAt: healthBackgroundQueue?.state?.queuedAt || null, startedAt: healthBackgroundQueue?.state?.startedAt || null, finishedAt: healthBackgroundQueue?.state?.finishedAt || null, attempts:[], sourcesUsed:[], paperOnly:true, liveCapitalExecution:false };
+        if (!healthTruth.v1015HealthMarketDataBootstrap) healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
+        if (!healthTruth.v1016HealthPaperEntryRescan) healthTruth.v1016HealthPaperEntryRescan = { schema:'alps.v1016HealthPaperEntryRescan.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
         const v1001HealthTradeCounts = tradeExportCounts(lastTradeExport);
         if (v1001HealthTradeCounts.open > 0) {
           healthTruth.openPositions = Math.max(n(healthTruth.openPositions, 0), v1001HealthTradeCounts.open);
@@ -7994,10 +8012,11 @@ async function collectReport() {
     lastDiscoveryOutputView.v951RealCandleDiscovery = { status: v951Real.status, candleStores: safeArray(v951Real.candleStores).length, featureRowsFound: n(v951Real.featureRowsFound,0), materializedRows: safeArray(v951Real.rows).length, closedCandlePairFrames: n(v951Real.closedCandlePairFrames,0), injected: !!v951Real.injected };
   }
 
-  // v10.1.2: if browser/page stores still hide candles from discovery, build real rows from server-fetched Binance closed candles.
-  // This is a real-data bootstrap only: no synthetic candles, no fake trades, and no fake OOS values.
+  // v10.1.7b: if pipeline is empty, run the real server candle bootstrap even when browser candlesLoaded=0.
+  // The old candlesLoaded > 0 gate was inverted; this bootstrap exists for browser candle-blindness.
+  // This is real-data bootstrap only: no synthetic candles, no fake trades, and no fake OOS values.
   let v1012ServerCandleBootstrap = null;
-  if (!safeArray(lastDiscoveryOutputView?.rows).length && v946MaxNumber(report?.data?.candlesLoaded, report?.candlesLoaded, report?.bootDiagnostics?.candlesLoaded, lastHealth?.candlesLoaded, lastHealth?.bootDiagnostics?.candlesLoaded) > 0) {
+  if (!safeArray(lastDiscoveryOutputView?.rows).length && Math.max(v952Num(report?.candidates), v952Num(report?.officialCandidates), v952Num(report?.results), v952Num(report?.nativeForwardPool?.totalCandidates), safeArray(v1000ActiveRows()).length) <= 0) {
     v1012ServerCandleBootstrap = await v1012ServerCandleResearchBootstrap(report, 'collect-report-v1012-server-candle-bootstrap').catch(e => ({ schema:'alps.v1012ServerCandleResearchBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status:'FAILED', error:e.message, rows:[], featureRows:[] }));
     report.v1012ServerCandleBootstrap = v1012ServerCandleBootstrap;
     if (v1012ServerCandleBootstrap && safeArray(v1012ServerCandleBootstrap.rows).length > 0) {
@@ -8010,6 +8029,7 @@ async function collectReport() {
       lastDiscoveryOutputView.v1012ServerCandleBootstrap = { status: v1012ServerCandleBootstrap.status, candleGroups: safeArray(v1012ServerCandleBootstrap.candleGroups).length, featureRowsFound: n(v1012ServerCandleBootstrap.featureRowsFound,0), materializedRows: safeArray(v1012ServerCandleBootstrap.rows).length, closedCandlePairFrames: n(v1012ServerCandleBootstrap.closedCandlePairFrames,0), realCandlesOnly:true };
     }
   }
+  if (lastV1017FeatureMaterializerView) report.v1017FeatureMaterializer = lastV1017FeatureMaterializerView;
   v947BuildStoreInventoryView(lastDiscoveryOutputView);
   v947MaterializeReportRows(report, safeArray(lastDiscoveryOutputView?.rows));
   if (v951Real && v951Real.closedCandleMap && Object.keys(v951Real.closedCandleMap).length) {
