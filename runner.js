@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.5.2 Current Health Sync Full Candidate Bridge No Fixed Cap
+ * ALPS Server Runner — v9.5.3 Candidate Paper Entry Health Truth Rejection Audit No Cap
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.5.2-current-health-sync-full-candidate-bridge-no-fixed-cap';
+const RECOVERY_PATCH_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.5.2-current-health-sync-full-candidate-bridge-no-fixed-cap';
+const COGNITION_PATCH_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.5.2-current-health-sync-full-candidate-bridge-no-fixed-cap';
+const AUTONOMY_PATCH_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -344,7 +344,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.5.2-current-health-sync-full-candidate-bridge-no-fixed-cap';
+const FINAL_V930_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -1983,7 +1983,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     version: FINAL_V930_VERSION,
     installed: true,
     technicalCap: V952_NO_FIXED_CANDIDATE_CAP ? 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES' : FINAL_V930_TECHNICAL_CAP,
-    poolViewCap: 20,
+    poolViewCap: null,
     totalCandidates: selected.length,
     generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
     fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
@@ -2252,7 +2252,7 @@ function v949BuildAuditTrailTruth(report = {}) {
 function v949BuildReleaseChecklist(report = {}) {
   const z = report.zonePersistenceEntry || {};
   const checklist = {
-    versionChanged: FINAL_V930_VERSION.includes('v9.5.2'),
+    versionChanged: FINAL_V930_VERSION.includes('v9.5.3'),
     paperOnlyConfirmed: report?.fullAutonomy?.paperOnly !== false && z.liveCapitalExecution !== true,
     liveExecutionLocked: report?.fullAutonomy?.liveCapitalExecution === false || z.liveCapitalExecution === false,
     appUrlUnchangedByPatch: true,
@@ -2324,7 +2324,7 @@ function v949AttachCompleteTruth(report = {}) {
 }
 
 
-// ALPS v9.5.2 — Current Health Sync + Full Candidate Bridge + No Fixed Candidate Cap
+// ALPS v9.5.3 — Candidate Paper Entry Health Truth + Rejection Audit + No Fixed Candidate Cap
 // This layer anticipates the next failures instead of waiting for another report:
 // current Health -> nativeForwardPool -> forwardLatch -> Paper Entry -> rejected audit -> report truth.
 let lastV952CurrentHealthSyncView = null;
@@ -2390,8 +2390,8 @@ function v952BuildNativePoolFromRows(rows = [], existing = {}) {
     installed: true,
     noFixedCandidateCap: true,
     candidateAdmissionPolicy: 'ACCEPT_EVERY_REAL_CANDIDATE_THEN_RANK_AND_AUDIT_NO_FIXED_CAP',
-    poolViewCap: 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES',
-    technicalCap: 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES',
+    poolViewCap: null,
+    technicalCap: 'NONE_FOR_CANDIDATE_ADMISSION',
     totalCandidates: all.length,
     generatedStrategies: Math.max(v952Num(existing?.generatedStrategies), all.length),
     fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
@@ -2541,7 +2541,7 @@ function v952AttachTruth(report = {}, currentHealth = {}) {
   };
   const failedChecks = Object.entries(checks).filter(([k,v]) => !v).map(([k]) => k);
   const nextRequiredAction = !checks.ENTRY_VISIBILITY_OK ? 'SYNC_NATIVE_FORWARD_POOL_TO_PAPER_ENTRY' : (!checks.REJECTED_REASON_VISIBLE ? 'MAP_REJECTED_SIGNALS_TO_REASON_COUNTS' : (!checks.ENTRY_EVIDENCE_STARTED ? 'WAIT_FOR_FRESH_VALID_ZONE_OR_REJECT_REASON' : 'OBSERVE_TRADE_LIFECYCLE'));
-  report.finalHealthGate = { schema: 'alps.finalHealthGate.view.v1', version: FINAL_V930_VERSION, installed: true, status: failedChecks.includes('DATA_OK') || failedChecks.includes('RESEARCH_OK') || failedChecks.includes('FORWARD_OK') || failedChecks.includes('LIVE_EXECUTION_LOCKED') ? 'FAIL' : (failedChecks.length ? 'WARN' : 'PASS'), checks, failedChecks, nextRequiredAction, noFixedCandidateCap: true, rule: 'v9.5.2 final gate uses current Health/native pool truth and exposes the next real blocker before it happens.' };
+  report.finalHealthGate = { schema: 'alps.finalHealthGate.view.v1', version: FINAL_V930_VERSION, installed: true, status: failedChecks.includes('DATA_OK') || failedChecks.includes('RESEARCH_OK') || failedChecks.includes('FORWARD_OK') || failedChecks.includes('LIVE_EXECUTION_LOCKED') ? 'FAIL' : (failedChecks.length ? 'WARN' : 'PASS'), checks, failedChecks, nextRequiredAction, noFixedCandidateCap: true, rule: 'v9.5.3 final gate uses current Health/native pool truth, Paper Entry scan truth, rejection audit, and exposes the next real blocker before it happens.' };
   lastV949FinalHealthGateView = report.finalHealthGate;
   lastV952ReportTruthView = report.v952ReportTruthSync;
   return report;
@@ -2551,7 +2551,7 @@ function buildV952Markdown(report = {}) {
   const b = report.v952CandidateBridge || lastV952CandidateBridgeView || {};
   const q = report.v952CandidateQualityBuckets || lastV952QualityBucketsView || {};
   const r = report.v952RejectedReasonAudit || lastV952RejectedAuditView || {};
-  let md = '\n## ALPS v9.5.2 Current Health Sync + Full Candidate Bridge\n';
+  let md = '\n## ALPS v9.5.3 Candidate Paper Entry Health Truth + Rejection Audit\n';
   md += `- Effective Patch: ${FINAL_V930_VERSION}\n`;
   md += `- Candidate Admission: ACCEPT EVERY REAL CANDIDATE — NO FIXED CAP\n`;
   md += `- Current Health Sync: ${s.status || '—'} | syncedCandidates=${s.syncedCandidates ?? '—'} | syncedResults=${s.syncedResults ?? '—'}\n`;
@@ -2563,6 +2563,56 @@ function buildV952Markdown(report = {}) {
   return md;
 }
 
+
+function v953HealthTruthFromCurrentHealth(health = {}, reason = 'v953-health-endpoint-truth-sync') {
+  const base = { ...(health || {}) };
+  try {
+    const pseudo = {
+      ...base,
+      data: { ...(base.data || {}), candlesLoaded: v952Num(base.candlesLoaded || base?.data?.candlesLoaded), pairFrames: v952Num(base.dataPairFrames || base?.data?.pairFrames), pairs: v952Arr(base.dataPairs || base?.data?.pairs) },
+      research: { ...(base.research || {}), strategies: Math.max(v952Num(base.rawResearchStrategies), v952Num(base.results)) },
+      forwardWatch: { ...(base.forwardWatch || {}), candidatesMonitored: Math.max(v952Num(base.candidates), v952Num(base.officialCandidates), v952Num(base?.nativeForwardPool?.totalCandidates)), rejectedSignals: v952Num(base.rejectedSignals), paperSignals: v952Num(base.paperSignals), openPositions: v952Num(base.openPositions), closedTrades: v952Num(base.closedTrades) },
+      paperEntryActivation: base.paperEntryActivation || base.zonePersistenceEntry || lastV948EntryEngineView || null,
+      zonePersistenceEntry: base.zonePersistenceEntry || lastV948EntryEngineView || null,
+      nativeForwardPool: base.nativeForwardPool || lastNativeForwardPoolView || null,
+      forwardLatch: lastForwardLatchView || v944BuildForwardLatchView()
+    };
+    const synced = v952AttachTruth(pseudo, base);
+    const out = { ...base };
+    for (const k of [
+      'nativeForwardPool','fullAutonomyNativeForwardPool','candidateCountTruth','forwardLatch','forwardReadiness','v952CurrentHealthSync','v952CandidateBridge','v952RejectedReasonAudit','v952CandidateQualityBuckets','v952ReportTruthSync','reportTruthSync','finalHealthGate','paperEntryActivation','zonePersistenceEntry'
+    ]) {
+      if (synced[k] != null) out[k] = synced[k];
+    }
+    out.candidates = Math.max(v952Num(base.candidates), v952Num(synced.candidates), v952Num(out?.nativeForwardPool?.totalCandidates));
+    out.officialCandidates = Math.max(v952Num(base.officialCandidates), v952Num(synced.officialCandidates), v952Num(out?.nativeForwardPool?.totalCandidates));
+    out.results = Math.max(v952Num(base.results), v952Num(synced.results), v952Num(out?.candidateCountTruth?.rawStrategies));
+    out.fwRunning = !!(base.fwRunning || synced.fwRunning);
+    out.fwRefreshRunning = !!(base.fwRefreshRunning || synced.fwRefreshRunning);
+    out.lastForwardRefresh = Math.max(v952Num(base.lastForwardRefresh), v952Num(synced.lastForwardRefresh));
+    out.effectivePatchVersion = FINAL_V930_VERSION;
+    out.v953HealthTruthSync = {
+      schema: 'alps.v953HealthTruthSync.view.v1',
+      version: FINAL_V930_VERSION,
+      installed: true,
+      reason,
+      status: out.candidates > 0 ? 'HEALTH_ENDPOINT_CURRENT_CANDIDATES_PROPAGATED' : 'NO_CURRENT_CANDIDATES_VISIBLE_TO_HEALTH_ENDPOINT',
+      currentHealthCandidates: v952Num(base.candidates),
+      nativePoolCandidates: v952Num(out?.nativeForwardPool?.totalCandidates),
+      latchedCandidates: v952Num(out?.forwardLatch?.size),
+      paperEntrySeen: v952Num(out?.paperEntryActivation?.candidatesSeen || out?.zonePersistenceEntry?.candidatesSeen),
+      paperEntryScanned: v952Num(out?.paperEntryActivation?.scanned || out?.zonePersistenceEntry?.scanned),
+      rejectedSignals: v952Num(out.rejectedSignals),
+      missedForwardCycles: v952Num(out.missedForwardCycles),
+      noFixedCandidateCap: true,
+      rule: 'Every /runner/health response refreshes v9.5.3 truth sections from the freshest current nativeForwardPool before returning. It does not wait for report.md.'
+    };
+    return out;
+  } catch (e) {
+    return { ...base, effectivePatchVersion: FINAL_V930_VERSION, v953HealthTruthSync: { schema:'alps.v953HealthTruthSync.view.v1', version: FINAL_V930_VERSION, installed:true, status:'HEALTH_TRUTH_SYNC_FAILED', error: String(e && e.message || e), reason, noFixedCandidateCap:true } };
+  }
+}
+
 function buildV949CompleteTruthMarkdown(report = {}) {
   const gate = report.finalHealthGate || lastV949FinalHealthGateView || {};
   const uni = report.universeCompletion || lastV949UniverseCompletionView || {};
@@ -2572,7 +2622,7 @@ function buildV949CompleteTruthMarkdown(report = {}) {
   const quality = report.qualityRisk || lastV949QualityRiskView || {};
   const rel = report.releaseChecklist || lastV949ReleaseChecklistView || {};
   const line = (a,b) => `| ${a} | ${b == null || b === '' ? '—' : String(b)} |`;
-  let md = `## ALPS v9.5.2 Current Health Sync Full Candidate Bridge No Fixed Cap\n`;
+  let md = `## ALPS v9.5.3 Candidate Paper Entry Health Truth Rejection Audit No Cap\n`;
   md += `| Field | Value |\n|---|---|\n`;
   md += line('Final Health Gate', gate.status) + '\n';
   md += line('Failed Checks', safeArray(gate.failedChecks).join(', ') || 'none') + '\n';
@@ -4392,7 +4442,7 @@ function enhanceHealth(h = {}) {
   out.adaptiveExitManager = lastAdaptiveExitManagerView || v944BuildAdaptiveExitManagerView(out, out.forwardLatch);
   out.syntheticIndicatorEngine = lastSyntheticIndicatorEngineView || v944BuildSyntheticIndicatorEngineView(out, out.forwardLatch);
   out.runnerWatchdog = lastRunnerWatchdogView || buildRunnerWatchdogView(out);
-  return out;
+  return v953HealthTruthFromCurrentHealth(out, 'enhance-health');
 }
 
 function bootProgressSignature(h = {}) {
@@ -4680,7 +4730,18 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadForwardLatchState(); await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message)); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: lastV949FinalHealthGateView, v952CurrentHealthSync: lastV952CurrentHealthSyncView, v952CandidateBridge: lastV952CandidateBridgeView, v952RejectedReasonAudit: lastV952RejectedAuditView, v952CandidateQualityBuckets: lastV952QualityBucketsView, v952ReportTruthSync: lastV952ReportTruthView }); }
+      if (url.pathname === '/runner/health') {
+        await loadForwardLatchState();
+        await loadRecoveryState();
+        await loadTradeVaultState();
+        await loadCognitionState();
+        await loadAutonomyState();
+        await loadAutonomyMemoryState();
+        await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message));
+        const healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
+        lastHealth = { ...lastHealth, ...healthTruth };
+        return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync });
+      }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -5224,7 +5285,7 @@ async function installV930StableAutonomyInPage() {
             
           }
           const count = t => out.filter(x => x.tier === t).length;
-          return { schema:'alps.nativeForwardPool.view.v1', version: policy.version, installed:true, poolViewCap: policy.noFixedCandidateCap ? 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES' : Number(policy.technicalCap || Number.MAX_SAFE_INTEGER), totalCandidates: out.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), experimentalForward: count('EXPERIMENTAL_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
+          return { schema:'alps.nativeForwardPool.view.v1', version: policy.version, installed:true, poolViewCap: null, technicalCap: policy.noFixedCandidateCap ? 'NONE_FOR_CANDIDATE_ADMISSION' : Number(policy.technicalCap || Number.MAX_SAFE_INTEGER), totalCandidates: out.length, fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'), watchForward: count('WATCH_FORWARD'), experimentalForward: count('EXPERIMENTAL_FORWARD'), researchSandbox: count('RESEARCH_SANDBOX'), cognitionSuspended: count('COGNITION_SUSPENDED'), safetyBlocked: count('SAFETY_BLOCKED'), dataBlocked: count('DATA_BLOCKED'), promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
     promotedToExperimental: count('EXPERIMENTAL_FORWARD'), blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'), quantitativePromotion:{ installed:true, rule:'nEff_OOS>=25 AND P(PF>1)>=0.90 AND rolling/stress pass', passed: out.filter(x=>x.quantitative && x.quantitative.promote).length, thresholds:{ nEffOOS:25, posteriorPFgt1:0.90, rollingMinPF:0.60, fallbackPF:1.80, fallbackStress5:1.20 } }, duplicateCompression: d.stats, evidenceLabels: Array.from(new Set(out.flatMap(x=>x.evidenceLabels||[]))), candidates: out };
         }
         function mutationGovernorFromReport(report) {
@@ -5376,6 +5437,8 @@ async function getPageHealth() {
       preflight: val(() => preflightStatus, ''),
       engineReady: val(() => !!engineReady, false),
       nativeForwardPool: val(() => window.__ALPS_FINAL_V930__?.nativeForwardPool || null, null),
+      zonePersistenceEntry: val(() => window.__ALPS_V948_ENTRY_ENGINE__?.view || null, null),
+      paperEntryActivation: val(() => window.__ALPS_V948_ENTRY_ENGINE__?.view || null, null),
       fullAutonomy: val(() => window.__ALPS_FINAL_V930__?.fullAutonomy || null, null),
       engineHook: val(() => window.__ALPS_FINAL_V930__?.engineHook || null, null),
       nativeExecutionControl: val(() => window.__ALPS_FINAL_V930__?.nativeExecutionControl || null, null),
@@ -5815,7 +5878,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       function hasDuplicate(k, pair, tf){ const open = arr(globalThis.openPositions).concat(arr(globalThis.openTrades)).concat(arr(globalThis.paperSignals)); return open.some(x => text(x.__alpsV948Key || x.tradeId || x.key || '').toUpperCase() === k || (pairOf(x)===pair && tfOf(x)===tf && /OPEN|ACTIVE|PAPER/i.test(text(x.status || 'OPEN')))); }
       function makeTrade(c, d, srcPath){
         const k=keyOf(c); const pair=pairOf(c), tf=tfOf(c); const now=Date.now(); const id=`V948_${now}_${pair}_${tf}_${rootOf(c)}_${text(c.exit || c.exitName || 'GENERIC').replace(/[^A-Z0-9]+/gi,'_').slice(0,24)}`;
-        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.2-current-health-sync-full-candidate-bridge-no-fixed-cap', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.1 after feature/discovery recovery, nativeForwardPool visibility, candle-store resolution, finite numeric plan, and valid recent zone persistence checks.' };
+        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.3 after current-health candidate propagation, full Paper Entry scan, candle-store resolution, finite numeric plan, and valid recent zone persistence checks.' };
       }
       const candidates = []; const seenCandidates = new Set(); const candidateSources = {}; function pushCandidate(c, source){ if(!c || typeof c!=='object') return; const p=pairOf(c), tf=tfOf(c); if(!p || !tf) return; const k=keyOf(c); if(seenCandidates.has(k)) return; seenCandidates.add(k); candidates.push({...c,__candidateSource:source}); candidateSources[source]=(candidateSources[source]||0)+1; }
       for (const c of arr(rows)) pushCandidate(c, 'runner-latch');
@@ -5832,10 +5895,10 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       const rejectedReasonCounts={}; const rejections=[]; const opened=[]; let scanned=0;
       function reject(c, reason, extra={}){ const r=reason || 'UNKNOWN_REJECT'; rejectedReasonCounts[r]=(rejectedReasonCounts[r]||0)+1; if(rejections.length<50) rejections.push({ key:keyOf(c), pair:pairOf(c), timeframe:tfOf(c), strategy:text(c.strategy || c.stratName || c.name), reason:r, ...extra }); }
       const maxOpen = Math.max(0, Number(cfg.maxEntriesPerTick || 0));
-      for (const c of candidates) { if (opened.length >= maxOpen) break; scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
+      for (const c of candidates) { scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } if (maxOpen > 0 && opened.length >= maxOpen) { reject(c,'ENTRY_THROTTLED_AFTER_VALID_SIGNAL',{ executionThrottle:true, maxEntriesPerTick:maxOpen, note:'Candidate was accepted and scanned; opening was throttled for paper lifecycle stability, not rejected by a fixed candidate cap.' }); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
       state.lastRunAt=Date.now(); state.scanned=scanned; state.openedTrades=opened.concat(arr(state.openedTrades)).slice(0,50); state.rejections=rejections; state.rejectedReasonCounts=rejectedReasonCounts; state.candlesStoresFound=candlesAll.length; state.candidatesSeen=candidates.length;
       const topRejectedReason = Object.entries(rejectedReasonCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
-      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery' };
+      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery' };
       globalThis.__ALPS_V948_ENTRY_ENGINE__.view=view; try { if (typeof saveRuntimeSnapshotThrottled === 'function') saveRuntimeSnapshotThrottled(false); } catch(e){ recordGuard(e,'saveRuntimeSnapshotThrottled'); }
       return view;
     }, { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES } });
@@ -6126,6 +6189,7 @@ async function runnerTick(reason = 'server-runner tick') {
     await ensureRuntimeStarted();
     await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install before catch-up failed:', e.message));
     const before = enhanceHealth(await getPageHealth());
+    Object.assign(lastHealth, before);
     await triggerActualResearchIfNeeded('runner-tick-actual-research-trigger', before).catch(() => null);
     await installAutonomousBridgeInPage().catch(e => log('Autonomous bridge install before catch-up failed:', e.message));
     await syncOosEvidenceBridgeFromPage('runner-tick').catch(() => null);
