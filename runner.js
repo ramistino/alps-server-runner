@@ -5620,7 +5620,19 @@ async function v1016HealthPaperEntryRescan(healthTruth = {}, reason = 'health-en
     } else if (proof.before.previousPaperScanned > 0 || proof.before.previousPaperSeen > 0) {
       proof.status = 'SKIPPED_PAPER_ENTRY_ALREADY_SCANNED';
     } else {
-      const view = await applyV948ZonePersistenceEntryEngine(reason);
+      // Pass the real rows from state authority / latch directly as rowsOverride to bypass page-not-ready skip
+      const overrideRows = [];
+      const seenOverrideKeys = new Set();
+      for (const group of [v1000ActiveRows(), safeArray(lastNativeForwardPoolView?.candidates), safeArray(healthTruth?.nativeForwardPool?.candidates), safeArray(forwardLatchState?.candidates)]) {
+        for (const c of safeArray(group)) {
+          const k = uniqueKeyFromCandidate(c) || JSON.stringify(c || {}).slice(0, 160);
+          if (!k || seenOverrideKeys.has(k)) continue;
+          seenOverrideKeys.add(k);
+          overrideRows.push(c);
+        }
+      }
+      
+      const view = await applyV948ZonePersistenceEntryEngine(reason, overrideRows.length > 0 ? overrideRows : null);
       const opened = v952Num(view?.opened);
       const scanned = v952Num(view?.scanned);
       const rejected = v952Num(view?.rejected);
@@ -6538,8 +6550,8 @@ async function applyForwardLatchToPage(reason = 'apply-forward-latch') {
 }
 
 
-async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persistence-entry') {
-  if (!page || page.isClosed()) {
+async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persistence-entry', rowsOverride = null) {
+  if ((!page || page.isClosed()) && !rowsOverride) {
     lastV948EntryEngineView = v948EmptyEntryView('page-not-ready');
     return lastV948EntryEngineView;
   }
@@ -6635,9 +6647,18 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
     }
     
   }
+  if (rowsOverride && rowsOverride.length > 0) {
+    for (const c of rowsOverride) {
+      const k = uniqueKeyFromCandidate(c) || JSON.stringify(c || {}).slice(0, 160);
+      if (!k || seenRunnerCandidateKeys.has(k)) continue;
+      seenRunnerCandidateKeys.add(k);
+      runnerCandidateRows.push(c);
+    }
+  }
+
   const v957ProofBefore = { authorityRows: authorityRows.length, freshPagePoolRows: freshPagePoolRows.length, latchRows: latchRows.length, nativePoolRows: nativePoolRows.length, healthPoolRows: healthPoolRows.length, runnerCandidateRows: runnerCandidateRows.length };
   try {
-    const view = await pageEval(async ({ rows, runnerRows, cfg, reasonText }) => {
+    const entryEngineLogic = async ({ rows, runnerRows, cfg, reasonText }) => {
       const startedAt = Date.now();
       const v1011PrimeProof = (cfg && cfg.v1011PrimeProof) || { schema:'alps.v1011PaperEntryAuthorityRouter.view.v1', version:(cfg && cfg.version) || '', installed:true, status:'PROOF_NOT_PROVIDED_SAFE_FALLBACK', before:{}, after:{}, rule:'Safe fallback only; proof object was not visible inside page context.' };
       const state = globalThis.__ALPS_V948_ENTRY_ENGINE__ || {
@@ -7065,10 +7086,26 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       for (const c of candidates) { scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll, c); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } if (maxOpen > 0 && opened.length >= maxOpen) { reject(c,'ENTRY_THROTTLED_AFTER_VALID_SIGNAL',{ executionThrottle:true, maxEntriesPerTick:maxOpen, note:'Candidate was accepted and scanned; opening was throttled for paper lifecycle stability, not rejected by a fixed candidate cap.' }); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
       state.lastRunAt=Date.now(); state.scanned=scanned; state.openedTrades=opened.concat(arr(state.openedTrades)).slice(0,50); state.rejections=rejections; state.rejectedReasonCounts=rejectedReasonCounts; state.candlesStoresFound=candlesAll.length; state.candidatesSeen=candidates.length;
       const topRejectedReason = Object.entries(rejectedReasonCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
-      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, staleSkipped, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, freshCandidateDedupe:{currentNativeRows:currentRows.length, candidatesAfterDedupe:candidates.length, staleSkipped, policy: currentRows.length>0?'SCAN_CURRENT_NATIVE_POOL_ONLY_LATCH_HISTORY_FALLBACK_DISABLED':'NO_CURRENT_NATIVE_POOL_USED_FALLBACK_SOURCES'}, v954EntryConstructionAudit:{installed:true, entryBuilderPriority:['candidate.featureSnapshot','candidate.setupPrice/currentPrice','indexedDB candles','runtime candles','localStorage fallback'], preciseRejectReasons:['ENTRY_UNDEFINED','STOP_TARGET_UNDEFINED','ZONE_MID_UNDEFINED','DIRECTION_UNDEFINED','DIRECTION_MISMATCH','OUTSIDE_ZONE','STALE_CANDIDATE','DUPLICATE','CANDLES_NOT_FOUND','INVALIDATION_HIT'], invalidationOnlyAfterNumericPlan:true}, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery', v1011PaperEntryAuthorityRouter:v1011PrimeProof };
-      globalThis.__ALPS_V948_ENTRY_ENGINE__.view=view; try { if (typeof saveRuntimeSnapshotThrottled === 'function') saveRuntimeSnapshotThrottled(false); } catch(e){ recordGuard(e,'saveRuntimeSnapshotThrottled'); }
+      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, staleSkipped, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, freshCandidateDedupe:{currentNativeRows:currentRows.length, candidatesAfterDedupe:candidates.length, staleSkipped, policy: currentRows.length>0?'SCAN_CURRENT_NATIVE_POOL_ONLY_LATCH_HISTORY_FALLBACK_DISABLED':'NO_CURRENT_NATIVE_POOL_USED_FALLBACK_SOURCES'}, v954EntryConstructionAudit:{installed:true, entryBuilderPriority:['candidate.featureSnapshot','candidate.setupPrice/currentPrice','indexedDB candles','runtime candles','localStorage fallback'], preciseRejectReasons:['ENTRY_UNDEFINED','STOP_TARGET_UNDEFINED','ZONE_MID_UNDEFINED','DIRECTION_UNDEFINED','DIRECTION_MISMATCH','OUTSIDE_ZONE','STALE_CANDIDATE','DUPLICATE','CANDLES_NOT_FOUND','INVALIDATION_HIT'], invalidationOnlyAfterNumericPlan:true}, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery', v1011PaperEntryAuthorityRouter:(cfg.v1011PrimeProof || null) };
+      if (typeof globalThis !== 'undefined' && globalThis.__ALPS_V948_ENTRY_ENGINE__) {
+        globalThis.__ALPS_V948_ENTRY_ENGINE__.view=view;
+        try { if (typeof saveRuntimeSnapshotThrottled === 'function') saveRuntimeSnapshotThrottled(false); } catch(e){ recordGuard(e,'saveRuntimeSnapshotThrottled'); }
+      }
       return view;
-    }, { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES, v1011PrimeProof } });
+    };
+    
+    const engineArgs = { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES, v1011PrimeProof } };
+    
+    let view;
+    if (page && !page.isClosed()) {
+      view = await pageEval(entryEngineLogic, engineArgs);
+    } else {
+      // Server-side fallback execution when page is not ready but rowsOverride was provided
+      globalThis.localStorage = globalThis.localStorage || { length: 0, getItem: () => null, key: () => null };
+      globalThis.indexedDB = globalThis.indexedDB || null;
+      view = await entryEngineLogic(engineArgs);
+    }
+    
     lastV948EntryEngineView = view || v948EmptyEntryView('empty-page-view');
     if (lastV948EntryEngineView && typeof lastV948EntryEngineView === 'object') {
       lastV948EntryEngineView.v957ActivationProof = {
