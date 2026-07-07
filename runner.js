@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.4 Integrated System: Market Data Vision + Persistent State Recovery
+ * ALPS Server Runner — v10.1.5 Integrated System: Market Data Vision Health Bootstrap + Persistent Recovery
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v10.1.4-market-data-vision-persistent-recovery';
+const RECOVERY_PATCH_VERSION = 'v10.1.5-market-data-vision-health-bootstrap-unified';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v10.1.4-market-data-vision-persistent-recovery';
+const COGNITION_PATCH_VERSION = 'v10.1.5-market-data-vision-health-bootstrap-unified';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v10.1.4-market-data-vision-persistent-recovery';
+const AUTONOMY_PATCH_VERSION = 'v10.1.5-market-data-vision-health-bootstrap-unified';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -347,7 +347,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.2-proof-scope-server-candle-bootstrap';
+const FINAL_V930_VERSION = 'v10.1.5-market-data-vision-health-bootstrap-unified';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -1413,7 +1413,7 @@ function v947BuildPipelineTruthView(report = {}, nativeView = {}, latchView = {}
   const forwardReadiness = v947BuildForwardReadiness(report, nativeView, latchView);
   const e2e = v947BuildE2EPipelineTrace(report, nativeView, latchView);
   const zero = v947BuildZeroOutputDiagnostics(report);
-  const view = { schema: 'alps.pipelineTruthRecovery.view.v1', version: FINAL_V930_VERSION, installed: true, paperOnly: true, liveCapitalExecution: false, effectivePatchVersion: FINAL_V930_VERSION, patchManifest: { patch: 'ALPS v10.1.2 Proof Scope + Server Candle Bootstrap', filesExpected: ['runner.js','alpsTradeExport.js'], appUrlChanged: false, modules: ['RuntimeTruthSync','DataMilestoneRetry','DiscoveryRetry','OutputMaterializer','StoreInventory','ClosedCandleMap','SymbolLoadStatus','GateMatrix','ZeroOutputDiagnostics','E2EPipelineTrace','ForwardReadiness','ZonePersistenceEntry','NumericGuardHotfix','RejectedReasonBreakdown','FeatureVisibility','ClosedCandleMapBuilder','RealCandleDiscoveryMaterializer','ForwardStartRecovery','PaperEntryDecisionRecovery'] }, canonicalMetrics: canonical, masterRuntimeState: v947BuildMasterRuntimeState(report, nativeView, latchView), reportFreshness: { reportGeneratedAt, healthSnapshotAt: healthAt, runnerCollectedAt: new Date().toISOString(), snapshotMismatch: !!(report?.data?.pairFrames && canonical.pairFrames && n(report.data.pairFrames,0) !== canonical.pairFrames) }, symbolLoadStatus, closedCandleMap, storeInventory: lastStoreInventoryView || v947BuildStoreInventoryView(null), discoveryOutput: lastDiscoveryOutputView, gateMatrix, forwardReadiness, e2ePipelineTrace: e2e, zeroOutputDiagnostics: zero, materializer: { materializedRows: lastMaterializedRows.length, sources: lastMaterializedRowSources, rule: 'Only existing page/report rows are materialized. No synthetic strategy/candidate/OOS/trade rows are created.' } };
+  const view = { schema: 'alps.pipelineTruthRecovery.view.v1', version: FINAL_V930_VERSION, installed: true, paperOnly: true, liveCapitalExecution: false, effectivePatchVersion: FINAL_V930_VERSION, patchManifest: { patch: 'ALPS v10.1.5 Market Data Vision Health Bootstrap + Persistent Recovery', filesExpected: ['runner.js','alpsTradeExport.js'], appUrlChanged: false, modules: ['RuntimeTruthSync','DataMilestoneRetry','DiscoveryRetry','OutputMaterializer','StoreInventory','ClosedCandleMap','SymbolLoadStatus','GateMatrix','ZeroOutputDiagnostics','E2EPipelineTrace','ForwardReadiness','ZonePersistenceEntry','NumericGuardHotfix','RejectedReasonBreakdown','FeatureVisibility','ClosedCandleMapBuilder','RealCandleDiscoveryMaterializer','ForwardStartRecovery','PaperEntryDecisionRecovery'] }, canonicalMetrics: canonical, masterRuntimeState: v947BuildMasterRuntimeState(report, nativeView, latchView), reportFreshness: { reportGeneratedAt, healthSnapshotAt: healthAt, runnerCollectedAt: new Date().toISOString(), snapshotMismatch: !!(report?.data?.pairFrames && canonical.pairFrames && n(report.data.pairFrames,0) !== canonical.pairFrames) }, symbolLoadStatus, closedCandleMap, storeInventory: lastStoreInventoryView || v947BuildStoreInventoryView(null), discoveryOutput: lastDiscoveryOutputView, gateMatrix, forwardReadiness, e2ePipelineTrace: e2e, zeroOutputDiagnostics: zero, materializer: { materializedRows: lastMaterializedRows.length, sources: lastMaterializedRowSources, rule: 'Only existing page/report rows are materialized. No synthetic strategy/candidate/OOS/trade rows are created.' } };
   lastPipelineTruthView = view; return view;
 }
 
@@ -5358,7 +5358,7 @@ function v1012Backtest(pair,tf,rows,strategy,rr){
 function v1012RowsForGroup(pair,tf,rows,source){
   const out=[]; const feats=[]; const f=v1012Feature(pair,tf,rows,rows.length-1); if(!f) return { rows:out, featureRows:feats }; feats.push(f);
   const strategies=['EMA_TREND','SWING_LEVEL_BOUNCE','POC','BOLLINGER_REVERSAL','RSI_DIVERGENCE_ZONE']; const exits=[1,1.5,2,3,5];
-  for(const st of strategies){ for(const rr of exits){ const bt=v1012Backtest(pair,tf,rows,st,rr); const sig=v1012Signal(st,f); const score=(bt.pf||0)*25+(bt.trades||0)*0.25+(sig.ok?20:0)+(bt.posterior||0)*30; if(bt.trades<3 && !sig.ok) continue; const strategyName=st.replace(/_/g,' '); out.push({ key:`${pair}_${tf}||${tf.toUpperCase()}||${st}||${String(rr).replace('.','_')}R_FIXED`, pair, symbol:pair, baseSymbol:pair, timeframe:tf, strategy:strategyName, stratName:strategyName, strategyRoot:st, exit:`${rr}R Fixed`, direction:sig.side||'', currentPrice:f.close, setupPrice:sig.zone||f.close, score:Number(score.toFixed(4)), oosPF:Number((bt.pf||0).toFixed(6)), oosTrades:bt.trades, totalTrades:bt.trades, nEffOOS:Math.max(0,Math.round(bt.trades*0.7)), posteriorPFgt1:Number((bt.posterior||0).toFixed(6)), rollingPass:bt.trades>=8 && bt.pf>=1, promotionTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), candidateTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), forwardEligible:true, eligible:true, evidenceSource:'SERVER_REAL_MARKET_DATA_CANDLE_DERIVED_BACKTEST', __alpsV1012Source:'v10.1.4.marketDataVisionBootstrap', __alpsV1012CandleSource:source, closedCandleTime:f.time, latestClosedCandleTs:f.time, featureSnapshot:f, paperOnly:true, liveCapitalExecution:false }); } }
+  for(const st of strategies){ for(const rr of exits){ const bt=v1012Backtest(pair,tf,rows,st,rr); const sig=v1012Signal(st,f); const score=(bt.pf||0)*25+(bt.trades||0)*0.25+(sig.ok?20:0)+(bt.posterior||0)*30; if(bt.trades<3 && !sig.ok) continue; const strategyName=st.replace(/_/g,' '); out.push({ key:`${pair}_${tf}||${tf.toUpperCase()}||${st}||${String(rr).replace('.','_')}R_FIXED`, pair, symbol:pair, baseSymbol:pair, timeframe:tf, strategy:strategyName, stratName:strategyName, strategyRoot:st, exit:`${rr}R Fixed`, direction:sig.side||'', currentPrice:f.close, setupPrice:sig.zone||f.close, score:Number(score.toFixed(4)), oosPF:Number((bt.pf||0).toFixed(6)), oosTrades:bt.trades, totalTrades:bt.trades, nEffOOS:Math.max(0,Math.round(bt.trades*0.7)), posteriorPFgt1:Number((bt.posterior||0).toFixed(6)), rollingPass:bt.trades>=8 && bt.pf>=1, promotionTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), candidateTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), forwardEligible:true, eligible:true, evidenceSource:'SERVER_REAL_MARKET_DATA_CANDLE_DERIVED_BACKTEST', __alpsV1012Source:'v10.1.5.marketDataVisionBootstrap', __alpsV1012CandleSource:source, closedCandleTime:f.time, latestClosedCandleTs:f.time, featureSnapshot:f, paperOnly:true, liveCapitalExecution:false }); } }
   return { rows:out, featureRows:feats };
 }
 function v1012RequestedSymbols(report={}) {
@@ -5388,7 +5388,7 @@ async function v1014FetchJson(url, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(()=>controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers:{ accept:'application/json', 'user-agent':'ALPS-Research-Runner/10.1.4' }, signal: controller.signal });
+    const res = await fetch(url, { headers:{ accept:'application/json', 'user-agent':'ALPS-Research-Runner/10.1.5' }, signal: controller.signal });
     const text = await res.text();
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch (_) {}
@@ -5453,7 +5453,7 @@ async function v1012FetchBinanceKlines(symbol, tf, limit=1000) {
 async function v1012ServerCandleResearchBootstrap(report={}, reason='v10.1.2-server-candle-bootstrap') {
   const out = { schema:'alps.v1012ServerCandleResearchBootstrap.view.v1', version:FINAL_V930_VERSION, installed:true, reason, realCandlesOnly:true, noSyntheticRows:true, rows:[], featureRows:[], candleGroups:[], errors:[], status:'INIT', rule:'Build emergency research candidates from real closed candles using data-api.binance.vision first, then OKX/Bybit failover. No synthetic candles, candidates, trades, or OOS are created.' };
   try {
-    const symbols = v1012RequestedSymbols(report); // v10.1.4 maps XAUTUSDT to PAXGUSDT market-data proxy safely
+    const symbols = v1012RequestedSymbols(report); // v10.1.5 maps XAUTUSDT to PAXGUSDT market-data proxy safely
     const frames = ['5m','15m','30m','1h','4h'];
     for (const symbol of symbols) {
       for (const tf of frames) {
@@ -5475,14 +5475,118 @@ async function v1012ServerCandleResearchBootstrap(report={}, reason='v10.1.2-ser
     out.closedCandlePairFrames = out.candleGroups.filter(g => g.rows >= 120).length;
     out.status = out.rows.length ? 'SERVER_REAL_CANDLE_ROWS_MATERIALIZED' : 'SERVER_CANDLE_BOOTSTRAP_ZERO_ROWS';
     if (out.rows.length) {
-      v1000CommitRows(out.rows, 'v10.1.4-market-data-vision-bootstrap', { observedRows: out.rows.length, featureRows: out.featureRows.length });
-      v944MergeForwardLatch(out.rows, 'v10.1.4-market-data-vision-bootstrap');
+      v1000CommitRows(out.rows, 'v10.1.5-market-data-vision-bootstrap', { observedRows: out.rows.length, featureRows: out.featureRows.length });
+      v944MergeForwardLatch(out.rows, 'v10.1.5-market-data-vision-bootstrap');
       lastNativeForwardPoolView = v952BuildNativePoolFromRows(v1000ActiveRows(), lastNativeForwardPoolView || {});
       lastForwardLatchView = v944BuildForwardLatchView();
     }
   } catch (e) { out.status='SERVER_CANDLE_BOOTSTRAP_FAILED'; out.error=textValue(e.message||e).slice(0,240); }
   lastV1012ServerCandleBootstrapView = out;
   return out;
+}
+
+
+function v1015ShouldBootstrapMarketDataFromHealth(health = {}) {
+  const rowsNow = Math.max(
+    v952Num(health.candidates),
+    v952Num(health.officialCandidates),
+    v952Num(health.results),
+    v952Num(health?.nativeForwardPool?.totalCandidates),
+    v952Num(health?.forwardLatch?.size),
+    safeArray(v1000ActiveRows()).length
+  );
+  if (rowsNow > 0) return false;
+  const candles = v946MaxNumber(
+    health.candlesLoaded,
+    health?.data?.candlesLoaded,
+    health?.bootDiagnostics?.candlesLoaded,
+    lastHealth?.candlesLoaded,
+    lastHealth?.data?.candlesLoaded,
+    lastHealth?.bootDiagnostics?.candlesLoaded
+  );
+  const pairFrames = v946MaxNumber(
+    health.dataPairFrames,
+    health?.data?.pairFrames,
+    health?.bootDiagnostics?.pairFrames,
+    lastHealth?.dataPairFrames,
+    lastHealth?.data?.pairFrames,
+    lastHealth?.bootDiagnostics?.pairFrames
+  );
+  return candles > 0 || pairFrames > 0 || !lastV1012ServerCandleBootstrapView;
+}
+
+async function v1015HealthMarketDataBootstrap(healthTruth = {}, reason = 'health-endpoint-v1015-market-data-bootstrap') {
+  const proof = {
+    schema: 'alps.v1015HealthMarketDataBootstrap.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    reason,
+    before: {
+      candidates: v952Num(healthTruth.candidates),
+      nativePoolRows: v952Num(healthTruth?.nativeForwardPool?.totalCandidates),
+      latchRows: v952Num(healthTruth?.forwardLatch?.size),
+      authorityRows: safeArray(v1000ActiveRows()).length,
+      candlesLoaded: v946MaxNumber(healthTruth.candlesLoaded, healthTruth?.data?.candlesLoaded, healthTruth?.bootDiagnostics?.candlesLoaded, lastHealth?.candlesLoaded, lastHealth?.bootDiagnostics?.candlesLoaded),
+      pairFrames: v946MaxNumber(healthTruth.dataPairFrames, healthTruth?.data?.pairFrames, healthTruth?.bootDiagnostics?.pairFrames, lastHealth?.dataPairFrames, lastHealth?.bootDiagnostics?.pairFrames)
+    },
+    after: {},
+    status: 'NOT_RUN',
+    rule: 'When /runner/health sees data but zero candidates, use real closed candles from data-api.binance.vision -> data.binance.com -> OKX -> Bybit, then commit real candle-derived candidates into State Authority and Forward Latch. No synthetic candles, trades, or OOS.'
+  };
+  try {
+    if (!v1015ShouldBootstrapMarketDataFromHealth(healthTruth || {})) {
+      proof.status = 'SKIPPED_ROWS_ALREADY_AVAILABLE';
+    } else {
+      const seedReport = {
+        ...(lastReport || {}),
+        ...(lastHealth || {}),
+        ...(healthTruth || {}),
+        settings: {
+          ...(lastReport?.settings || {}),
+          ...(lastHealth?.settings || {}),
+          ...(healthTruth?.settings || {})
+        }
+      };
+      const boot = await v1012ServerCandleResearchBootstrap(seedReport, reason);
+      proof.bootstrapStatus = boot?.status || '';
+      proof.bootstrapRows = safeArray(boot?.rows).length;
+      proof.sourceSummary = safeArray(boot?.candleGroups).slice(0, 35).map(g => ({ pair:g.pair, timeframe:g.timeframe, sourceName:g.sourceName || '', sourceSymbol:g.sourceSymbol || '', status:g.status, rows:g.rows || 0, assetProxy:g.assetProxy || '' }));
+      if (safeArray(boot?.rows).length > 0) {
+        const activeRows = safeArray(v1000ActiveRows());
+        lastNativeForwardPoolView = v952BuildNativePoolFromRows(activeRows.length ? activeRows : boot.rows, lastNativeForwardPoolView || {});
+        lastForwardLatchView = v944BuildForwardLatchView();
+        healthTruth.nativeForwardPool = lastNativeForwardPoolView;
+        healthTruth.fullAutonomyNativeForwardPool = lastNativeForwardPoolView;
+        healthTruth.forwardLatch = lastForwardLatchView;
+        healthTruth.candidates = Math.max(v952Num(healthTruth.candidates), safeArray(boot.rows).length, v952Num(lastNativeForwardPoolView.totalCandidates));
+        healthTruth.officialCandidates = Math.max(v952Num(healthTruth.officialCandidates), healthTruth.candidates);
+        healthTruth.results = Math.max(v952Num(healthTruth.results), healthTruth.candidates);
+        healthTruth.rawResearchStrategies = Math.max(v952Num(healthTruth.rawResearchStrategies), healthTruth.candidates);
+        healthTruth.totalGeneratedStrategies = Math.max(v952Num(healthTruth.totalGeneratedStrategies), healthTruth.candidates);
+        healthTruth.candidatesMonitored = Math.max(v952Num(healthTruth.candidatesMonitored), healthTruth.candidates);
+        healthTruth.fwRunning = true;
+        healthTruth.forwardStatus = 'MARKET_DATA_VISION_ROWS_READY';
+        healthTruth.v952CurrentHealthSync = { schema:'alps.v952CurrentHealthSync.view.v1', version:FINAL_V930_VERSION, installed:true, status:'HEALTH_MARKET_DATA_BOOTSTRAP_CANDIDATES_VISIBLE', currentHealthCandidates:healthTruth.candidates, currentHealthOfficialCandidates:healthTruth.officialCandidates, currentHealthResults:healthTruth.results, syncedCandidates:healthTruth.candidates, syncedResults:healthTruth.results, fwRunning:!!healthTruth.fwRunning, fwRefreshRunning:!!healthTruth.fwRefreshRunning, sourceCounts:{ marketDataVision: safeArray(boot.rows).length }, noFixedCandidateCap:true, rule:'Health endpoint can promote real candle-derived market-data rows into current health when the page report is stale/zero.' };
+        healthTruth.v952CandidateBridge = { schema:'alps.v952CandidateBridge.view.v1', version:FINAL_V930_VERSION, installed:true, status:'MARKET_DATA_VISION_ROWS_BRIDGED_TO_FORWARD_LATCH', nativeCandidates:v952Num(lastNativeForwardPoolView.totalCandidates), latchedCandidates:v952Num(lastForwardLatchView.size), added:safeArray(boot.rows).length, updated:0, noFixedCandidateCap:true, rule:'Every real current candidate is bridged into ForwardLatch and Paper Entry; no fixed candidate count is used as a blocker.' };
+        healthTruth.candidateCountTruth = { schema:'alps.candidateCountTruth.view.v1', version:FINAL_V930_VERSION, installed:true, rawStrategies:healthTruth.results, dashboardCandidates:healthTruth.candidates, officialCandidates:healthTruth.officialCandidates, nativePoolCandidates:v952Num(lastNativeForwardPoolView.totalCandidates), compressedCandidates:0, rawRowsBeforeCompression:safeArray(boot.rows).length, latchedCandidates:v952Num(lastForwardLatchView.size), paperEntryVisibleCandidates:0, serverNativeCandidatesAvailable:v952Num(lastNativeForwardPoolView.totalCandidates), recoveryEligibleCandidates:0, oosVerifiedCandidates:0, experimentalForwardCandidates:v952Num(lastNativeForwardPoolView.experimentalForward), paperOpened:v952Num(healthTruth.paperSignals), noFixedCandidateCap:true, namingWarning:'Verified/OOS candidates are separate from Experimental Learning candidates. No fixed candidate number is used as an acceptance blocker.', recommendedLabels:['rawStrategies','nativePoolCandidates','latchedCandidates','paperEligibleCandidates','paperOpened','paperRejected','experimentalLearningCandidates'] };
+        proof.status = 'MARKET_DATA_VISION_ROWS_COMMITTED_TO_HEALTH_STATE_AUTHORITY';
+      } else {
+        proof.status = 'BOOTSTRAP_RAN_ZERO_ROWS';
+      }
+    }
+  } catch (e) {
+    proof.status = 'FAILED';
+    proof.error = textValue(e.message || e).slice(0, 240);
+  }
+  proof.after = {
+    candidates: v952Num(healthTruth.candidates),
+    nativePoolRows: v952Num(healthTruth?.nativeForwardPool?.totalCandidates || lastNativeForwardPoolView?.totalCandidates),
+    latchRows: v952Num(healthTruth?.forwardLatch?.size || lastForwardLatchView?.size),
+    authorityRows: safeArray(v1000ActiveRows()).length,
+    v1012Status: lastV1012ServerCandleBootstrapView?.status || ''
+  };
+  healthTruth.v1015HealthMarketDataBootstrap = proof;
+  return proof;
 }
 
 async function createServer() {
@@ -5504,7 +5608,8 @@ async function createServer() {
         await loadAutonomyState();
         await loadAutonomyMemoryState();
         await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message));
-        const healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
+        let healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
+        await v1015HealthMarketDataBootstrap(healthTruth, 'health-endpoint-v1015-market-data-vision-bootstrap').catch(e => { healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status:'FAILED', error:textValue(e.message||e).slice(0,240) }; });
         const v1001HealthTradeCounts = tradeExportCounts(lastTradeExport);
         if (v1001HealthTradeCounts.open > 0) {
           healthTruth.openPositions = Math.max(n(healthTruth.openPositions, 0), v1001HealthTradeCounts.open);
@@ -5513,7 +5618,7 @@ async function createServer() {
         if (v1001HealthTradeCounts.closed > 0) healthTruth.closedTrades = Math.max(n(healthTruth.closedTrades, 0), v1001HealthTradeCounts.closed);
         healthTruth.v1001TradeLedgerExportSync = { schema:'alps.v1001TradeLedgerExportSync.view.v1', version: FINAL_V930_VERSION, installed:true, openTradesExported:v1001HealthTradeCounts.open, closedTradesExported:v1001HealthTradeCounts.closed, status: v1001HealthTradeCounts.total > 0 ? 'HEALTH_COUNTERS_SYNCED_FROM_TRADE_EXPORT' : 'WAITING_FOR_REAL_TRADE_LEDGER_ROWS', paperOnly:true, liveCapitalExecution:false };
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView });
+        return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
@@ -7373,7 +7478,7 @@ async function collectReport() {
   // v10.1.2: if browser/page stores still hide candles from discovery, build real rows from server-fetched Binance closed candles.
   // This is a real-data bootstrap only: no synthetic candles, no fake trades, and no fake OOS values.
   let v1012ServerCandleBootstrap = null;
-  if (!safeArray(lastDiscoveryOutputView?.rows).length && n(report?.data?.candlesLoaded || report?.candlesLoaded || 0, 0) > 0) {
+  if (!safeArray(lastDiscoveryOutputView?.rows).length && v946MaxNumber(report?.data?.candlesLoaded, report?.candlesLoaded, report?.bootDiagnostics?.candlesLoaded, lastHealth?.candlesLoaded, lastHealth?.bootDiagnostics?.candlesLoaded) > 0) {
     v1012ServerCandleBootstrap = await v1012ServerCandleResearchBootstrap(report, 'collect-report-v1012-server-candle-bootstrap').catch(e => ({ schema:'alps.v1012ServerCandleResearchBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status:'FAILED', error:e.message, rows:[], featureRows:[] }));
     report.v1012ServerCandleBootstrap = v1012ServerCandleBootstrap;
     if (v1012ServerCandleBootstrap && safeArray(v1012ServerCandleBootstrap.rows).length > 0) {
