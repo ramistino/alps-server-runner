@@ -6410,16 +6410,49 @@ async function launchAppPage(options = {}) {
 
 async function pageEval(fn, arg) {
   if (shuttingDown) throw new Error('ALPS runner is shutting down');
-  if (!page || page.isClosed()) {
+  async function ensureUsablePageForEval(stage) {
+    if (shuttingDown) throw new Error('ALPS runner is shutting down');
+    if (page && !page.isClosed()) return true;
     page = null;
-    throw new Error('ALPS page is not ready');
+    Object.assign(lastHealth, {
+      status: 'PAGE_CLOSED_RELAUNCH_PENDING',
+      pageReady: false,
+      lastError: `PAGE_CLOSED_RELAUNCH_PENDING before evaluate (${stage}); relaunching now.`
+    });
+    const relaunched = await launchAppPage({ allowProfileReset: false }).catch(e => {
+      const info = errorInfo(e);
+      Object.assign(lastHealth, {
+        status: 'PAGE_RELAUNCH_FAILED_BEFORE_EVAL',
+        pageReady: false,
+        lastError: `PAGE_RELAUNCH_FAILED_BEFORE_EVAL: ${info.message}`,
+        pageLifecycleRecovery: { installed: true, version: FINAL_V930_VERSION, reason: stage, error: info, capturedAt: Date.now() }
+      });
+      return false;
+    });
+    return !!(relaunched && page && !page.isClosed());
   }
+
+  if (!(await ensureUsablePageForEval('pre-page-evaluate'))) {
+    throw new Error(lastHealth.lastError || 'ALPS page is not ready');
+  }
+
   try {
     return await page.evaluate(fn, arg);
   } catch (e) {
     if (isPageClosedRuntimeError(e)) {
       await markPageClosedForRelaunch('pageEval-target-page-closed', e);
-      throw new Error('ALPS page closed during evaluation; relaunch required');
+      if (await ensureUsablePageForEval('retry-after-page-closed-during-evaluate')) {
+        try {
+          return await page.evaluate(fn, arg);
+        } catch (retryError) {
+          if (isPageClosedRuntimeError(retryError)) {
+            await markPageClosedForRelaunch('pageEval-retry-target-page-closed', retryError);
+            throw new Error('ALPS page closed during evaluation after retry; relaunch required');
+          }
+          throw retryError;
+        }
+      }
+      throw new Error(lastHealth.lastError || 'ALPS page closed during evaluation; relaunch required');
     }
     throw e;
   }
@@ -6585,7 +6618,9 @@ async function applyForwardLatchToPage(reason = 'apply-forward-latch') {
         });
       }
       const normalized = arr(rows).map(normalize).filter(c => c.pair && c.timeframe && c.strategy);
-      globalThis.__ALPS_V944_FORWARD_LATCH__ = { version: config.version, rows: normalized, appliedAt: Date.now(), reason: reasonText, recoverableEntry: config.recoverableEntry, adaptiveExitManager: config.adaptiveExitManager, indicatorGovernance: config.indicatorGovernance || v1010BuildIndicatorGovernanceView({}, { candidates: normalized }), indicatorResearch: config.syntheticIndicatorEngine || v944BuildSyntheticIndicatorEngineView({}, { candidates: normalized }) };
+      const safeIndicatorGovernance = config.indicatorGovernance || { schema: 'alps.indicatorGovernance.view.v1', version: config.version, installed: true, source: 'runner-safe-forward-latch-page-bridge', candidateRows: normalized.length, pageFunctionFallback: 'skipped_missing_dashboard_function' };
+      const safeIndicatorResearch = config.syntheticIndicatorEngine || config.indicatorResearch || { schema: 'alps.indicatorResearch.view.v1', version: config.version, installed: true, executionInfluenceAllowed: false, source: 'runner-safe-forward-latch-page-bridge', candidateRows: normalized.length, pageFunctionFallback: 'skipped_missing_dashboard_function' };
+      globalThis.__ALPS_V944_FORWARD_LATCH__ = { version: config.version, rows: normalized, appliedAt: Date.now(), reason: reasonText, recoverableEntry: config.recoverableEntry, adaptiveExitManager: config.adaptiveExitManager, indicatorGovernance: safeIndicatorGovernance, indicatorResearch: safeIndicatorResearch };
       const stores = [];
       try { if (!Array.isArray(globalThis.results)) globalThis.results = []; stores.push(globalThis.results); } catch (_) {}
       try { if (Array.isArray(globalThis.allResults)) stores.push(globalThis.allResults); } catch (_) {}
@@ -6607,6 +6642,8 @@ async function applyForwardLatchToPage(reason = 'apply-forward-latch') {
         version: FINAL_V930_VERSION,
         recoverableEntry: { installed: true, lookbackClosedCandles: V944_RECOVERABLE_LOOKBACK_CANDLES, entryZoneBps: V944_ENTRY_ZONE_BPS },
         adaptiveExitManager: { installed: true, paperOnly: true, rules: ['BE_AT_50_PERCENT','LOCK_50_PERCENT_TARGET_AT_75_PERCENT'] },
+        indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, { candidates: latchRows }),
+        syntheticIndicatorEngine: v944BuildSyntheticIndicatorEngineView(lastReport || {}, { candidates: latchRows }),
         indicatorResearch: { installed: true, chartOverlayReady: true, executionInfluenceAllowed: false }
       }
     });
