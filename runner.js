@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
+const RECOVERY_PATCH_VERSION = 'v9.5.4-entry-construction-direction-stop-target-dedupe-report-truth';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
+const COGNITION_PATCH_VERSION = 'v9.5.4-entry-construction-direction-stop-target-dedupe-report-truth';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
+const AUTONOMY_PATCH_VERSION = 'v9.5.4-entry-construction-direction-stop-target-dedupe-report-truth';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -344,7 +344,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap';
+const FINAL_V930_VERSION = 'v9.5.4-entry-construction-direction-stop-target-dedupe-report-truth';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -2324,7 +2324,7 @@ function v949AttachCompleteTruth(report = {}) {
 }
 
 
-// ALPS v9.5.3 — Candidate Paper Entry Health Truth + Rejection Audit + No Fixed Candidate Cap
+// ALPS v9.5.4 — Entry Construction + Direction Sync + Stop/Target Validator + Fresh Candidate Dedupe
 // This layer anticipates the next failures instead of waiting for another report:
 // current Health -> nativeForwardPool -> forwardLatch -> Paper Entry -> rejected audit -> report truth.
 let lastV952CurrentHealthSyncView = null;
@@ -2517,6 +2517,7 @@ function v952AttachTruth(report = {}, currentHealth = {}) {
     report.forwardReadiness.forwardNeverStarted = !(report.fwRunning || report.lastForwardRefresh);
   }
   report.v952RejectedReasonAudit = v952BuildRejectedAudit(report);
+  report.v954EntryConstructionAudit = (report.paperEntryActivation || report.zonePersistenceEntry || lastV948EntryEngineView || {}).v954EntryConstructionAudit || { schema:'alps.v954EntryConstructionAudit.view.v1', version: FINAL_V930_VERSION, installed:true, status:'AWAITING_PAPER_ENTRY_SCAN', noFixedCandidateCap:true };
   report.v952ReportTruthSync = { schema: 'alps.v952ReportTruthSync.view.v1', version: FINAL_V930_VERSION, installed: true, status: 'CURRENT_HEALTH_PRIORITIZED', rawReportMayBeStale: true, currentHealthCandidates: v952Num(currentHealth.candidates), reportCandidates: v952Num(report.candidates), nativePoolCandidates: v952Num(report?.nativeForwardPool?.totalCandidates), forwardLatchSize: v952Num(report?.forwardLatch?.size), fwRunning: !!report.fwRunning, noFixedCandidateCap: true, rule: 'When module snapshots disagree with current Health, current Health candidates/forward status win and are propagated to report truth sections.' };
   report.reportTruthSync = { ...(report.reportTruthSync || {}), version: FINAL_V930_VERSION, installed: true, runtimeFreshEnough: true, headerLikelyStale: false, snapshotMismatch: false, status: 'CURRENT_HEALTH_SYNCED_BY_V952', nextRequiredAction: 'OBSERVE_OR_PAPER_ENTRY_REJECTION_AUDIT', v952: report.v952ReportTruthSync };
   lastV949ReportTruthView = report.reportTruthSync;
@@ -2540,8 +2541,8 @@ function v952AttachTruth(report = {}, currentHealth = {}) {
     MOBILE_RUNTIME_OK: !(report?.mobileRuntimeTruth?.wakeLockDenied || report?.mobileRuntimeTruth?.notificationsDenied)
   };
   const failedChecks = Object.entries(checks).filter(([k,v]) => !v).map(([k]) => k);
-  const nextRequiredAction = !checks.ENTRY_VISIBILITY_OK ? 'SYNC_NATIVE_FORWARD_POOL_TO_PAPER_ENTRY' : (!checks.REJECTED_REASON_VISIBLE ? 'MAP_REJECTED_SIGNALS_TO_REASON_COUNTS' : (!checks.ENTRY_EVIDENCE_STARTED ? 'WAIT_FOR_FRESH_VALID_ZONE_OR_REJECT_REASON' : 'OBSERVE_TRADE_LIFECYCLE'));
-  report.finalHealthGate = { schema: 'alps.finalHealthGate.view.v1', version: FINAL_V930_VERSION, installed: true, status: failedChecks.includes('DATA_OK') || failedChecks.includes('RESEARCH_OK') || failedChecks.includes('FORWARD_OK') || failedChecks.includes('LIVE_EXECUTION_LOCKED') ? 'FAIL' : (failedChecks.length ? 'WARN' : 'PASS'), checks, failedChecks, nextRequiredAction, noFixedCandidateCap: true, rule: 'v9.5.3 final gate uses current Health/native pool truth, Paper Entry scan truth, rejection audit, and exposes the next real blocker before it happens.' };
+  const nextRequiredAction = !checks.ENTRY_VISIBILITY_OK ? 'SYNC_NATIVE_FORWARD_POOL_TO_PAPER_ENTRY' : (!checks.REJECTED_REASON_VISIBLE ? 'MAP_REJECTED_SIGNALS_TO_REASON_COUNTS' : (!checks.ENTRY_EVIDENCE_STARTED ? 'FIX_ENTRY_CONSTRUCTION_OR_WAIT_FOR_FRESH_VALID_ZONE' : 'OBSERVE_TRADE_LIFECYCLE'));
+  report.finalHealthGate = { schema: 'alps.finalHealthGate.view.v1', version: FINAL_V930_VERSION, installed: true, status: failedChecks.includes('DATA_OK') || failedChecks.includes('RESEARCH_OK') || failedChecks.includes('FORWARD_OK') || failedChecks.includes('LIVE_EXECUTION_LOCKED') ? 'FAIL' : (failedChecks.length ? 'WARN' : 'PASS'), checks, failedChecks, nextRequiredAction, noFixedCandidateCap: true, rule: 'v9.5.4 final gate uses current Health/native pool truth, fresh candidate dedupe, entry construction audit, stop/target validation, Paper Entry scan truth, and rejection audit.' };
   lastV949FinalHealthGateView = report.finalHealthGate;
   lastV952ReportTruthView = report.v952ReportTruthSync;
   return report;
@@ -2551,7 +2552,7 @@ function buildV952Markdown(report = {}) {
   const b = report.v952CandidateBridge || lastV952CandidateBridgeView || {};
   const q = report.v952CandidateQualityBuckets || lastV952QualityBucketsView || {};
   const r = report.v952RejectedReasonAudit || lastV952RejectedAuditView || {};
-  let md = '\n## ALPS v9.5.3 Candidate Paper Entry Health Truth + Rejection Audit\n';
+  let md = '\n## ALPS v9.5.4 Entry Construction Direction Stop Target Dedupe\n';
   md += `- Effective Patch: ${FINAL_V930_VERSION}\n`;
   md += `- Candidate Admission: ACCEPT EVERY REAL CANDIDATE — NO FIXED CAP\n`;
   md += `- Current Health Sync: ${s.status || '—'} | syncedCandidates=${s.syncedCandidates ?? '—'} | syncedResults=${s.syncedResults ?? '—'}\n`;
@@ -2580,7 +2581,7 @@ function v953HealthTruthFromCurrentHealth(health = {}, reason = 'v953-health-end
     const synced = v952AttachTruth(pseudo, base);
     const out = { ...base };
     for (const k of [
-      'nativeForwardPool','fullAutonomyNativeForwardPool','candidateCountTruth','forwardLatch','forwardReadiness','v952CurrentHealthSync','v952CandidateBridge','v952RejectedReasonAudit','v952CandidateQualityBuckets','v952ReportTruthSync','reportTruthSync','finalHealthGate','paperEntryActivation','zonePersistenceEntry'
+      'nativeForwardPool','fullAutonomyNativeForwardPool','candidateCountTruth','forwardLatch','forwardReadiness','v952CurrentHealthSync','v952CandidateBridge','v952RejectedReasonAudit','v952CandidateQualityBuckets','v952ReportTruthSync','reportTruthSync','finalHealthGate','paperEntryActivation','zonePersistenceEntry','v954EntryConstructionAudit'
     ]) {
       if (synced[k] != null) out[k] = synced[k];
     }
@@ -2605,8 +2606,10 @@ function v953HealthTruthFromCurrentHealth(health = {}, reason = 'v953-health-end
       rejectedSignals: v952Num(out.rejectedSignals),
       missedForwardCycles: v952Num(out.missedForwardCycles),
       noFixedCandidateCap: true,
-      rule: 'Every /runner/health response refreshes v9.5.3 truth sections from the freshest current nativeForwardPool before returning. It does not wait for report.md.'
+      rule: 'Every /runner/health response refreshes v9.5.4 truth sections from the freshest current nativeForwardPool before returning. It does not wait for report.md.'
     };
+    const pe = out.paperEntryActivation || out.zonePersistenceEntry || {};
+    out.v954EntryConstructionAudit = pe.v954EntryConstructionAudit || { schema:'alps.v954EntryConstructionAudit.view.v1', version: FINAL_V930_VERSION, installed:true, status: v952Num(pe.scanned)>0 ? (v952Num(pe.opened)>0 ? 'ENTRY_CONSTRUCTION_OPENED_PAPER_TRADE' : 'ENTRY_CONSTRUCTION_REJECTED_WITH_PRECISE_REASONS') : 'AWAITING_PAPER_ENTRY_SCAN', scanned:v952Num(pe.scanned), opened:v952Num(pe.opened), rejectedReasonCounts:pe.rejectedReasonCounts || {}, noFixedCandidateCap:true, rule:'Build entry/stop/target from candidate featureSnapshot and current price; INVALIDATION_HIT is only allowed after numeric entry, stop, target and direction are valid.' };
     return out;
   } catch (e) {
     return { ...base, effectivePatchVersion: FINAL_V930_VERSION, v953HealthTruthSync: { schema:'alps.v953HealthTruthSync.view.v1', version: FINAL_V930_VERSION, installed:true, status:'HEALTH_TRUTH_SYNC_FAILED', error: String(e && e.message || e), reason, noFixedCandidateCap:true } };
@@ -2622,7 +2625,7 @@ function buildV949CompleteTruthMarkdown(report = {}) {
   const quality = report.qualityRisk || lastV949QualityRiskView || {};
   const rel = report.releaseChecklist || lastV949ReleaseChecklistView || {};
   const line = (a,b) => `| ${a} | ${b == null || b === '' ? '—' : String(b)} |`;
-  let md = `## ALPS v9.5.3 Candidate Paper Entry Health Truth Rejection Audit No Cap\n`;
+  let md = `## ALPS v9.5.4 Entry Construction Direction Stop Target Dedupe Report Truth\n`;
   md += `| Field | Value |\n|---|---|\n`;
   md += line('Final Health Gate', gate.status) + '\n';
   md += line('Failed Checks', safeArray(gate.failedChecks).join(', ') || 'none') + '\n';
@@ -2696,6 +2699,7 @@ function enrichReportV930(report = {}, pageStatus = null) {
   report.pipelineTruthRecovery = v947BuildPipelineTruthView(report, nativeView, forwardLatch);
   report.zonePersistenceEntry = v948BuildEntryActivationView(report);
   report.paperEntryActivation = report.zonePersistenceEntry;
+  report.v954EntryConstructionAudit = report.zonePersistenceEntry?.v954EntryConstructionAudit || null;
   report.numericGuardHotfix = report.zonePersistenceEntry.numericGuard || lastV948NumericGuardView || { installed: true };
   if (report.decisionIntelligence) report.decisionIntelligence.zonePersistenceEntry = report.zonePersistenceEntry;
   // v9.4.9 attaches a single remaining-risk truth layer after v9.4.8 entry diagnostics are present.
@@ -2719,7 +2723,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
+  let md = `## ALPS v9.5.4 Entry Construction Direction Stop Target Dedupe\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2741,7 +2745,7 @@ function buildV930Markdown(report = {}) {
   const rec = report.recoverableEntry || lastRecoverableEntryView || v944BuildRecoverableEntryView(report, latch);
   const exitMgr = report.adaptiveExitManager || lastAdaptiveExitManagerView || v944BuildAdaptiveExitManagerView(report, latch);
   const synth = report.syntheticIndicatorEngine || lastSyntheticIndicatorEngineView || v944BuildSyntheticIndicatorEngineView(report, latch);
-  md += `\n### v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
+  md += `\n### v9.5.4 Entry Construction Direction Stop Target Dedupe\n`;
   md += line('Forward latch size', latch.size || 0) + '\n';
   md += line('Progressive research', pr.active ? `${pr.mode}` : 'OFF') + '\n';
   md += line('Recoverable entry', rec.installed ? `ON | lookback=${rec.lookbackClosedCandles} candles | zone=${rec.entryZoneBps} bps` : 'OFF') + '\n';
@@ -2773,7 +2777,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
+  let md = `## ALPS v9.5.4 Entry Construction Direction Stop Target Dedupe\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2850,7 +2854,7 @@ function buildV930Markdown(report = {}) {
 function buildV948EntryMarkdown(report = {}) {
   const z = report.zonePersistenceEntry || report.paperEntryActivation || lastV948EntryEngineView || v948EmptyEntryView('markdown-no-view');
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
+  let md = `## ALPS v9.5.4 Entry Construction Direction Stop Target Dedupe\n`;
   md += line('Effective Patch Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2889,7 +2893,7 @@ function buildV947PipelineTruthMarkdown(report = {}) {
   const e2e = ptr.e2ePipelineTrace || report.e2ePipelineTrace || lastE2EPipelineTraceView || {};
   const disc = ptr.discoveryOutput || report.discoveryOutput || lastDiscoveryOutputView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
+  let md = `## ALPS v9.5.4 Entry Construction Direction Stop Target Dedupe\n`;
   md += line('Effective Patch Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -4740,7 +4744,7 @@ async function createServer() {
         await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message));
         const healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync });
+        return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
@@ -5830,9 +5834,9 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
         }
         return out;
       }
-      function bestCandlesFor(pair, tf, all){
-        const p = text(pair).toUpperCase(); const t = tfOf({timeframe:tf}).toLowerCase();
-        let scored = all.map(g => { const path = g.path.toUpperCase(); let score = 0; if (path.includes(p)) score += 5; if (path.includes(t.toUpperCase()) || path.includes(t)) score += 4; if (path.includes(t.replace('m','M').replace('h','H'))) score += 3; return { ...g, score }; }).filter(x => x.score > 0);
+      function bestCandlesFor(pair, tf, all, candidate){
+        const p = text(pair).toUpperCase(); const t = tfOf({timeframe:tf}).toLowerCase(); const wantedPath = text(candidate && (candidate.__alpsV951CandlePath || candidate.candlePath || candidate.sourcePath)).toUpperCase();
+        let scored = all.map(g => { const path = g.path.toUpperCase(); let score = 0; if (wantedPath && (wantedPath.includes(path) || path.includes(wantedPath) || path.includes(wantedPath.split('.').slice(-2).join('.')))) score += 20; if (/^INDEXEDDB\./i.test(g.path)) score += 8; if (path.includes(p)) score += 5; if (path.includes(t.toUpperCase()) || path.includes(t)) score += 4; if (path.includes(t.replace('m','M').replace('h','H'))) score += 3; if (/LOCALSTORAGE\./i.test(g.path)) score -= 3; return { ...g, score }; }).filter(x => x.score > 0);
         if (!scored.length && all.length === 1) scored = [{ ...all[0], score: 1 }];
         scored.sort((a,b)=>b.score-a.score || b.rows.length-a.rows.length); return scored[0] || null;
       }
@@ -5842,63 +5846,180 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       function atr(candles, len=14){ if (candles.length < 2) return null; const trs=[]; for(let i=Math.max(1,candles.length-len); i<candles.length;i++){ const c=candles[i], p=candles[i-1]; trs.push(Math.max(c.high-c.low, Math.abs(c.high-p.close), Math.abs(c.low-p.close))); } return sma(trs); }
       function rsi(closes, len=14){ if (closes.length <= len) return null; let gains=0, losses=0; for(let i=closes.length-len;i<closes.length;i++){ const d=closes[i]-closes[i-1]; if(d>=0) gains+=d; else losses-=d; } if (losses === 0) return 100; const rs=gains/losses; return 100-(100/(1+rs)); }
       function percentile(vals, q){ const a=vals.filter(finite).sort((x,y)=>x-y); if(!a.length) return null; const idx=Math.min(a.length-1, Math.max(0, Math.round((a.length-1)*q))); return a[idx]; }
+      function snapshotOf(c){
+        const f = (c && typeof c.featureSnapshot === 'object') ? c.featureSnapshot : {};
+        const out = {
+          time: num(f.time ?? f.t ?? c.closedCandleTime ?? c.latestClosedCandleTs, null),
+          close: num(f.close ?? f.c ?? c.currentPrice ?? c.price, null),
+          atr: num(f.atr, null),
+          ema20: num(f.ema20, null),
+          ema50: num(f.ema50, null),
+          rsi: num(f.rsi, null),
+          bbMid: num(f.bbMid, null),
+          bbUpper: num(f.bbUpper, null),
+          bbLower: num(f.bbLower, null),
+          swingHigh: num(f.swingHigh, null),
+          swingLow: num(f.swingLow, null),
+          poc: num(f.poc, null)
+        };
+        if (out.time && out.time < 1e12) out.time *= 1000;
+        return out;
+      }
+      function candidateDirection(c){
+        const raw = text(c.direction || c.side || c.tradeDirection || c.bias || '').toUpperCase();
+        if (/\bLONG\b|BUY|BULL/.test(raw)) return 'LONG';
+        if (/\bSHORT\b|SELL|BEAR/.test(raw)) return 'SHORT';
+        return '';
+      }
+      function candidatePrice(c, latest, snap){
+        return num(c.currentPrice ?? c.markPrice ?? c.lastPrice ?? c.price ?? snap.close ?? latest?.close, null);
+      }
+      function candidateSetupPrice(c, snap, root){
+        const direct = num(c.entryPrice ?? c.entry ?? c.setupPrice ?? c.zoneMid ?? c.entryZoneMid, null);
+        if (finite(direct)) return direct;
+        if (root === 'POC' && finite(snap.poc)) return snap.poc;
+        if ((root === 'EMA_TREND' || root === 'HA') && finite(snap.ema20)) return snap.ema20;
+        if (root === 'RSI_DIVERGENCE_ZONE' && finite(snap.close)) return snap.close;
+        if (root === 'BOLLINGER_REVERSAL') {
+          const d = candidateDirection(c);
+          if (d === 'LONG' && finite(snap.bbLower)) return snap.bbLower;
+          if (d === 'SHORT' && finite(snap.bbUpper)) return snap.bbUpper;
+          if (finite(snap.bbLower) && finite(snap.bbUpper) && finite(snap.close)) return Math.abs(snap.close-snap.bbLower) <= Math.abs(snap.close-snap.bbUpper) ? snap.bbLower : snap.bbUpper;
+        }
+        if (root === 'SWING_LEVEL_BOUNCE') {
+          const d = candidateDirection(c);
+          if (d === 'LONG' && finite(snap.swingLow)) return snap.swingLow;
+          if (d === 'SHORT' && finite(snap.swingHigh)) return snap.swingHigh;
+        }
+        return null;
+      }
+      function inferDirection(c, root, price, zoneMid, snap, closes){
+        const explicit = candidateDirection(c);
+        if (explicit) return explicit;
+        if (root === 'RSI_DIVERGENCE_ZONE') {
+          const rv = finite(snap.rsi) ? snap.rsi : rsi(closes,14);
+          if (finite(rv) && rv <= 38) return 'LONG';
+          if (finite(rv) && rv >= 62) return 'SHORT';
+        }
+        if (root === 'BOLLINGER_REVERSAL') {
+          if (finite(snap.bbLower) && finite(price) && Math.abs(price-snap.bbLower) <= Math.abs(price-(snap.bbUpper ?? price))) return 'LONG';
+          if (finite(snap.bbUpper)) return 'SHORT';
+        }
+        if (root === 'SWING_LEVEL_BOUNCE') {
+          if (finite(snap.swingLow) && finite(price) && Math.abs(price-snap.swingLow) <= Math.abs(price-(snap.swingHigh ?? price))) return 'LONG';
+          if (finite(snap.swingHigh)) return 'SHORT';
+        }
+        if (root === 'EMA_TREND' || root === 'HA' || root === 'POC') {
+          const e50 = finite(snap.ema50) ? snap.ema50 : ema(closes.slice(-120),50);
+          if (finite(e50) && finite(price)) return price >= e50 ? 'LONG' : 'SHORT';
+          if (finite(zoneMid) && finite(price)) return price >= zoneMid ? 'LONG' : 'SHORT';
+        }
+        return '';
+      }
+      function stopTargetFromPlan(direction, entry, c, snap, candles){
+        const rr = rMultiple(c);
+        const price = finite(entry) ? entry : num(snap.close, null);
+        const a = finite(snap.atr) ? snap.atr : (Array.isArray(candles) && candles.length ? atr(candles,14) : null);
+        const minStop = finite(price) ? Math.max(Math.abs(price)*0.0012, 1e-9) : null;
+        const stopDist = Math.max(finite(a) ? a*1.15 : 0, finite(minStop) ? minStop : 0);
+        if (!finite(price)) return { ok:false, reason:'ENTRY_UNDEFINED', rr, stopDist };
+        if (!finite(stopDist) || stopDist <= 0) return { ok:false, reason:'STOP_TARGET_UNDEFINED', entry:price, rr, stopDist };
+        let stop=null, target=null;
+        if (direction === 'LONG') { stop=price-stopDist; target=price+stopDist*rr; }
+        else if (direction === 'SHORT') { stop=price+stopDist; target=price-stopDist*rr; }
+        else return { ok:false, reason:'DIRECTION_UNDEFINED', entry:price, rr, stopDist };
+        if (![price, stop, target].every(finite) || stop === price || target === price) return { ok:false, reason:'STOP_TARGET_UNDEFINED', entry:price, stop, target, rr, stopDist };
+        return { ok:true, entry:price, stop, target, rr, stopDist };
+      }
+      function setupAgeFromSnapshot(c, latestTime, snap){
+        const t = num(c.closedCandleTime ?? c.latestClosedCandleTs ?? snap.time, null);
+        if (!finite(t) || !finite(latestTime)) return 0;
+        const ageMs = Math.max(0, latestTime - (t < 1e12 ? t*1000 : t));
+        const tf = tfOf(c); const frameMs = tf === '5m' ? 300000 : tf === '15m' ? 900000 : tf === '30m' ? 1800000 : tf === '1h' ? 3600000 : tf === '4h' ? 14400000 : 900000;
+        return Math.floor(ageMs / frameMs);
+      }
       function zoneDecision(c, candles){
-        const closes = candles.map(x=>x.close).filter(finite); const latest=candles[candles.length-1]; const price=latest?.close;
-        if (!finite(price)) return { ok:false, reason:'PRICE_UNDEFINED' };
-        const root=rootOf(c); const a=atr(candles,14) || price*0.003; const minStop=price*0.0012; const stopDist=Math.max(a*1.15, minStop); const buffer=Math.max(price*(cfg.entryZoneBps/10000), a*0.18);
-        let direction='', zoneMid=null, setupAge=null; function insideAt(v, mid){ return finite(v) && finite(mid) && Math.abs(v-mid) <= buffer; }
-        if (root === 'EMA_TREND' || root === 'HA') {
-          const e20=ema(closes.slice(-80),20), e50=ema(closes.slice(-120),50); if (!finite(e20) || !finite(e50)) return { ok:false, reason:'INDICATOR_UNDEFINED_EMA' };
-          direction = price >= e50 ? 'LONG' : 'SHORT'; zoneMid = e20;
-          for (let j=0;j<Math.min(cfg.lookback, candles.length);j++){ const cc=candles[candles.length-1-j]; if(insideAt(cc.close, zoneMid)){ setupAge=j; break; } }
-          if (setupAge == null) return { ok:false, reason:'OUTSIDE_ZONE', price, zoneMid, distanceBps: Math.abs(price-zoneMid)/price*10000 };
-        } else if (root === 'BOLLINGER_REVERSAL') {
-          const win=closes.slice(-20); const m=sma(win), sd=std(win); if (!finite(m)||!finite(sd)) return { ok:false, reason:'INDICATOR_UNDEFINED_BOLLINGER' };
-          const lower=m-2*sd, upper=m+2*sd; const nearLower = Math.abs(price-lower) <= buffer || price < lower + buffer; const nearUpper = Math.abs(price-upper) <= buffer || price > upper - buffer;
-          if (nearLower) { direction='LONG'; zoneMid=lower; } else if (nearUpper) { direction='SHORT'; zoneMid=upper; } else return { ok:false, reason:'OUTSIDE_ZONE', price, zoneMid: price < m ? lower : upper, distanceBps: Math.min(Math.abs(price-lower),Math.abs(price-upper))/price*10000 };
-          for (let j=0;j<Math.min(cfg.lookback, candles.length);j++){ const cc=candles[candles.length-1-j]; if(insideAt(cc.close, zoneMid)){ setupAge=j; break; } }
-        } else if (root === 'SWING_LEVEL_BOUNCE') {
-          const lows=candles.slice(-80).map(x=>x.low), highs=candles.slice(-80).map(x=>x.high); const lo=Math.min(...lows), hi=Math.max(...highs); const nearLow=Math.abs(price-lo)<=buffer || price < lo+buffer; const nearHigh=Math.abs(price-hi)<=buffer || price > hi-buffer;
-          if (nearLow) { direction='LONG'; zoneMid=lo; } else if (nearHigh) { direction='SHORT'; zoneMid=hi; } else return { ok:false, reason:'OUTSIDE_ZONE', price, zoneMid: Math.abs(price-lo)<Math.abs(price-hi)?lo:hi, distanceBps: Math.min(Math.abs(price-lo),Math.abs(price-hi))/price*10000 };
-          for (let j=0;j<Math.min(cfg.lookback, candles.length);j++){ const cc=candles[candles.length-1-j]; if(insideAt(cc.close, zoneMid) || (cc.low <= zoneMid+buffer && cc.high >= zoneMid-buffer)){ setupAge=j; break; } }
-        } else if (root === 'POC') {
-          const typical=candles.slice(-96).map(x=>(x.high+x.low+x.close)/3); const poc=percentile(typical,0.5); if(!finite(poc)) return { ok:false, reason:'INDICATOR_UNDEFINED_POC' };
-          zoneMid=poc; if(!insideAt(price, zoneMid)) return { ok:false, reason:'OUTSIDE_ZONE', price, zoneMid, distanceBps: Math.abs(price-zoneMid)/price*10000 }; const e50=ema(closes.slice(-120),50); direction = price >= (e50 || poc) ? 'LONG' : 'SHORT'; setupAge=0;
-        } else if (root === 'RSI_DIVERGENCE_ZONE') {
-          const rv=rsi(closes,14); if(!finite(rv)) return { ok:false, reason:'INDICATOR_UNDEFINED_RSI' }; if (rv <= 38) direction='LONG'; else if (rv >= 62) direction='SHORT'; else return { ok:false, reason:'NO_RECENT_SETUP' }; zoneMid=price; setupAge=0;
-        } else return { ok:false, reason:'UNSUPPORTED_SETUP_ROOT' };
-        if (setupAge == null) return { ok:false, reason:'NO_RECENT_SETUP', price, zoneMid };
-        if (setupAge > cfg.lookback) return { ok:false, reason:'TOO_OLD', setupAgeCandles: setupAge };
-        const entry=price; const rr=rMultiple(c); let stop, target; if (direction === 'LONG') { stop=entry-stopDist; target=entry+stopDist*rr; } else if (direction === 'SHORT') { stop=entry+stopDist; target=entry-stopDist*rr; } else return { ok:false, reason:'DIRECTION_UNDEFINED' };
-        if (![entry,stop,target,zoneMid].every(finite)) return { ok:false, reason:'STOP_TARGET_UNDEFINED', entry, stop, target, zoneMid };
-        const invalidationHit = direction === 'LONG' ? price <= stop : price >= stop; if (invalidationHit) return { ok:false, reason:'INVALIDATION_HIT', entry, stop, target, zoneMid, direction };
-        return { ok:true, direction, entry, stop, target, zoneMid, price, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, setupAgeCandles: setupAge, rMultiple: rr, distanceFromEntryZoneBps: Math.abs(price-zoneMid)/price*10000, atr:a, bufferBps: buffer/price*10000 };
+        const root=rootOf(c); const snap=snapshotOf(c); const latest=(Array.isArray(candles) && candles.length) ? candles[candles.length-1] : null;
+        const closes = Array.isArray(candles) ? candles.map(x=>x.close).filter(finite) : [];
+        const price = candidatePrice(c, latest, snap);
+        if (!finite(price)) return { ok:false, reason:'PRICE_UNDEFINED', entry:null, stop:null, target:null };
+        let zoneMid = candidateSetupPrice(c, snap, root);
+        let direction = inferDirection(c, root, price, zoneMid, snap, closes);
+        if (!direction) return { ok:false, reason:'DIRECTION_UNDEFINED', price, zoneMid, direction };
+        const explicitDirection = candidateDirection(c);
+        let strategyDirection = '';
+        if (root === 'EMA_TREND' || root === 'HA') { const e50 = finite(snap.ema50) ? snap.ema50 : ema(closes.slice(-120),50); if (finite(e50)) strategyDirection = price >= e50 ? 'LONG' : 'SHORT'; }
+        else if (root === 'POC') { const e50 = finite(snap.ema50) ? snap.ema50 : ema(closes.slice(-120),50); if (finite(e50)) strategyDirection = price >= e50 ? 'LONG' : 'SHORT'; }
+        else if (root === 'RSI_DIVERGENCE_ZONE') { const rv = finite(snap.rsi) ? snap.rsi : rsi(closes,14); if (finite(rv) && rv <= 38) strategyDirection='LONG'; else if (finite(rv) && rv >= 62) strategyDirection='SHORT'; }
+        else if (root === 'BOLLINGER_REVERSAL' && finite(snap.bbLower) && finite(snap.bbUpper)) { strategyDirection = Math.abs(price-snap.bbLower) <= Math.abs(price-snap.bbUpper) ? 'LONG' : 'SHORT'; }
+        else if (root === 'SWING_LEVEL_BOUNCE' && finite(snap.swingLow) && finite(snap.swingHigh)) { strategyDirection = Math.abs(price-snap.swingLow) <= Math.abs(price-snap.swingHigh) ? 'LONG' : 'SHORT'; }
+        if (explicitDirection && strategyDirection && explicitDirection !== strategyDirection) return { ok:false, reason:'DIRECTION_MISMATCH', price, zoneMid, direction:explicitDirection, strategyDirection, root };
+        if (!finite(zoneMid)) {
+          if (root === 'EMA_TREND' || root === 'HA') {
+            const e20 = finite(snap.ema20) ? snap.ema20 : ema(closes.slice(-80),20);
+            zoneMid = e20;
+          } else if (root === 'POC') {
+            const typical = Array.isArray(candles) ? candles.slice(-96).map(x=>(x.high+x.low+x.close)/3) : [];
+            zoneMid = finite(snap.poc) ? snap.poc : percentile(typical,0.5);
+          } else if (root === 'BOLLINGER_REVERSAL') {
+            const win=closes.slice(-20); const m=finite(snap.bbMid)?snap.bbMid:sma(win); const sd=std(win);
+            const lower=finite(snap.bbLower)?snap.bbLower:(finite(m)&&finite(sd)?m-2*sd:null);
+            const upper=finite(snap.bbUpper)?snap.bbUpper:(finite(m)&&finite(sd)?m+2*sd:null);
+            zoneMid = direction === 'LONG' ? lower : upper;
+          } else if (root === 'SWING_LEVEL_BOUNCE') {
+            zoneMid = direction === 'LONG' ? snap.swingLow : snap.swingHigh;
+            if (!finite(zoneMid) && Array.isArray(candles) && candles.length) {
+              const lows=candles.slice(-80).map(x=>x.low).filter(finite), highs=candles.slice(-80).map(x=>x.high).filter(finite);
+              zoneMid = direction === 'LONG' ? Math.min(...lows) : Math.max(...highs);
+            }
+          } else if (root === 'RSI_DIVERGENCE_ZONE') zoneMid = price;
+        }
+        if (!finite(zoneMid)) return { ok:false, reason:'ZONE_MID_UNDEFINED', price, zoneMid:null, direction, root };
+        const a = finite(snap.atr) ? snap.atr : (Array.isArray(candles) && candles.length ? atr(candles,14) : null);
+        const buffer = Math.max(Math.abs(price)*(cfg.entryZoneBps/10000), finite(a) ? a*0.18 : Math.abs(price)*0.0018);
+        const distanceBps = finite(zoneMid) && price ? Math.abs(price-zoneMid)/Math.abs(price)*10000 : null;
+        if (!finite(buffer) || buffer <= 0) return { ok:false, reason:'ENTRY_ZONE_BUFFER_UNDEFINED', price, zoneMid, direction };
+        const inside = Math.abs(price-zoneMid) <= buffer;
+        const setupAge = setupAgeFromSnapshot(c, latest?.t, snap);
+        if (setupAge > cfg.lookback) return { ok:false, reason:'STALE_CANDIDATE', setupAgeCandles:setupAge, price, zoneMid, direction, distanceBps };
+        if (!inside) return { ok:false, reason:'OUTSIDE_ZONE', price, zoneMid, direction, distanceBps, bufferBps: buffer/Math.abs(price)*10000, setupAgeCandles:setupAge };
+        const plan = stopTargetFromPlan(direction, price, c, snap, candles);
+        if (!plan.ok) return { ok:false, reason:plan.reason || 'STOP_TARGET_UNDEFINED', entry:plan.entry ?? price, stop:plan.stop ?? null, target:plan.target ?? null, zoneMid, direction, price, setupAgeCandles:setupAge };
+        const invalidationHit = direction === 'LONG' ? price <= plan.stop : price >= plan.stop;
+        if (invalidationHit) return { ok:false, reason:'INVALIDATION_HIT', entry:plan.entry, stop:plan.stop, target:plan.target, zoneMid, direction, price, setupAgeCandles:setupAge };
+        return { ok:true, direction, entry:plan.entry, stop:plan.stop, target:plan.target, zoneMid, price, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, setupAgeCandles:setupAge, rMultiple:plan.rr, distanceFromEntryZoneBps:distanceBps, atr:a, bufferBps: buffer/Math.abs(price)*10000, entrySource: finite(num(c.entry ?? c.entryPrice, null)) ? 'candidate.entry' : 'currentPriceInsideZone', zoneSource: finite(num(c.setupPrice ?? c.zoneMid ?? c.entryZoneMid, null)) ? 'candidate.setupPrice' : 'featureSnapshot/indicator' };
       }
       function ensureArray(name){ try { if (!Array.isArray(globalThis[name])) globalThis[name]=[]; return globalThis[name]; } catch(_) { return []; } }
       function hasDuplicate(k, pair, tf){ const open = arr(globalThis.openPositions).concat(arr(globalThis.openTrades)).concat(arr(globalThis.paperSignals)); return open.some(x => text(x.__alpsV948Key || x.tradeId || x.key || '').toUpperCase() === k || (pairOf(x)===pair && tfOf(x)===tf && /OPEN|ACTIVE|PAPER/i.test(text(x.status || 'OPEN')))); }
       function makeTrade(c, d, srcPath){
         const k=keyOf(c); const pair=pairOf(c), tf=tfOf(c); const now=Date.now(); const id=`V948_${now}_${pair}_${tf}_${rootOf(c)}_${text(c.exit || c.exitName || 'GENERIC').replace(/[^A-Z0-9]+/gi,'_').slice(0,24)}`;
-        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.3-candidate-paper-entry-health-truth-rejection-audit-no-cap', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.3 after current-health candidate propagation, full Paper Entry scan, candle-store resolution, finite numeric plan, and valid recent zone persistence checks.' };
+        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.4-entry-construction-direction-stop-target-dedupe-report-truth', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.4 after current-health candidate propagation, fresh candidate dedupe, featureSnapshot/IndexedDB-priority entry construction, finite stop/target validation, and valid recent zone persistence checks.' };
       }
-      const candidates = []; const seenCandidates = new Set(); const candidateSources = {}; function pushCandidate(c, source){ if(!c || typeof c!=='object') return; const p=pairOf(c), tf=tfOf(c); if(!p || !tf) return; const k=keyOf(c); if(seenCandidates.has(k)) return; seenCandidates.add(k); candidates.push({...c,__candidateSource:source}); candidateSources[source]=(candidateSources[source]||0)+1; }
-      for (const c of arr(rows)) pushCandidate(c, 'runner-latch');
-      for (const c of arr(runnerRows)) pushCandidate(c, 'runner-nativeForwardPool');
-      try { globalThis.__ALPS_V950_SERVER_CANDIDATES__ = arr(runnerRows); } catch(_) {}
-      try { for (const c of arr(globalThis.__ALPS_V944_FORWARD_LATCH__ && globalThis.__ALPS_V944_FORWARD_LATCH__.rows)) pushCandidate(c, 'page-latch'); } catch(_) {}
-      try { for (const c of arr(globalThis.__ALPS_V950_SERVER_CANDIDATES__)) pushCandidate(c, 'page-server-candidates'); } catch(_) {}
-      const fnNames=['results','allResults','discoveryResults','activeForwardCandidatePool','forwardCandidatePool','nativeForwardPool','officialCandidates','candidates'];
-      for (const name of fnNames) { try { const v=globalThis[name]; if(Array.isArray(v)) for(const c of v) pushCandidate(c,name); else if(v && Array.isArray(v.candidates)) for(const c of v.candidates) pushCandidate(c,`${name}.candidates`); else if(typeof v==='function'){ const out=v(); if(Array.isArray(out)) for(const c of out) pushCandidate(c,`${name}()`); else if(out && Array.isArray(out.candidates)) for(const c of out.candidates) pushCandidate(c,`${name}().candidates`); } } catch(_) {} }
-      let candlesAll=mergeCandleGroups(collectCandles().concat(collectLocalStorageCandles()));
-      if (candlesAll.length === 0) candlesAll=mergeCandleGroups(candlesAll.concat(await collectIndexedDbCandles()));
-      const candleResolver = { schema:'alps.candleStoreResolver.view.v1', version:cfg.version, installed:true, storesFound:candlesAll.length, sources:candlesAll.slice(0,20).map(g=>({path:g.path, rows:g.rows.length, lastClose:g.rows[g.rows.length-1]?.close, lastTime:g.rows[g.rows.length-1]?.t})), usedIndexedDb:candlesAll.some(g=>/^indexedDB\./i.test(g.path)), usedLocalStorage:candlesAll.some(g=>/^localStorage\./i.test(g.path)), rule:'Use runtime globals first, then localStorage snapshots, then IndexedDB stores. No synthetic candles are created.' };
-      const visibilityBridge = { schema:'alps.paperEntryVisibility.view.v1', version:cfg.version, installed:true, runnerRowsReceived:arr(runnerRows).length, pageRowsReceived:arr(rows).length, candidatesSeen:candidates.length, candidateSources, nativeForwardPoolVisible:candidateSources['runner-nativeForwardPool']>0 || candidateSources['nativeForwardPool.candidates']>0, rule:'Paper Entry must read candidates from server nativeForwardPool, page forward pools, and latch rows before scanning entry zones.' };
+      const candidates = []; const seenCandidates = new Set(); const candidateSources = {}; const staleSkipped = { latch:0, page:0, duplicate:0, invalid:0 };
+      function pushCandidate(c, source){ if(!c || typeof c!=='object') return; const p=pairOf(c), tf=tfOf(c); if(!p || !tf) { staleSkipped.invalid++; return; } const k=keyOf(c); if(seenCandidates.has(k)) { staleSkipped.duplicate++; return; } seenCandidates.add(k); candidates.push({...c,__candidateSource:source}); candidateSources[source]=(candidateSources[source]||0)+1; }
+      const currentRows = arr(runnerRows);
+      if (currentRows.length > 0) {
+        for (const c of currentRows) pushCandidate(c, 'runner-nativeForwardPool-current');
+        try { globalThis.__ALPS_V950_SERVER_CANDIDATES__ = currentRows; } catch(_) {}
+        staleSkipped.latch += arr(rows).length;
+      } else {
+        for (const c of arr(rows)) pushCandidate(c, 'runner-latch-fallback');
+        try { for (const c of arr(globalThis.__ALPS_V944_FORWARD_LATCH__ && globalThis.__ALPS_V944_FORWARD_LATCH__.rows)) pushCandidate(c, 'page-latch-fallback'); } catch(_) {}
+        try { for (const c of arr(globalThis.__ALPS_V950_SERVER_CANDIDATES__)) pushCandidate(c, 'page-server-candidates-fallback'); } catch(_) {}
+        const fnNames=['results','allResults','discoveryResults','activeForwardCandidatePool','forwardCandidatePool','nativeForwardPool','officialCandidates','candidates'];
+        for (const name of fnNames) { try { const v=globalThis[name]; if(Array.isArray(v)) for(const c of v) pushCandidate(c,`${name}-fallback`); else if(v && Array.isArray(v.candidates)) for(const c of v.candidates) pushCandidate(c,`${name}.candidates-fallback`); else if(typeof v==='function'){ const out=v(); if(Array.isArray(out)) for(const c of out) pushCandidate(c,`${name}()-fallback`); else if(out && Array.isArray(out.candidates)) for(const c of out.candidates) pushCandidate(c,`${name}().candidates-fallback`); } } catch(_) {} }
+      }
+      const indexedDbGroups = await collectIndexedDbCandles();
+      let candlesAll=mergeCandleGroups(indexedDbGroups.concat(collectCandles()).concat(collectLocalStorageCandles()));
+      const candleResolver = { schema:'alps.candleStoreResolver.view.v1', version:cfg.version, installed:true, storesFound:candlesAll.length, sources:candlesAll.slice(0,20).map(g=>({path:g.path, rows:g.rows.length, lastClose:g.rows[g.rows.length-1]?.close, lastTime:g.rows[g.rows.length-1]?.t})), usedIndexedDb:candlesAll.some(g=>/^indexedDB\./i.test(g.path)), usedLocalStorage:candlesAll.some(g=>/^localStorage\./i.test(g.path)), rule:'Use IndexedDB candle arrays first, then runtime globals, then localStorage snapshots only as fallback. No synthetic candles are created.' };
+      const visibilityBridge = { schema:'alps.paperEntryVisibility.view.v1', version:cfg.version, installed:true, runnerRowsReceived:arr(runnerRows).length, pageRowsReceived:arr(rows).length, candidatesSeen:candidates.length, candidateSources, nativeForwardPoolVisible:candidateSources['runner-nativeForwardPool-current']>0 || candidateSources['runner-nativeForwardPool']>0 || candidateSources['nativeForwardPool.candidates']>0, rule:'Paper Entry must read candidates from server nativeForwardPool, page forward pools, and latch rows before scanning entry zones.' };
       const rejectedReasonCounts={}; const rejections=[]; const opened=[]; let scanned=0;
       function reject(c, reason, extra={}){ const r=reason || 'UNKNOWN_REJECT'; rejectedReasonCounts[r]=(rejectedReasonCounts[r]||0)+1; if(rejections.length<50) rejections.push({ key:keyOf(c), pair:pairOf(c), timeframe:tfOf(c), strategy:text(c.strategy || c.stratName || c.name), reason:r, ...extra }); }
       const maxOpen = Math.max(0, Number(cfg.maxEntriesPerTick || 0));
-      for (const c of candidates) { scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } if (maxOpen > 0 && opened.length >= maxOpen) { reject(c,'ENTRY_THROTTLED_AFTER_VALID_SIGNAL',{ executionThrottle:true, maxEntriesPerTick:maxOpen, note:'Candidate was accepted and scanned; opening was throttled for paper lifecycle stability, not rejected by a fixed candidate cap.' }); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
+      for (const c of candidates) { scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll, c); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } if (maxOpen > 0 && opened.length >= maxOpen) { reject(c,'ENTRY_THROTTLED_AFTER_VALID_SIGNAL',{ executionThrottle:true, maxEntriesPerTick:maxOpen, note:'Candidate was accepted and scanned; opening was throttled for paper lifecycle stability, not rejected by a fixed candidate cap.' }); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
       state.lastRunAt=Date.now(); state.scanned=scanned; state.openedTrades=opened.concat(arr(state.openedTrades)).slice(0,50); state.rejections=rejections; state.rejectedReasonCounts=rejectedReasonCounts; state.candlesStoresFound=candlesAll.length; state.candidatesSeen=candidates.length;
       const topRejectedReason = Object.entries(rejectedReasonCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
-      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery' };
+      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, staleSkipped, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, freshCandidateDedupe:{currentNativeRows:currentRows.length, candidatesAfterDedupe:candidates.length, staleSkipped, policy: currentRows.length>0?'SCAN_CURRENT_NATIVE_POOL_ONLY_LATCH_HISTORY_FALLBACK_DISABLED':'NO_CURRENT_NATIVE_POOL_USED_FALLBACK_SOURCES'}, v954EntryConstructionAudit:{installed:true, entryBuilderPriority:['candidate.featureSnapshot','candidate.setupPrice/currentPrice','indexedDB candles','runtime candles','localStorage fallback'], preciseRejectReasons:['ENTRY_UNDEFINED','STOP_TARGET_UNDEFINED','ZONE_MID_UNDEFINED','DIRECTION_UNDEFINED','DIRECTION_MISMATCH','OUTSIDE_ZONE','STALE_CANDIDATE','DUPLICATE','CANDLES_NOT_FOUND','INVALIDATION_HIT'], invalidationOnlyAfterNumericPlan:true}, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery' };
       globalThis.__ALPS_V948_ENTRY_ENGINE__.view=view; try { if (typeof saveRuntimeSnapshotThrottled === 'function') saveRuntimeSnapshotThrottled(false); } catch(e){ recordGuard(e,'saveRuntimeSnapshotThrottled'); }
       return view;
     }, { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES } });
@@ -6227,6 +6348,19 @@ async function runnerTick(reason = 'server-runner tick') {
   }
 }
 
+
+function scrubLegacyReportMarkdown(md = '') {
+  let out = String(md || '');
+  out = out.replace(/^# ALPS v9\.3\.0 Stable Autonomous Research OS Report/m, `# ALPS v9.5.4 Entry Construction Direction Stop Target Dedupe Report`);
+  out = out.replace(/App Version: 1\.1\.30-stable-autonomous-research-os/g, `App Version: ${FINAL_V930_VERSION}`);
+  out = out.replace(/AHI CORE v9\.1\.8/g, 'AHI CORE v9.5.4');
+  out = out.replace(/Forward cap=360/g, 'Forward cap=NO_FIXED_CANDIDATE_CAP');
+  out = out.replace(/dynamic evidence-ranked capacity 360/g, 'dynamic evidence-ranked admission with no fixed candidate cap');
+  out = out.replace(/ALPS v9\.3\.0 Stable Autonomous Layer/g, 'ALPS v9.5.4 Entry Construction Layer');
+  out = out.replace(/RESEARCH STATUS: No robust\/watch robustness candidate found yet\./g, 'RESEARCH STATUS: Current Health/nativeForwardPool is authoritative; entry construction audit controls paper entries.');
+  return out;
+}
+
 async function collectReport() {
   if (!page || page.isClosed()) throw new Error('ALPS page is not ready');
   let report = await pageEval(async () => {
@@ -6296,6 +6430,7 @@ async function collectReport() {
   await applyV949TradeLifecycleGuards('collect-report-post-enrich-v951-lifecycle').catch(() => null);
   report.zonePersistenceEntry = v948BuildEntryActivationView(report);
   report.paperEntryActivation = report.zonePersistenceEntry;
+  report.v954EntryConstructionAudit = report.zonePersistenceEntry?.v954EntryConstructionAudit || null;
   report.numericGuardHotfix = report.zonePersistenceEntry.numericGuard || lastV948NumericGuardView || { installed: true };
   try { report = v952AttachTruth(report, currentHealthForV952 || lastHealth || {}); } catch (e) { log('v9.5.2 attach truth before complete gate skipped:', e.message); }
   report = v949AttachCompleteTruth(report);
@@ -6338,6 +6473,7 @@ async function collectReport() {
 
 ${buildV952Markdown(report)}`;
   md = appendRecoveryMarkdown(md);
+  md = scrubLegacyReportMarkdown(md);
   lastReportMarkdown = md;
   try {
     const reportHealth = enhanceHealth(await getPageHealth());
@@ -6353,7 +6489,7 @@ ${buildV952Markdown(report)}`;
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
-  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth }, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
