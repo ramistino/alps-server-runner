@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.1 Integrated System: Paper Entry State Authority Router
+ * ALPS Server Runner — v10.1.4 Integrated System: Market Data Vision + Persistent State Recovery
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,19 +40,21 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v10.1.2-proof-scope-server-candle-bootstrap';
+const RECOVERY_PATCH_VERSION = 'v10.1.4-market-data-vision-persistent-recovery';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v10.1.2-proof-scope-server-candle-bootstrap';
+const COGNITION_PATCH_VERSION = 'v10.1.4-market-data-vision-persistent-recovery';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v10.1.2-proof-scope-server-candle-bootstrap';
+const AUTONOMY_PATCH_VERSION = 'v10.1.4-market-data-vision-persistent-recovery';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
 const STATE_AUTHORITY_FILE = path.join(DATA_DIR, 'state-authority-v10.json');
+const STATE_AUTHORITY_NONZERO_FILE = path.join(DATA_DIR, 'state-authority-v10-last-nonzero.json');
+const RUNTIME_NONZERO_FILE = path.join(DATA_DIR, 'runtime-last-nonzero-v1014.json');
 const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
   "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
   "note": "Previous known ALPS paper-forward trades before ALPS trade export sync. Historical continuity only; not current positions.",
@@ -2546,6 +2548,82 @@ function v952BuildQualityBuckets(rows = []) {
 }
 
 function v1000NowIso() { try { return new Date().toISOString(); } catch (_) { return ''; } }
+
+function v1014StateRowCount(st = {}) {
+  return Array.isArray(st?.rowOrder) ? st.rowOrder.filter(k => st?.rowsByKey?.[k]).length : 0;
+}
+function v1014LoadNonzeroAuthoritySync() {
+  try {
+    if (!fs.existsSync(STATE_AUTHORITY_NONZERO_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(STATE_AUTHORITY_NONZERO_FILE, 'utf8'));
+    return v1014StateRowCount(parsed) > 0 ? parsed : null;
+  } catch (e) { log('v10.1.4 nonzero authority load skipped:', e.message); return null; }
+}
+function v1014PersistNonzeroAuthoritySync(st = {}, reason = 'unknown') {
+  try {
+    if (v1014StateRowCount(st) <= 0) return;
+    const backup = { ...st, lastNonZeroBackupReason: reason, lastNonZeroBackupAt: v1000NowIso(), version: FINAL_V930_VERSION };
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(STATE_AUTHORITY_NONZERO_FILE, JSON.stringify(backup, null, 2));
+  } catch (e) { log('v10.1.4 nonzero authority backup skipped:', e.message); }
+}
+function v1014RestoreStateAuthorityFromBackupIfEmpty(st = null, reason = 'unknown') {
+  const current = st || stateAuthorityV10 || null;
+  if (v1014StateRowCount(current) > 0) return current;
+  const backup = v1014LoadNonzeroAuthoritySync();
+  if (!backup) return current;
+  backup.restoredFromNonzeroBackup = true;
+  backup.restoredAt = v1000NowIso();
+  backup.restoreReason = reason;
+  stateAuthorityV10 = backup;
+  try { fs.writeFileSync(STATE_AUTHORITY_FILE, JSON.stringify(stateAuthorityV10, null, 2)); } catch (_) {}
+  return stateAuthorityV10;
+}
+function v1014RuntimeCounts(obj = {}) {
+  const counts = {
+    candidates: n(obj.candidates ?? obj.officialCandidates ?? obj?.nativeForwardPool?.totalCandidates, 0),
+    results: n(obj.results ?? obj.rawResearchStrategies, 0),
+    paperSignals: n(obj.paperSignals, 0),
+    openPositions: n(obj.openPositions, 0),
+    closedTrades: n(obj.closedTrades ?? obj.closed, 0),
+    wins: n(obj.wins, 0),
+    losses: n(obj.losses, 0),
+    rejectedSignals: n(obj.rejectedSignals, 0),
+    lastForwardRefresh: n(obj.lastForwardRefresh, 0),
+    fwRunning: !!obj.fwRunning
+  };
+  counts.total = counts.candidates + counts.results + counts.paperSignals + counts.openPositions + counts.closedTrades;
+  return counts;
+}
+async function v1014PersistRuntimeNonzeroSnapshot(obj = {}, source = 'unknown') {
+  try {
+    const counts = v1014RuntimeCounts(obj);
+    if (counts.total <= 0) return null;
+    const snap = {
+      schema: 'alps.v1014RuntimeLastNonzero.view.v1',
+      version: FINAL_V930_VERSION,
+      capturedAt: new Date().toISOString(),
+      source,
+      counts,
+      nativeForwardPool: obj.nativeForwardPool || lastNativeForwardPoolView || null,
+      forwardLatch: obj.forwardLatch || lastForwardLatchView || null,
+      alpsTradeExport: obj.alpsTradeExport || lastTradeExport || null,
+      paperEntryActivation: obj.paperEntryActivation || null,
+      tradeLifecycleTruth: obj.tradeLifecycleTruth || lastV949LifecycleTruthView || null,
+      stateAuthority: v1000BuildView()
+    };
+    await fsp.mkdir(DATA_DIR, { recursive: true });
+    await fsp.writeFile(RUNTIME_NONZERO_FILE, JSON.stringify(snap, null, 2));
+    return snap;
+  } catch (e) { log('v10.1.4 runtime nonzero snapshot skipped:', e.message); return null; }
+}
+function v1014LoadRuntimeNonzeroSnapshotSync() {
+  try {
+    if (!fs.existsSync(RUNTIME_NONZERO_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(RUNTIME_NONZERO_FILE, 'utf8'));
+    return parsed?.counts?.total > 0 ? parsed : null;
+  } catch (_) { return null; }
+}
 function v1000LoadStateAuthoritySync() {
   if (stateAuthorityV10) return stateAuthorityV10;
   const fresh = {
@@ -2566,15 +2644,23 @@ function v1000LoadStateAuthoritySync() {
     if (fs.existsSync(STATE_AUTHORITY_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(STATE_AUTHORITY_FILE, 'utf8'));
       stateAuthorityV10 = { ...fresh, ...(parsed || {}), rowsByKey: parsed?.rowsByKey || {}, rowOrder: Array.isArray(parsed?.rowOrder) ? parsed.rowOrder : [] };
+      stateAuthorityV10 = v1014RestoreStateAuthorityFromBackupIfEmpty(stateAuthorityV10, 'load-primary-empty');
       return stateAuthorityV10;
     }
   } catch (e) { log('v10 state authority load skipped:', e.message); }
+  const backup = v1014LoadNonzeroAuthoritySync();
+  if (backup) {
+    stateAuthorityV10 = { ...fresh, ...(backup || {}), rowsByKey: backup?.rowsByKey || {}, rowOrder: Array.isArray(backup?.rowOrder) ? backup.rowOrder : [], restoredFromNonzeroBackup: true, restoredAt: v1000NowIso(), restoreReason: 'primary-missing' };
+    try { fs.writeFileSync(STATE_AUTHORITY_FILE, JSON.stringify(stateAuthorityV10, null, 2)); } catch (_) {}
+    return stateAuthorityV10;
+  }
   stateAuthorityV10 = fresh;
   return stateAuthorityV10;
 }
 function v1000PersistStateAuthoritySoon() {
   try {
     if (!stateAuthorityV10) return;
+    if (v1014StateRowCount(stateAuthorityV10) > 0) v1014PersistNonzeroAuthoritySync(stateAuthorityV10, 'persist-state-authority');
     fsp.mkdir(DATA_DIR, { recursive: true }).then(() => fsp.writeFile(STATE_AUTHORITY_FILE, JSON.stringify(stateAuthorityV10, null, 2))).catch(e => log('v10 state authority persist skipped:', e.message));
   } catch (_) {}
 }
@@ -2645,6 +2731,7 @@ function v1000CommitRows(rawRows = [], source = 'unknown', meta = {}) {
     delete st.rowsByKey[old];
   }
   st.lastNonZero = { rowCount: st.rowOrder.length, source, committedAt: st.updatedAt, commitSeq: st.commitSeq, meta };
+  v1014PersistNonzeroAuthoritySync(st, source);
   v1000PersistStateAuthoritySoon();
   return { committed: rows.length, activeRows: st.rowOrder.length, source };
 }
@@ -5190,12 +5277,9 @@ async function v1010FetchChartTruth(pair='BTCUSDT', timeframe='1h', limit=120) {
   let rows = [];
   let source = 'NO_CANDLES_AVAILABLE';
   try {
-    const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${capped}`;
-    const res = await fetch(url, { headers: { 'accept': 'application/json' } });
-    if (res.ok) {
-      rows = (await res.json()).map(v1010NormalizeCandleRow).filter(Boolean);
-      if (rows.length) source = 'BINANCE_KLINES_PROXY_REAL_CANDLES';
-    }
+    const fetched = await v1012FetchBinanceKlines(symbol, interval, capped);
+    rows = safeArray(fetched.rows).map(x => ({ t:x.t, o:x.open, h:x.high, l:x.low, c:x.close, v:x.volume })).map(v1010NormalizeCandleRow).filter(Boolean);
+    source = rows.length ? `MARKET_DATA_${fetched.status}_${fetched.sourceName || fetched.sourceSymbol || symbol}` : `MARKET_DATA_EMPTY_${fetched.status || 'UNKNOWN'}`;
   } catch (e) { source = `CANDLE_FETCH_FAILED:${textValue(e.message || e).slice(0,80)}`; }
   const candidateRows = v1010SanitizeExecutionRows(safeArray(lastNativeForwardPoolView?.candidates || lastReport?.nativeForwardPool?.candidates || []))
     .filter(c => textValue(c.pair||c.baseSymbol||c.symbol).toUpperCase().includes(symbol) || textValue(c.key).toUpperCase().includes(symbol));
@@ -5274,42 +5358,110 @@ function v1012Backtest(pair,tf,rows,strategy,rr){
 function v1012RowsForGroup(pair,tf,rows,source){
   const out=[]; const feats=[]; const f=v1012Feature(pair,tf,rows,rows.length-1); if(!f) return { rows:out, featureRows:feats }; feats.push(f);
   const strategies=['EMA_TREND','SWING_LEVEL_BOUNCE','POC','BOLLINGER_REVERSAL','RSI_DIVERGENCE_ZONE']; const exits=[1,1.5,2,3,5];
-  for(const st of strategies){ for(const rr of exits){ const bt=v1012Backtest(pair,tf,rows,st,rr); const sig=v1012Signal(st,f); const score=(bt.pf||0)*25+(bt.trades||0)*0.25+(sig.ok?20:0)+(bt.posterior||0)*30; if(bt.trades<3 && !sig.ok) continue; const strategyName=st.replace(/_/g,' '); out.push({ key:`${pair}_${tf}||${tf.toUpperCase()}||${st}||${String(rr).replace('.','_')}R_FIXED`, pair, symbol:pair, baseSymbol:pair, timeframe:tf, strategy:strategyName, stratName:strategyName, strategyRoot:st, exit:`${rr}R Fixed`, direction:sig.side||'', currentPrice:f.close, setupPrice:sig.zone||f.close, score:Number(score.toFixed(4)), oosPF:Number((bt.pf||0).toFixed(6)), oosTrades:bt.trades, totalTrades:bt.trades, nEffOOS:Math.max(0,Math.round(bt.trades*0.7)), posteriorPFgt1:Number((bt.posterior||0).toFixed(6)), rollingPass:bt.trades>=8 && bt.pf>=1, promotionTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), candidateTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), forwardEligible:true, eligible:true, evidenceSource:'SERVER_REAL_BINANCE_CANDLE_DERIVED_BACKTEST', __alpsV1012Source:'v10.1.2.serverCandleBootstrap', __alpsV1012CandleSource:source, closedCandleTime:f.time, latestClosedCandleTs:f.time, featureSnapshot:f, paperOnly:true, liveCapitalExecution:false }); } }
+  for(const st of strategies){ for(const rr of exits){ const bt=v1012Backtest(pair,tf,rows,st,rr); const sig=v1012Signal(st,f); const score=(bt.pf||0)*25+(bt.trades||0)*0.25+(sig.ok?20:0)+(bt.posterior||0)*30; if(bt.trades<3 && !sig.ok) continue; const strategyName=st.replace(/_/g,' '); out.push({ key:`${pair}_${tf}||${tf.toUpperCase()}||${st}||${String(rr).replace('.','_')}R_FIXED`, pair, symbol:pair, baseSymbol:pair, timeframe:tf, strategy:strategyName, stratName:strategyName, strategyRoot:st, exit:`${rr}R Fixed`, direction:sig.side||'', currentPrice:f.close, setupPrice:sig.zone||f.close, score:Number(score.toFixed(4)), oosPF:Number((bt.pf||0).toFixed(6)), oosTrades:bt.trades, totalTrades:bt.trades, nEffOOS:Math.max(0,Math.round(bt.trades*0.7)), posteriorPFgt1:Number((bt.posterior||0).toFixed(6)), rollingPass:bt.trades>=8 && bt.pf>=1, promotionTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), candidateTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), forwardEligible:true, eligible:true, evidenceSource:'SERVER_REAL_MARKET_DATA_CANDLE_DERIVED_BACKTEST', __alpsV1012Source:'v10.1.4.marketDataVisionBootstrap', __alpsV1012CandleSource:source, closedCandleTime:f.time, latestClosedCandleTs:f.time, featureSnapshot:f, paperOnly:true, liveCapitalExecution:false }); } }
   return { rows:out, featureRows:feats };
 }
 function v1012RequestedSymbols(report={}) {
   const raw = `${textValue(report?.settings?.symbols || 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT')},${textValue(report?.settings?.metals || '')}`;
   return [...new Set(raw.split(/[,\s]+/).map(x=>x.trim().toUpperCase()).filter(Boolean).map(x=>x==='XAUUSDT'?'XAUTUSDT':x))].filter(s => /^([A-Z0-9]+)USDT$/.test(s));
 }
-async function v1012FetchBinanceKlines(symbol, tf, limit=1000) {
-  const sourceSymbol = symbol === 'XAUTUSDT' ? '' : symbol; // no unsafe gold alias for execution candidates
-  if (!sourceSymbol) return { rows:[], sourceSymbol:'', status:'NO_SAFE_BINANCE_ALIAS' };
-  const interval = ({'5M':'5m','15M':'15m','30M':'30m','1H':'1h','4H':'4h'}[textValue(tf).toUpperCase()] || textValue(tf).toLowerCase());
-  const key = `${sourceSymbol}_${interval}_${Math.max(200, Math.min(1000, Number(limit)||1000))}`;
-  const cached = v1012ServerCandleCache.get(key);
-  if (cached && Date.now() - cached.at < 8*60*1000) return { rows:cached.rows, sourceSymbol, status:'CACHE_HIT' };
+
+function v1014SourceSymbolFor(symbol) {
+  const s = textValue(symbol).toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if (s === 'XAUTUSDT' || s === 'XAUUSDT' || s === 'GOLDUSDT') return { sourceSymbol:'PAXGUSDT', requestedSymbol:s || 'XAUTUSDT', assetProxy:'PAXGUSDT_FOR_GOLD' };
+  return { sourceSymbol:s, requestedSymbol:s, assetProxy:'' };
+}
+function v1014OkxInstId(sourceSymbol) {
+  return textValue(sourceSymbol).toUpperCase().replace(/USDT$/, '-USDT');
+}
+function v1014OkxBar(tf) {
+  const t = textValue(tf).toLowerCase();
+  if (t === '1h') return '1H';
+  if (t === '4h') return '4H';
+  return t;
+}
+function v1014BybitInterval(tf) {
+  const t = textValue(tf).toLowerCase();
+  return ({ '5m':'5', '15m':'15', '30m':'30', '1h':'60', '4h':'240' }[t] || t.replace('m',''));
+}
+async function v1014FetchJson(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController(); const timer = setTimeout(()=>controller.abort(), 15000);
-    const url = `https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(sourceSymbol)}&interval=${encodeURIComponent(interval)}&limit=${Math.max(200, Math.min(1000, Number(limit)||1000))}`;
-    const res = await fetch(url, { headers:{ accept:'application/json' }, signal: controller.signal }); clearTimeout(timer);
-    if (!res.ok) return { rows:[], sourceSymbol, status:`HTTP_${res.status}` };
-    const rows = (await res.json()).map(v1012KlineToCandle).filter(Boolean).filter(x=>Number.isFinite(x.close)&&Number.isFinite(x.high)&&Number.isFinite(x.low)).sort((a,b)=>(a.t||0)-(b.t||0));
-    const closedRows = rows.filter(x => !x.t || x.t <= Date.now() - v1012TfMs(interval));
-    v1012ServerCandleCache.set(key, { at: Date.now(), rows: closedRows });
-    return { rows: closedRows, sourceSymbol, status: closedRows.length ? 'OK' : 'NO_CLOSED_ROWS' };
-  } catch (e) { return { rows:[], sourceSymbol, status:`ERROR:${textValue(e.message||e).slice(0,80)}` }; }
+    const res = await fetch(url, { headers:{ accept:'application/json', 'user-agent':'ALPS-Research-Runner/10.1.4' }, signal: controller.signal });
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch (_) {}
+    return { ok: res.ok, status: res.status, json, text: text ? text.slice(0,160) : '' };
+  } finally { clearTimeout(timer); }
+}
+function v1014BinanceArrayToCandles(json) {
+  return safeArray(json).map(v1012KlineToCandle).filter(Boolean).filter(x=>Number.isFinite(x.close)&&Number.isFinite(x.high)&&Number.isFinite(x.low)).sort((a,b)=>(a.t||0)-(b.t||0));
+}
+function v1014OkxArrayToCandles(json) {
+  const rows = safeArray(json?.data).filter(r => Array.isArray(r));
+  return rows.map(r => ({ t:Number(r[0]), open:Number(r[1]), high:Number(r[2]), low:Number(r[3]), close:Number(r[4]), volume:Number(r[5]||0), confirm:String(r[8]||'') }))
+    .filter(x=>[x.t,x.open,x.high,x.low,x.close].every(Number.isFinite) && x.confirm !== '0')
+    .sort((a,b)=>(a.t||0)-(b.t||0));
+}
+function v1014BybitArrayToCandles(json) {
+  const rows = safeArray(json?.result?.list).filter(r => Array.isArray(r));
+  return rows.map(r => ({ t:Number(r[0]), open:Number(r[1]), high:Number(r[2]), low:Number(r[3]), close:Number(r[4]), volume:Number(r[5]||0) }))
+    .filter(x=>[x.t,x.open,x.high,x.low,x.close].every(Number.isFinite))
+    .sort((a,b)=>(a.t||0)-(b.t||0));
+}
+async function v1012FetchBinanceKlines(symbol, tf, limit=1000) {
+  const src = v1014SourceSymbolFor(symbol);
+  const sourceSymbol = src.sourceSymbol;
+  if (!sourceSymbol) return { rows:[], sourceSymbol:'', requestedSymbol:symbol, status:'NO_SAFE_MARKET_DATA_ALIAS' };
+  const interval = ({'5M':'5m','15M':'15m','30M':'30m','1H':'1h','4H':'4h'}[textValue(tf).toUpperCase()] || textValue(tf).toLowerCase());
+  const capped = Math.max(120, Math.min(1000, Number(limit)||1000));
+  const key = `${sourceSymbol}_${interval}_${capped}_v1014`;
+  const cached = v1012ServerCandleCache.get(key);
+  if (cached && Date.now() - cached.at < 8*60*1000) return { rows:cached.rows, sourceSymbol, requestedSymbol:src.requestedSymbol, assetProxy:src.assetProxy, status:'CACHE_HIT', sourceName:cached.sourceName || 'CACHE' };
+  const attempts = [];
+  const closed = (rows) => safeArray(rows).filter(x => !x.t || x.t <= Date.now() - v1012TfMs(interval));
+  try {
+    const binanceBases = ['https://data-api.binance.vision', 'https://data.binance.com'];
+    for (const base of binanceBases) {
+      const url = `${base}/api/v3/klines?symbol=${encodeURIComponent(sourceSymbol)}&interval=${encodeURIComponent(interval)}&limit=${capped}`;
+      const r = await v1014FetchJson(url, 15000).catch(e => ({ ok:false, status:`ERROR:${textValue(e.message||e).slice(0,60)}` }));
+      attempts.push({ source:'BINANCE_VISION', base, status:r.status, ok:!!r.ok });
+      if (r.ok) {
+        const rows = closed(v1014BinanceArrayToCandles(r.json));
+        if (rows.length) { v1012ServerCandleCache.set(key, { at: Date.now(), rows, sourceName:'BINANCE_VISION' }); return { rows, sourceSymbol, requestedSymbol:src.requestedSymbol, assetProxy:src.assetProxy, status:'OK_BINANCE_VISION', sourceName:'BINANCE_VISION', attempts }; }
+      }
+    }
+    const okxLimit = Math.min(300, capped);
+    const okxUrl = `https://www.okx.com/api/v5/market/candles?instId=${encodeURIComponent(v1014OkxInstId(sourceSymbol))}&bar=${encodeURIComponent(v1014OkxBar(interval))}&limit=${okxLimit}`;
+    const okx = await v1014FetchJson(okxUrl, 15000).catch(e => ({ ok:false, status:`ERROR:${textValue(e.message||e).slice(0,60)}` }));
+    attempts.push({ source:'OKX', status:okx.status, ok:!!okx.ok });
+    if (okx.ok && String(okx.json?.code) === '0') {
+      const rows = closed(v1014OkxArrayToCandles(okx.json));
+      if (rows.length) { v1012ServerCandleCache.set(key, { at: Date.now(), rows, sourceName:'OKX' }); return { rows, sourceSymbol, requestedSymbol:src.requestedSymbol, assetProxy:src.assetProxy, status:'OK_OKX', sourceName:'OKX', attempts }; }
+    }
+    const bybitUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${encodeURIComponent(sourceSymbol)}&interval=${encodeURIComponent(v1014BybitInterval(interval))}&limit=${capped}`;
+    const bybit = await v1014FetchJson(bybitUrl, 15000).catch(e => ({ ok:false, status:`ERROR:${textValue(e.message||e).slice(0,60)}` }));
+    attempts.push({ source:'BYBIT', status:bybit.status, ok:!!bybit.ok });
+    if (bybit.ok && Number(bybit.json?.retCode) === 0) {
+      const rows = closed(v1014BybitArrayToCandles(bybit.json));
+      if (rows.length) { v1012ServerCandleCache.set(key, { at: Date.now(), rows, sourceName:'BYBIT' }); return { rows, sourceSymbol, requestedSymbol:src.requestedSymbol, assetProxy:src.assetProxy, status:'OK_BYBIT', sourceName:'BYBIT', attempts }; }
+    }
+    return { rows:[], sourceSymbol, requestedSymbol:src.requestedSymbol, assetProxy:src.assetProxy, status:'ALL_MARKET_DATA_SOURCES_EMPTY_OR_BLOCKED', attempts };
+  } catch (e) { return { rows:[], sourceSymbol, requestedSymbol:src.requestedSymbol, assetProxy:src.assetProxy, status:`ERROR:${textValue(e.message||e).slice(0,80)}`, attempts }; }
 }
 async function v1012ServerCandleResearchBootstrap(report={}, reason='v10.1.2-server-candle-bootstrap') {
-  const out = { schema:'alps.v1012ServerCandleResearchBootstrap.view.v1', version:FINAL_V930_VERSION, installed:true, reason, realCandlesOnly:true, noSyntheticRows:true, rows:[], featureRows:[], candleGroups:[], errors:[], status:'INIT', rule:'Build emergency research candidates from real Binance closed candles only when page discovery sees candlesLoaded but produces zero feature rows. This does not create fake trades or fake OOS.' };
+  const out = { schema:'alps.v1012ServerCandleResearchBootstrap.view.v1', version:FINAL_V930_VERSION, installed:true, reason, realCandlesOnly:true, noSyntheticRows:true, rows:[], featureRows:[], candleGroups:[], errors:[], status:'INIT', rule:'Build emergency research candidates from real closed candles using data-api.binance.vision first, then OKX/Bybit failover. No synthetic candles, candidates, trades, or OOS are created.' };
   try {
-    const symbols = v1012RequestedSymbols(report).filter(s => s !== 'XAUTUSDT');
+    const symbols = v1012RequestedSymbols(report); // v10.1.4 maps XAUTUSDT to PAXGUSDT market-data proxy safely
     const frames = ['5m','15m','30m','1h','4h'];
     for (const symbol of symbols) {
       for (const tf of frames) {
         const fetched = await v1012FetchBinanceKlines(symbol, tf, 1000);
-        out.candleGroups.push({ pair:symbol, timeframe:tf, sourceSymbol:fetched.sourceSymbol, status:fetched.status, rows:fetched.rows.length });
+        out.candleGroups.push({ pair:symbol, timeframe:tf, requestedSymbol:fetched.requestedSymbol || symbol, sourceSymbol:fetched.sourceSymbol, sourceName:fetched.sourceName || '', assetProxy:fetched.assetProxy || '', status:fetched.status, rows:fetched.rows.length, attempts:fetched.attempts || [] });
         if (fetched.rows.length < 120) continue;
-        const made = v1012RowsForGroup(symbol, tf, fetched.rows, `binance.${fetched.sourceSymbol}.${tf}`);
+        const made = v1012RowsForGroup(symbol, tf, fetched.rows, `${fetched.sourceName || 'marketdata'}.${fetched.sourceSymbol}.${tf}`);
+        for (const row of made.rows) { row.requestedSymbol = symbol; row.sourceSymbol = fetched.sourceSymbol; row.marketDataSource = fetched.sourceName || ''; row.assetProxy = fetched.assetProxy || ''; row.__alpsV1014MarketData = true; }
         out.featureRows.push(...made.featureRows);
         out.rows.push(...made.rows);
       }
@@ -5323,8 +5475,8 @@ async function v1012ServerCandleResearchBootstrap(report={}, reason='v10.1.2-ser
     out.closedCandlePairFrames = out.candleGroups.filter(g => g.rows >= 120).length;
     out.status = out.rows.length ? 'SERVER_REAL_CANDLE_ROWS_MATERIALIZED' : 'SERVER_CANDLE_BOOTSTRAP_ZERO_ROWS';
     if (out.rows.length) {
-      v1000CommitRows(out.rows, 'v10.1.2-server-candle-bootstrap', { observedRows: out.rows.length, featureRows: out.featureRows.length });
-      v944MergeForwardLatch(out.rows, 'v10.1.2-server-candle-bootstrap');
+      v1000CommitRows(out.rows, 'v10.1.4-market-data-vision-bootstrap', { observedRows: out.rows.length, featureRows: out.featureRows.length });
+      v944MergeForwardLatch(out.rows, 'v10.1.4-market-data-vision-bootstrap');
       lastNativeForwardPoolView = v952BuildNativePoolFromRows(v1000ActiveRows(), lastNativeForwardPoolView || {});
       lastForwardLatchView = v944BuildForwardLatchView();
     }
@@ -7333,6 +7485,7 @@ ${buildV952Markdown(report)}`;
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
+  await v1014PersistRuntimeNonzeroSnapshot(report, 'collect-report-final').catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
