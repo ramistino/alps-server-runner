@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.5.5-direct-indexeddb-candle-bank-feature-builder-universe-retry';
+const RECOVERY_PATCH_VERSION = 'v9.5.7-paper-entry-activation-chain';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.5.5-direct-indexeddb-candle-bank-feature-builder-universe-retry';
+const COGNITION_PATCH_VERSION = 'v9.5.7-paper-entry-activation-chain';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.5.5-direct-indexeddb-candle-bank-feature-builder-universe-retry';
+const AUTONOMY_PATCH_VERSION = 'v9.5.7-paper-entry-activation-chain';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -344,7 +344,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.5.5-direct-indexeddb-candle-bank-feature-builder-universe-retry';
+const FINAL_V930_VERSION = 'v9.5.7-paper-entry-activation-chain';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -5617,13 +5617,35 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
     lastV948EntryEngineView = v948EmptyEntryView('page-not-ready');
     return lastV948EntryEngineView;
   }
+  // v9.5.7 activation fix: pull the freshest native pool straight from the page BEFORE building candidate rows.
+  // The tick previously called this engine while lastNativeForwardPoolView was stale/empty (pool-vs-entry race),
+  // so Paper Entry saw 0 candidates even though the page pool held hundreds. Reading the page pool here makes
+  // the engine self-sufficient regardless of call ordering. Real rows only — nothing synthetic is created.
+  let freshPagePoolRows = [];
+  try {
+    const pagePool = await pageEval(() => {
+      function arr(v){ return Array.isArray(v) ? v : []; }
+      const out = [];
+      const pool = globalThis.__ALPS_V930_NATIVE_FORWARD_POOL__ || globalThis.nativeForwardPool || null;
+      if (pool) { out.push(...arr(pool.candidates)); if (!out.length && Array.isArray(pool)) out.push(...pool); }
+      if (!out.length) for (const name of ['activeForwardCandidatePool','forwardCandidatePool','officialCandidates']) { const v = globalThis[name]; if (Array.isArray(v) && v.length) { out.push(...v); break; } if (v && Array.isArray(v.candidates) && v.candidates.length) { out.push(...v.candidates); break; } }
+      return out.slice(0, 2000);
+    }, 'v957-fresh-page-pool-pull').catch(() => []);
+    freshPagePoolRows = safeArray(pagePool);
+    if (freshPagePoolRows.length) {
+      v944MergeForwardLatch(freshPagePoolRows, 'v957-fresh-page-pool');
+      if (!safeArray(lastNativeForwardPoolView?.candidates).length) {
+        lastNativeForwardPoolView = { ...(lastNativeForwardPoolView || {}), candidates: freshPagePoolRows, totalCandidates: freshPagePoolRows.length, source: 'v957-fresh-page-pool' };
+      }
+    }
+  } catch (e) { log('v9.5.7 fresh page pool pull failed:', e.message); }
   const latchRows = safeArray(forwardLatchState.candidates);
   const nativePoolRows = safeArray(lastNativeForwardPoolView?.candidates);
   const healthPoolRows = safeArray(lastHealth?.nativeForwardPool?.candidates);
   const materializedRows = safeArray(lastMaterializedRows);
   const runnerCandidateRows = [];
   const seenRunnerCandidateKeys = new Set();
-  for (const group of [latchRows, nativePoolRows, healthPoolRows, materializedRows]) {
+  for (const group of [freshPagePoolRows, nativePoolRows, healthPoolRows, latchRows, materializedRows]) {
     for (const c of safeArray(group)) {
       const k = uniqueKeyFromCandidate(c) || JSON.stringify(c || {}).slice(0, 160);
       if (!k || seenRunnerCandidateKeys.has(k)) continue;
@@ -5633,6 +5655,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
     }
     
   }
+  const v957ProofBefore = { freshPagePoolRows: freshPagePoolRows.length, latchRows: latchRows.length, nativePoolRows: nativePoolRows.length, healthPoolRows: healthPoolRows.length, runnerCandidateRows: runnerCandidateRows.length };
   try {
     const view = await pageEval(async ({ rows, runnerRows, cfg, reasonText }) => {
       const startedAt = Date.now();
@@ -6025,7 +6048,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       function hasDuplicate(k, pair, tf){ const open = arr(globalThis.openPositions).concat(arr(globalThis.openTrades)).concat(arr(globalThis.paperSignals)); return open.some(x => text(x.__alpsV948Key || x.tradeId || x.key || '').toUpperCase() === k || (pairOf(x)===pair && tfOf(x)===tf && /OPEN|ACTIVE|PAPER/i.test(text(x.status || 'OPEN')))); }
       function makeTrade(c, d, srcPath){
         const k=keyOf(c); const pair=pairOf(c), tf=tfOf(c); const now=Date.now(); const id=`V948_${now}_${pair}_${tf}_${rootOf(c)}_${text(c.exit || c.exitName || 'GENERIC').replace(/[^A-Z0-9]+/gi,'_').slice(0,24)}`;
-        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.5-direct-indexeddb-candle-bank-feature-builder-universe-retry', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.5 after current-health candidate propagation, fresh candidate dedupe, featureSnapshot/IndexedDB-priority entry construction, finite stop/target validation, and valid recent zone persistence checks.' };
+        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.7-paper-entry-activation-chain', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.5 after current-health candidate propagation, fresh candidate dedupe, featureSnapshot/IndexedDB-priority entry construction, finite stop/target validation, and valid recent zone persistence checks.' };
       }
       const candidates = []; const seenCandidates = new Set(); const candidateSources = {}; const staleSkipped = { latch:0, page:0, duplicate:0, invalid:0 };
       function pushCandidate(c, source){ if(!c || typeof c!=='object') return; const p=pairOf(c), tf=tfOf(c); if(!p || !tf) { staleSkipped.invalid++; return; } const k=keyOf(c); if(seenCandidates.has(k)) { staleSkipped.duplicate++; return; } seenCandidates.add(k); candidates.push({...c,__candidateSource:source}); candidateSources[source]=(candidateSources[source]||0)+1; }
@@ -6056,6 +6079,25 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       return view;
     }, { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES } });
     lastV948EntryEngineView = view || v948EmptyEntryView('empty-page-view');
+    if (lastV948EntryEngineView && typeof lastV948EntryEngineView === 'object') {
+      lastV948EntryEngineView.v957ActivationProof = {
+        schema: 'alps.v957ActivationProof.view.v1',
+        version: FINAL_V930_VERSION,
+        before: v957ProofBefore,
+        after: {
+          nativeCandidates: v957ProofBefore.runnerCandidateRows,
+          latchedCandidates: safeArray(forwardLatchState.candidates).length,
+          pageCandidatesSeen: v952Num(lastV948EntryEngineView.candidatesSeen),
+          paperEntrySeen: v952Num(lastV948EntryEngineView.candidatesSeen),
+          paperEntryScanned: v952Num(lastV948EntryEngineView.scanned),
+          opened: v952Num(lastV948EntryEngineView.opened),
+          rejectedTotal: v952Num(lastV948EntryEngineView.rejected),
+          topRejectedReason: lastV948EntryEngineView.topRejectedReason || ''
+        },
+        activationChain: 'freshPagePool -> forwardLatch -> runnerRows -> in-page pushCandidate -> zone scan -> open/reject',
+        rule: 'Proof fields show real before/after counts of the activation chain. No synthetic candidates or trades.'
+      };
+    }
     lastV948NumericGuardView = lastV948EntryEngineView.numericGuard || null;
     lastV948RejectedReasonView = lastV948EntryEngineView.rejectedReasonCounts || null;
     lastV950PaperEntryVisibilityView = lastV948EntryEngineView.visibilityBridge || null;
