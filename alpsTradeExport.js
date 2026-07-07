@@ -1,7 +1,7 @@
 /**
- * ALPS Runner Trade Export v1.1
+ * ALPS Runner Trade Export v1.2
  *
- * Exposes real ALPS paper-forward open/closed trades for ALPS reports.
+ * Exposes real ALPS paper-forward open/closed trades for ALPS reports, including Paper Entry openedTrades export sync.
  * This module does not change strategy logic and does not open live execution.
  */
 
