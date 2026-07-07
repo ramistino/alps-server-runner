@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.4.5 Actual Research Trigger + Progressive Forward Latch
+ * ALPS Server Runner — v9.4.6 Research Trigger Data Bridge + Progressive Forward Latch
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.4.5-actual-research-trigger';
+const RECOVERY_PATCH_VERSION = 'v9.4.6-research-trigger-data-bridge';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.4.5-actual-research-trigger';
+const COGNITION_PATCH_VERSION = 'v9.4.6-research-trigger-data-bridge';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.4.5-actual-research-trigger';
+const AUTONOMY_PATCH_VERSION = 'v9.4.6-research-trigger-data-bridge';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -342,9 +342,9 @@ let lastOOSEvidenceRows = [];
 let lastRecoveryForwardCoreView = null;
 
 
-// ALPS v9.4.5 Actual Research Trigger
+// ALPS v9.4.6 Research Trigger Data Bridge
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.4.5-actual-research-trigger';
+const FINAL_V930_VERSION = 'v9.4.6-research-trigger-data-bridge';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -353,7 +353,7 @@ let lastCircuitBreakerView = null;
 let lastCounterfactualView = null;
 let lastChartView = null;
 
-// ALPS v9.4.5 Actual Research Trigger + Progressive Forward Latch
+// ALPS v9.4.6 Research Trigger Data Bridge + Progressive Forward Latch
 const V944_FORWARD_LATCH_FILE = path.join(DATA_DIR, 'forward-latch-v944.json');
 const V944_RECOVERABLE_LOOKBACK_CANDLES = Number(process.env.ALPS_V944_RECOVERABLE_LOOKBACK_CANDLES || 5);
 const V944_ENTRY_ZONE_BPS = Number(process.env.ALPS_V944_ENTRY_ZONE_BPS || 18);
@@ -364,7 +364,7 @@ let lastRecoverableEntryView = null;
 let lastAdaptiveExitManagerView = null;
 let lastSyntheticIndicatorEngineView = null;
 
-// ALPS v9.4.5 Actual Research Trigger
+// ALPS v9.4.6 Research Trigger Data Bridge
 const V945_RESEARCH_TRIGGER_MIN_PAIRFRAMES = Number(process.env.ALPS_V945_RESEARCH_TRIGGER_MIN_PAIRFRAMES || 1);
 const V945_RESEARCH_TRIGGER_COOLDOWN_MS = Number(process.env.ALPS_V945_RESEARCH_TRIGGER_COOLDOWN_MS || 45_000);
 const V945_RESEARCH_TRIGGER_CALL_TIMEOUT_MS = Number(process.env.ALPS_V945_RESEARCH_TRIGGER_CALL_TIMEOUT_MS || 2500);
@@ -581,7 +581,7 @@ function buildChartView(report = {}) {
 }
 
 
-// ALPS v9.4.5 Actual Research Trigger
+// ALPS v9.4.6 Research Trigger Data Bridge
 // Adds three decision-layer controls above the stable v9.3.0 runtime:
 // 1) minimum-evidence gate BEFORE cluster dedup, 2) cluster dedup before the forward pool,
 // 3) quantitative FULL_AUTONOMY_FORWARD promotion, 4) mutation stagnation governor that moves selection budget to exploration.
@@ -870,31 +870,116 @@ function v944BuildProgressiveResearchView(report = {}) {
   return { schema: 'alps.progressiveResearch.view.v1', version: FINAL_V930_VERSION, installed: true, active: true, pairFramesSeen: pairFrames, strategiesSeen: strategies, triggered, mode: strategies > 0 ? 'RESEARCH_ACTIVE' : (triggered ? 'RESEARCH_TRIGGERED_WAITING_FOR_ROWS' : (pairFrames > 0 ? 'RESEARCH_AS_EACH_PAIR_FRAME_COMPLETES' : 'WAITING_FIRST_PAIR_FRAME')), firstCandidatePolicy: 'FORWARD_ON_FIRST_VALID_CANDIDATE', doesNotWaitForFullUniverse: true };
 }
 
+function v946MaxNumber(...values) {
+  let best = 0;
+  for (const value of values.flat(Infinity)) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > best) best = parsed;
+  }
+  return best;
+}
+
+function v946GetPath(obj, pathText) {
+  try {
+    return String(pathText).split('.').reduce((cur, part) => (cur == null ? undefined : cur[part]), obj);
+  } catch (_) { return undefined; }
+}
+
+function v946ResearchMetricSources(h = {}) {
+  const out = [];
+  const push = value => { if (value && typeof value === 'object' && !out.includes(value)) out.push(value); };
+  push(h);
+  push(h.health);
+  push(h.report);
+  push(h.runReport);
+  push(h.rawReport);
+  push(h.pageReport);
+  push(h.diagReport);
+  push(h.latestReport);
+  push(lastReport);
+  push(lastHealth);
+  for (const item of out.slice()) {
+    push(item.data);
+    push(item.research);
+    push(item.forwardWatch);
+    push(item.runtime);
+    push(item.bootDiagnostics);
+    push(item.diagnostics);
+    push(item.nativeForwardPool);
+    push(item.fullAutonomyNativeForwardPool);
+  }
+  return out;
+}
+
 function v945ResearchMetrics(h = {}) {
-  const d = h.bootDiagnostics || {};
-  const data = h.data || {};
+  const sources = v946ResearchMetricSources(h);
+  const values = pathText => sources.map(src => v946GetPath(src, pathText));
+  const pairFrames = v946MaxNumber(values('dataPairFrames'), values('pairFrames'), values('data.pairFrames'), values('bootDiagnostics.pairFrames'), values('diagnostics.pairFrames'));
+  const candlesLoaded = v946MaxNumber(values('candlesLoaded'), values('data.candlesLoaded'), values('bootDiagnostics.candlesLoaded'), values('diagnostics.candlesLoaded'), values('chart.candlesLoaded'));
+  const rawStrategies = v946MaxNumber(values('rawResearchStrategies'), values('researchStrategies'), values('research.strategies'), values('bootDiagnostics.researchStrategies'), values('diagnostics.rawResearchStrategies'));
+  const researchCycles = v946MaxNumber(values('rawResearchCycles'), values('researchCycles'), values('research.researchCycles'), values('bootDiagnostics.researchCycles'));
+  const mutationRounds = v946MaxNumber(values('rawMutationRounds'), values('mutationRounds'), values('research.mutationRounds'));
+  const candidatesMonitored = v946MaxNumber(values('candidatesMonitored'), values('candidates'), values('officialCandidates'), values('forwardWatch.candidatesMonitored'), values('nativeForwardPool.totalCandidates'), values('forwardLatch.size'), values('bootDiagnostics.candidatesMonitored'));
+  const totalGeneratedStrategies = v946MaxNumber(values('totalGeneratedStrategies'), values('forwardWatch.totalGeneratedStrategies'), values('nativeForwardPool.generatedStrategies'), values('bootDiagnostics.totalGeneratedStrategies'));
+  const runnerStateStatus = textValue(v946GetPath(h, 'runnerStateStatus') || v946GetPath(h, 'runtime.runnerState.status') || v946GetPath(h, 'bootDiagnostics.runnerStateStatus') || v946GetPath(lastHealth || {}, 'runnerStateStatus') || '');
   return {
-    pairFrames: n(h.dataPairFrames ?? data.pairFrames ?? d.pairFrames, 0),
-    candlesLoaded: n(h.candlesLoaded ?? data.candlesLoaded ?? d.candlesLoaded, 0),
-    rawStrategies: n(h.rawResearchStrategies ?? h.research?.strategies ?? d.researchStrategies, 0),
-    researchCycles: n(h.rawResearchCycles ?? h.research?.researchCycles ?? d.researchCycles, 0),
-    mutationRounds: n(h.rawMutationRounds ?? h.research?.mutationRounds, 0),
-    candidatesMonitored: n(h.candidatesMonitored ?? h.forwardWatch?.candidatesMonitored ?? d.candidatesMonitored ?? h.candidates, 0),
-    totalGeneratedStrategies: n(h.totalGeneratedStrategies ?? h.forwardWatch?.totalGeneratedStrategies ?? d.totalGeneratedStrategies, 0),
-    labRunning: !!h.labRunning,
-    engineReady: !!h.engineReady,
-    runnerStateStatus: textValue(h.runnerStateStatus || d.runnerStateStatus || ''),
-    proxyOK: h.proxyOK ?? d.proxyOK ?? null
+    pairFrames,
+    candlesLoaded,
+    rawStrategies,
+    researchCycles,
+    mutationRounds,
+    candidatesMonitored,
+    totalGeneratedStrategies,
+    labRunning: !!(h.labRunning || h.runtime?.labRunning || lastHealth?.labRunning),
+    engineReady: !!(h.engineReady || h.runtime?.engineReady || lastHealth?.engineReady),
+    runnerStateStatus,
+    proxyOK: h.proxyOK ?? h.runtime?.proxyOK ?? h.bootDiagnostics?.proxyOK ?? lastHealth?.proxyOK ?? null,
+    dataBridgeActive: pairFrames > 0 || candlesLoaded > 0,
+    dataBridgeSources: sources.map(src => src === h ? 'input' : src === lastReport ? 'lastReport' : src === lastHealth ? 'lastHealth' : (src.schema || src.version || src.status || 'nested')).slice(0, 20)
   };
 }
 
 function v945ShouldTriggerResearch(h = {}) {
   const m = v945ResearchMetrics(h);
   if (!page || page.isClosed()) return false;
-  if (m.pairFrames < V945_RESEARCH_TRIGGER_MIN_PAIRFRAMES && m.candlesLoaded <= 0) return false;
+  if (!(m.candlesLoaded > 0 || m.pairFrames >= V945_RESEARCH_TRIGGER_MIN_PAIRFRAMES)) return false;
   if (m.rawStrategies > 0 || m.researchCycles > 0 || m.candidatesMonitored > 0 || m.totalGeneratedStrategies > 0 || n(h.results, 0) > 0 || n(h.candidates, 0) > 0) return false;
-  if (Date.now() - n(researchTriggerState.lastAt, 0) < V945_RESEARCH_TRIGGER_COOLDOWN_MS) return false;
+  if (researchTriggerState.triggered && Date.now() - n(researchTriggerState.lastAt, 0) < V945_RESEARCH_TRIGGER_COOLDOWN_MS) return false;
   return true;
+}
+
+async function v946ReadPageResearchBridgeMetrics(reason = 'research-trigger-data-bridge') {
+  if (!page || page.isClosed()) return { reason, pageReady: false };
+  try {
+    return await pageEval(async reasonText => {
+      function num(x) { const v = Number(x); return Number.isFinite(v) ? v : 0; }
+      function val(expr, fallback) { try { return expr(); } catch (_) { return fallback; } }
+      let report = null;
+      try { if (typeof buildRunReportObject === 'function') report = await buildRunReportObject(); } catch (_) { report = null; }
+      const data = report && report.data || {};
+      const research = report && report.research || {};
+      const fw = report && report.forwardWatch || {};
+      return {
+        reason: reasonText,
+        pageReady: true,
+        reportAvailable: !!report,
+        reportDataPairFrames: num(data.pairFrames),
+        reportCandlesLoaded: num(data.candlesLoaded),
+        reportResearchStrategies: num(research.strategies),
+        reportResearchCycles: num(research.researchCycles),
+        reportTotalGeneratedStrategies: num(fw.totalGeneratedStrategies),
+        reportCandidatesMonitored: num(fw.candidatesMonitored),
+        globalResults: val(() => Array.isArray(globalThis.results) ? globalThis.results.length : 0, 0),
+        globalAllResults: val(() => Array.isArray(globalThis.allResults) ? globalThis.allResults.length : 0, 0),
+        globalDiscoveryResults: val(() => Array.isArray(globalThis.discoveryResults) ? globalThis.discoveryResults.length : 0, 0),
+        runtimeLabRunning: val(() => !!globalThis.labRunning, false),
+        runtimeFwRunning: val(() => !!globalThis.fwRunning, false),
+        at: Date.now()
+      };
+    }, reason);
+  } catch (e) {
+    return { reason, pageReady: false, error: e.message };
+  }
 }
 
 function v945BuildResearchTriggerView(h = {}, extra = {}) {
@@ -920,21 +1005,37 @@ function v945BuildResearchTriggerView(h = {}, extra = {}) {
     currentStrategies: m.rawStrategies,
     currentCandidates: m.candidatesMonitored,
     lastInvoked: safeArray(lastResult.invoked).slice(0, 30),
+    lastResearchInvoked: safeArray(lastResult.researchInvoked).slice(0, 30),
     lastClicked: safeArray(lastResult.clicked).slice(0, 20),
     lastFunctionsFound: safeArray(lastResult.functionsFound).slice(0, 60),
+    lastStatus: lastResult.status || state.lastStatus || '',
+    lastErrorCode: lastResult.errorCode || state.lastErrorCode || '',
+    dataBridgeActive: !!m.dataBridgeActive,
+    dataBridgeSources: safeArray(m.dataBridgeSources).slice(0, 20),
     errors: safeArray(state.errors).slice(-8),
-    mode: m.rawStrategies > 0 ? 'RESEARCH_ROWS_AVAILABLE' : (state.triggered ? 'FORCE_RESEARCH_START_SENT' : (m.pairFrames >= V945_RESEARCH_TRIGGER_MIN_PAIRFRAMES ? 'READY_TO_TRIGGER' : 'WAITING_FIRST_PAIR_FRAME')),
-    rule: 'If any pair-frame/candles are available and research rows are still zero, v9.4.5 actively restores full snapshot/startLab/research functions and clicks matching controls. It does not wait for all 35 pair-frames.'
+    mode: m.rawStrategies > 0 ? 'RESEARCH_ROWS_AVAILABLE' : (state.triggered ? 'FORCE_RESEARCH_START_SENT' : ((m.pairFrames > 0 || m.candlesLoaded > 0) ? 'READY_TO_TRIGGER' : 'WAITING_FIRST_PAIR_FRAME')),
+    rule: 'v9.4.6 reads pairFrames/candles from the same report data bridge used by health/report output. It starts on any available data, does not wait for 35/35, invokes exported research/discovery/backtest/startLab functions, and reports RESEARCH_FUNCTION_NOT_FOUND if none exist.'
   };
 }
 
-async function triggerActualResearchIfNeeded(source = 'actual-research-trigger', h = lastHealth || {}) {
-  if (researchTriggerBusy || !v945ShouldTriggerResearch(h)) {
-    lastResearchTriggerView = v945BuildResearchTriggerView(h);
+async function triggerActualResearchIfNeeded(source = 'research-trigger-data-bridge', h = lastHealth || {}) {
+  const pageBridgeMetrics = await v946ReadPageResearchBridgeMetrics(source).catch(() => null);
+  const bridgedInput = Object.assign({}, h || {}, {
+    report: h,
+    dataPairFrames: v946MaxNumber(h?.dataPairFrames, h?.data?.pairFrames, pageBridgeMetrics?.reportDataPairFrames),
+    candlesLoaded: v946MaxNumber(h?.candlesLoaded, h?.data?.candlesLoaded, pageBridgeMetrics?.reportCandlesLoaded),
+    rawResearchStrategies: v946MaxNumber(h?.rawResearchStrategies, h?.research?.strategies, pageBridgeMetrics?.reportResearchStrategies, pageBridgeMetrics?.globalResults, pageBridgeMetrics?.globalAllResults, pageBridgeMetrics?.globalDiscoveryResults),
+    rawResearchCycles: v946MaxNumber(h?.rawResearchCycles, h?.research?.researchCycles, pageBridgeMetrics?.reportResearchCycles),
+    candidatesMonitored: v946MaxNumber(h?.candidatesMonitored, h?.forwardWatch?.candidatesMonitored, pageBridgeMetrics?.reportCandidatesMonitored),
+    totalGeneratedStrategies: v946MaxNumber(h?.totalGeneratedStrategies, h?.forwardWatch?.totalGeneratedStrategies, pageBridgeMetrics?.reportTotalGeneratedStrategies),
+    researchDataBridge: pageBridgeMetrics || null
+  });
+  if (researchTriggerBusy || !v945ShouldTriggerResearch(bridgedInput)) {
+    lastResearchTriggerView = v945BuildResearchTriggerView(bridgedInput);
     return false;
   }
   researchTriggerBusy = true;
-  const metrics = v945ResearchMetrics(h);
+  const metrics = v945ResearchMetrics(bridgedInput);
   researchTriggerState.triggered = true;
   researchTriggerState.triggerCount = n(researchTriggerState.triggerCount, 0) + 1;
   researchTriggerState.lastAction = 'FORCE_RESEARCH_START';
@@ -942,13 +1043,13 @@ async function triggerActualResearchIfNeeded(source = 'actual-research-trigger',
   researchTriggerState.lastAt = Date.now();
   researchTriggerState.lastPairFrames = metrics.pairFrames;
   researchTriggerState.lastStrategies = metrics.rawStrategies;
-  lastResearchTriggerView = v945BuildResearchTriggerView(h);
+  lastResearchTriggerView = v945BuildResearchTriggerView(bridgedInput);
   try {
-    log(`v9.4.5 Actual Research Trigger: source=${source} pairFrames=${metrics.pairFrames} candles=${metrics.candlesLoaded} rawStrategies=${metrics.rawStrategies} runnerState=${metrics.runnerStateStatus}`);
+    log(`v9.4.6 Research Trigger Data Bridge: source=${source} pairFrames=${metrics.pairFrames} candles=${metrics.candlesLoaded} rawStrategies=${metrics.rawStrategies} runnerState=${metrics.runnerStateStatus}`);
     const result = await pageEval(async cfg => {
-      const state = globalThis.__ALPS_V945_RESEARCH_TRIGGER__ || { version: cfg.version, attempts: [], invoked: [], clicked: [], errors: [], functionsFound: [], lastAt: 0 };
-      globalThis.__ALPS_V945_RESEARCH_TRIGGER__ = state;
-      state.version = cfg.version; state.lastAt = Date.now(); state.reason = cfg.reason;
+      const state = globalThis.__ALPS_V946_RESEARCH_TRIGGER__ || globalThis.__ALPS_V945_RESEARCH_TRIGGER__ || { version: cfg.version, attempts: [], invoked: [], clicked: [], errors: [], functionsFound: [], lastAt: 0 };
+      globalThis.__ALPS_V946_RESEARCH_TRIGGER__ = state;
+      state.version = cfg.version; state.lastAt = Date.now(); state.reason = cfg.reason; state.dataBridge = cfg.dataBridge || null; state.errorCode = ''; state.status = 'FORCE_RESEARCH_START';
       function arr(v) { return Array.isArray(v) ? v : []; }
       function text(v) { return String(v == null ? '' : v); }
       function uniqPush(list, value) { if (value && !list.includes(value)) list.push(value); }
@@ -987,8 +1088,9 @@ async function triggerActualResearchIfNeeded(source = 'actual-research-trigger',
       const researchNames = [
         'runResearch','runResearchCycle','runResearchOnce','startResearch','runAdaptiveResearch','runAllResearch','runShadowResearch',
         'discoverStrategies','runDiscovery','generateStrategies','generateStrategyUniverse','buildStrategies','scanStrategies','scanStrategyUniverse',
-        'runBacktests','runBacktest','runRobustness','runRobustnessTests','testAllStrategies','evaluateStrategies',
-        'runLabCycle','cycleLab','schedulerTick','runSchedulerCycle','tickResearch','researchTick','mainLoop','runAllTierLoop','runStorageSafeAllTierLoop'
+        'runBacktests','runBacktest','runRobustness','runRobustnessTests','testAllStrategies','evaluateStrategies','evaluateStrategyUniverse',
+        'runLabCycle','cycleLab','schedulerTick','runSchedulerCycle','tickResearch','researchTick','mainLoop','runAllTierLoop','runStorageSafeAllTierLoop',
+        'runResearchEngine','startResearchEngine','startDiscovery','generateDiscovery','scanAllStrategies','runAllBacktests','startBacktest','backtestAll','runFullCycle'
       ];
       for (const name of researchNames) await callIfExists(name, cfg.reason);
 
@@ -1006,18 +1108,29 @@ async function triggerActualResearchIfNeeded(source = 'actual-research-trigger',
       try { await callIfExists('saveRuntimeSnapshotThrottled', false); } catch (_) {}
       try { if (typeof renderAll === 'function') renderAll(); } catch (_) {}
       state.completedAt = Date.now();
-      state.status = state.invoked.length || state.clicked.length ? 'TRIGGER_SENT' : 'NO_EXPORTED_TRIGGER_FOUND';
+      state.researchInvoked = arr(state.invoked).filter(name => /(startLab|Research|Discover|Strateg|Backtest|Robust|LabCycle|Scheduler|Tick|AllTier|StorageSafe|FullCycle)/i.test(name));
+      const meaningfulClick = arr(state.clicked).some(label => /(start|lab|research|discover|resume|run)/i.test(label));
+      if (state.researchInvoked.length || meaningfulClick) {
+        state.status = 'TRIGGER_SENT';
+        state.errorCode = '';
+      } else {
+        state.status = 'RESEARCH_FUNCTION_NOT_FOUND';
+        state.errorCode = 'RESEARCH_FUNCTION_NOT_FOUND';
+        state.errors.push({ at: Date.now(), name: 'research-trigger-data-bridge', message: 'RESEARCH_FUNCTION_NOT_FOUND: no exported research/generate/discovery/backtest/startLab function or clickable control was found.' });
+      }
       return JSON.parse(JSON.stringify(state));
-    }, { version: FINAL_V930_VERSION, reason: source, callTimeoutMs: V945_RESEARCH_TRIGGER_CALL_TIMEOUT_MS });
+    }, { version: FINAL_V930_VERSION, reason: source, callTimeoutMs: V945_RESEARCH_TRIGGER_CALL_TIMEOUT_MS, dataBridge: pageBridgeMetrics || null });
     researchTriggerState.lastResult = result || null;
+    researchTriggerState.lastStatus = result?.status || '';
+    researchTriggerState.lastErrorCode = result?.errorCode || '';
     if (result?.errors?.length) researchTriggerState.errors = safeArray(researchTriggerState.errors).concat(result.errors).slice(-20);
-    lastResearchTriggerView = v945BuildResearchTriggerView(h);
+    lastResearchTriggerView = v945BuildResearchTriggerView(bridgedInput);
     return true;
   } catch (e) {
     researchTriggerState.errors = safeArray(researchTriggerState.errors).concat([{ at: Date.now(), name: 'triggerActualResearchIfNeeded', message: e.message }]).slice(-20);
     researchTriggerState.lastAction = 'FORCE_RESEARCH_START_ERROR';
-    lastResearchTriggerView = v945BuildResearchTriggerView(h);
-    log('v9.4.5 Actual Research Trigger failed:', e.message);
+    lastResearchTriggerView = v945BuildResearchTriggerView(bridgedInput);
+    log('v9.4.6 Research Trigger Data Bridge failed:', e.message);
     return false;
   } finally {
     researchTriggerBusy = false;
@@ -1386,7 +1499,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.4.5 Actual Research Trigger\n`;
+  let md = `## ALPS v9.4.6 Research Trigger Data Bridge\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -1408,7 +1521,7 @@ function buildV930Markdown(report = {}) {
   const rec = report.recoverableEntry || lastRecoverableEntryView || v944BuildRecoverableEntryView(report, latch);
   const exitMgr = report.adaptiveExitManager || lastAdaptiveExitManagerView || v944BuildAdaptiveExitManagerView(report, latch);
   const synth = report.syntheticIndicatorEngine || lastSyntheticIndicatorEngineView || v944BuildSyntheticIndicatorEngineView(report, latch);
-  md += `\n### v9.4.5 Actual Research Trigger\n`;
+  md += `\n### v9.4.6 Research Trigger Data Bridge\n`;
   md += line('Forward latch size', latch.size || 0) + '\n';
   md += line('Progressive research', pr.active ? `${pr.mode}` : 'OFF') + '\n';
   md += line('Recoverable entry', rec.installed ? `ON | lookback=${rec.lookbackClosedCandles} candles | zone=${rec.entryZoneBps} bps` : 'OFF') + '\n';
@@ -1440,7 +1553,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.4.5 Actual Research Trigger\n`;
+  let md = `## ALPS v9.4.6 Research Trigger Data Bridge\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -1471,9 +1584,15 @@ function buildV930Markdown(report = {}) {
   md += line('Collector mode', lpec.mode || '—') + '\n';
   const rt = report.researchTrigger || lastResearchTriggerView || v945BuildResearchTriggerView(report);
   md += line('Research trigger', rt.mode || '—') + '\n';
+  md += line('Data bridge active', rt.dataBridgeActive ? 'YES' : 'NO') + '\n';
   md += line('Trigger count', rt.triggerCount ?? 0) + '\n';
   md += line('Last trigger action', rt.lastAction || '—') + '\n';
+  md += line('Last trigger status', rt.lastStatus || rt.lastErrorCode || '—') + '\n';
+  md += line('Last pair-frames', rt.lastPairFrames ?? 0) + '\n';
+  md += line('Current pair-frames', rt.currentPairFrames ?? 0) + '\n';
   md += line('Invoked functions', Array.isArray(rt.lastInvoked) && rt.lastInvoked.length ? rt.lastInvoked.slice(0, 8).join(', ') : '—') + '\n';
+  md += line('Research functions invoked', Array.isArray(rt.lastResearchInvoked) && rt.lastResearchInvoked.length ? rt.lastResearchInvoked.slice(0, 8).join(', ') : '—') + '\n';
+  md += line('Functions found', Array.isArray(rt.lastFunctionsFound) && rt.lastFunctionsFound.length ? rt.lastFunctionsFound.slice(0, 10).join(', ') : '—') + '\n';
   md += line('Experimental forward', nfp.experimentalForward || lpec.experimentalForward || 0) + '\n';
   md += line('Verified forward', (nfp.watchForward || 0) + (nfp.fullAutonomyForward || 0)) + '\n';
   md += line('Decisions applied', da.decisionsApplied ?? 0) + '\n';
@@ -1502,7 +1621,7 @@ function buildV930Markdown(report = {}) {
   md += line('Progress age', `${rw.progressAgeMin ?? 0} min / threshold ${rw.bootWatchdogMin ?? Math.round(BOOT_WATCHDOG_MS/60000)} min`) + '\n';
   md += line('Target pair-frames', rw.targetPairFrames ?? BOOT_WATCHDOG_TARGET_PAIRFRAMES) + '\n';
   md += line('Last action', rw.lastAction || '—') + '\n';
-  md += `\n> v9.4.5 note: Live Paper Evidence Collector starts the forward watcher for verified or experimental paper candidates. If no historical OOS exists, it marks candidates NOT_OOS_VERIFIED and collects paper evidence. It does not fabricate OOS, force entries, or bypass closed-candle/freshness safety.\n`;
+  md += `\n> v9.4.6 note: Live Paper Evidence Collector starts the forward watcher for verified or experimental paper candidates. If no historical OOS exists, it marks candidates NOT_OOS_VERIFIED and collects paper evidence. It does not fabricate OOS, force entries, or bypass closed-candle/freshness safety.\n`;
   return md;
 }
 
@@ -2984,9 +3103,10 @@ function enhanceHealth(h = {}) {
   if (!out.recoveryForwardCore && lastRecoveryForwardCoreView) out.recoveryForwardCore = lastRecoveryForwardCoreView;
   const eligibleForward = v94ForwardEligibleCountFromView(out.nativeForwardPool || lastNativeForwardPoolView || {});
   const bridge = out.oosEvidenceBridge || lastOOSEvidenceBridgeView || {};
-  const pairFrames = n(out.dataPairFrames ?? out.bootDiagnostics?.pairFrames, 0);
-  const rawStrategies = n(out.rawResearchStrategies ?? out.bootDiagnostics?.researchStrategies, 0);
-  const monitored = n(out.candidatesMonitored ?? out.bootDiagnostics?.candidatesMonitored ?? out.candidates, 0);
+  const hm = v945ResearchMetrics(out);
+  const pairFrames = hm.pairFrames;
+  const rawStrategies = hm.rawStrategies;
+  const monitored = hm.candidatesMonitored;
   if (forward.forwardStale) out.status = 'STALE_FORWARD';
   if (!out.fwRunning && pairFrames >= BOOT_WATCHDOG_TARGET_PAIRFRAMES && rawStrategies > 0 && monitored > 0 && eligibleForward === 0 && n(bridge.matchedRows, 0) === 0 && n(bridge.candidateRowsWithEvidence, 0) === 0) {
     out.forwardStatus = 'EXPERIMENTAL_FORWARD_COLLECTING_EVIDENCE';
@@ -3004,29 +3124,30 @@ function enhanceHealth(h = {}) {
 }
 
 function bootProgressSignature(h = {}) {
-  const d = h.bootDiagnostics || {};
+  const m = v945ResearchMetrics(h);
   return [
     h.fwRunning ? 'fw1' : 'fw0',
     n(h.lastForwardRefresh, 0),
-    n(h.dataPairFrames ?? d.pairFrames, 0),
-    n(h.candlesLoaded ?? d.candlesLoaded, 0),
-    n(h.rawResearchStrategies ?? d.researchStrategies, 0),
-    n(h.rawResearchCycles ?? d.researchCycles, 0),
-    n(h.candidatesMonitored ?? d.candidatesMonitored, 0),
-    n(h.totalGeneratedStrategies ?? d.totalGeneratedStrategies, 0),
+    m.pairFrames,
+    m.candlesLoaded,
+    m.rawStrategies,
+    m.researchCycles,
+    m.candidatesMonitored,
+    m.totalGeneratedStrategies,
     n(h.results, 0),
-    String(h.runnerStateStatus || d.runnerStateStatus || '')
+    String(m.runnerStateStatus || '')
   ].join('|');
 }
 
 function isBootOrLabStuckCandidate(h = {}) {
   const d = h.bootDiagnostics || {};
-  const pairFrames = n(h.dataPairFrames ?? d.pairFrames, 0);
-  const candlesLoaded = n(h.candlesLoaded ?? d.candlesLoaded, 0);
-  const rawStrategies = n(h.rawResearchStrategies ?? d.researchStrategies, 0);
-  const cycles = n(h.rawResearchCycles ?? d.researchCycles, 0);
-  const monitored = n(h.candidatesMonitored ?? d.candidatesMonitored, 0);
-  const generated = n(h.totalGeneratedStrategies ?? d.totalGeneratedStrategies, 0);
+  const m = v945ResearchMetrics(h);
+  const pairFrames = m.pairFrames;
+  const candlesLoaded = m.candlesLoaded;
+  const rawStrategies = m.rawStrategies;
+  const cycles = m.researchCycles;
+  const monitored = m.candidatesMonitored;
+  const generated = m.totalGeneratedStrategies;
   const noForwardStarted = !h.fwRunning && !h.fwRefreshRunning && !n(h.lastForwardRefresh, 0);
   const hasPartialData = pairFrames >= BOOT_WATCHDOG_MIN_PAIRFRAMES || candlesLoaded > 0;
   const incompleteData = pairFrames > 0 && pairFrames < BOOT_WATCHDOG_TARGET_PAIRFRAMES;
@@ -3046,10 +3167,11 @@ function updateBootProgress(h = {}) {
 
 function buildRunnerWatchdogView(h = lastHealth || {}) {
   const d = h.bootDiagnostics || {};
-  const pairFrames = n(h.dataPairFrames ?? d.pairFrames, 0);
-  const candlesLoaded = n(h.candlesLoaded ?? d.candlesLoaded, 0);
-  const rawStrategies = n(h.rawResearchStrategies ?? d.researchStrategies, 0);
-  const monitored = n(h.candidatesMonitored ?? d.candidatesMonitored, 0);
+  const m = v945ResearchMetrics(h);
+  const pairFrames = m.pairFrames;
+  const candlesLoaded = m.candlesLoaded;
+  const rawStrategies = m.rawStrategies;
+  const monitored = m.candidatesMonitored;
   const ageMs = Math.max(0, Date.now() - (lastBootProgressAt || Date.now()));
   const stuckCandidate = isBootOrLabStuckCandidate(h);
   const latchedForward = v944ForwardLatchEligibleCount();
@@ -4122,10 +4244,10 @@ async function applyForwardLatchToPage(reason = 'apply-forward-latch') {
         syntheticIndicatorEngine: { installed: true, chartOverlayReady: true }
       }
     });
-    if (result?.applied || result?.latchSize) log(`v9.4.5 Forward Latch applied to page: applied=${result.applied || 0} latchSize=${result.latchSize || 0} reason=${reason}`);
+    if (result?.applied || result?.latchSize) log(`v9.4.6 Forward Latch applied to page: applied=${result.applied || 0} latchSize=${result.latchSize || 0} reason=${reason}`);
     return result || { applied: 0 };
   } catch (e) {
-    log(`v9.4.5 Forward Latch page apply failed (${reason}):`, e.message);
+    log(`v9.4.6 Forward Latch page apply failed (${reason}):`, e.message);
     return { applied: 0, error: e.message };
   }
 }
@@ -4140,8 +4262,8 @@ async function startForwardIfEligible(reason = 'live-paper-evidence-collector') 
   if (!eligible || !page || page.isClosed()) return false;
   const h = await getPageHealth().catch(() => lastHealth || {}); if (h?.fwRunning || h?.emergencyStopActive) return !!h?.fwRunning;
   await applyForwardLatchToPage(reason).catch(() => null);
-  log(`v9.4.5 Actual Research Trigger starting Browser Runner. eligibleForward=${eligible} pool=${poolEligible} latch=${latchEligible} recovery=${recoveryEligible} reason=${reason}`);
-  await pageEval(async reasonText => { try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {} try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {} try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {} try { if (typeof startWatch === 'function') await startWatch(); } catch (_) {} try { if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText || 'v945-actual-research-trigger'); } catch (_) {} try { if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false); } catch (_) {} try { if (typeof renderAll === 'function') renderAll(); } catch (_) {} return true; }, reason).catch(e => log('v9.4.5 Forward Latch startWatch failed:', e.message));
+  log(`v9.4.6 Research Trigger Data Bridge starting Browser Runner. eligibleForward=${eligible} pool=${poolEligible} latch=${latchEligible} recovery=${recoveryEligible} reason=${reason}`);
+  await pageEval(async reasonText => { try { if (typeof prepareAndroidRuntime === 'function') await prepareAndroidRuntime(); } catch (_) {} try { if (typeof startEngineWorker === 'function') await startEngineWorker(); } catch (_) {} try { if (typeof runFinalPreflight === 'function' && (!globalThis.preflightStatus || globalThis.preflightStatus === 'WAITING')) await runFinalPreflight(); } catch (_) {} try { if (typeof startWatch === 'function') await startWatch(); } catch (_) {} try { if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText || 'v946-research-trigger-data-bridge'); } catch (_) {} try { if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false); } catch (_) {} try { if (typeof renderAll === 'function') renderAll(); } catch (_) {} return true; }, reason).catch(e => log('v9.4.6 Forward Latch startWatch failed:', e.message));
   return true;
 }
 
@@ -4367,6 +4489,10 @@ async function collectReport() {
     };
     return r;
   });
+
+  // v9.4.6 Research Trigger Data Bridge: use the same report data that is shown to the user.
+  // If report.data.pairFrames or candlesLoaded is already positive, trigger research immediately; do not wait for 35/35.
+  await triggerActualResearchIfNeeded('collect-report-data-bridge', report).catch(e => log('v9.4.6 data bridge trigger from report failed:', e.message));
 
   await syncOosEvidenceBridgeFromPage('collect-report-pre-enrich').catch(() => null);
   await applyOosEvidenceBridgeToPage('collect-report-pre-enrich').catch(() => null);
