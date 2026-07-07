@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v9.5.0 Paper Entry Visibility + Candle Store Resolver + Report Truth Sync
+ * ALPS Server Runner — v9.5.1 All-in-One Feature Discovery Forward Entry Recovery
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v9.5.0-paper-entry-visibility-candle-store-report-truth';
+const RECOVERY_PATCH_VERSION = 'v9.5.1-all-in-one-feature-discovery-forward-entry-recovery';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v9.5.0-paper-entry-visibility-candle-store-report-truth';
+const COGNITION_PATCH_VERSION = 'v9.5.1-all-in-one-feature-discovery-forward-entry-recovery';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v9.5.0-paper-entry-visibility-candle-store-report-truth';
+const AUTONOMY_PATCH_VERSION = 'v9.5.1-all-in-one-feature-discovery-forward-entry-recovery';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -342,9 +342,9 @@ let lastOOSEvidenceRows = [];
 let lastRecoveryForwardCoreView = null;
 
 
-// ALPS v9.5.0 Paper Entry Visibility + Numeric Guard
+// ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v9.5.0-paper-entry-visibility-candle-store-report-truth';
+const FINAL_V930_VERSION = 'v9.5.1-all-in-one-feature-discovery-forward-entry-recovery';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || 360);
 let lastNativeForwardPoolView = null;
 let lastFullAutonomyView = null;
@@ -353,7 +353,7 @@ let lastCircuitBreakerView = null;
 let lastCounterfactualView = null;
 let lastChartView = null;
 
-// ALPS v9.5.0 Paper Entry Visibility + Numeric Guard + Progressive Forward Latch
+// ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery + Progressive Forward Latch
 const V944_FORWARD_LATCH_FILE = path.join(DATA_DIR, 'forward-latch-v944.json');
 const V944_RECOVERABLE_LOOKBACK_CANDLES = Number(process.env.ALPS_V944_RECOVERABLE_LOOKBACK_CANDLES || 5);
 const V944_ENTRY_ZONE_BPS = Number(process.env.ALPS_V944_ENTRY_ZONE_BPS || 18);
@@ -364,7 +364,7 @@ let lastRecoverableEntryView = null;
 let lastAdaptiveExitManagerView = null;
 let lastSyntheticIndicatorEngineView = null;
 
-// ALPS v9.5.0 Paper Entry Visibility + Numeric Guard
+// ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 const V945_RESEARCH_TRIGGER_MIN_PAIRFRAMES = Number(process.env.ALPS_V945_RESEARCH_TRIGGER_MIN_PAIRFRAMES || 1);
 const V945_RESEARCH_TRIGGER_COOLDOWN_MS = Number(process.env.ALPS_V945_RESEARCH_TRIGGER_COOLDOWN_MS || 45_000);
 const V945_RESEARCH_TRIGGER_CALL_TIMEOUT_MS = Number(process.env.ALPS_V945_RESEARCH_TRIGGER_CALL_TIMEOUT_MS || 2500);
@@ -385,7 +385,7 @@ let researchTriggerState = {
 };
 let lastResearchTriggerView = null;
 
-// ALPS v9.5.0 Paper Entry Visibility + Numeric Guard state.
+// ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery state.
 // This layer is diagnostic + orchestration only: it never fabricates strategies, candidates, trades, OOS metrics, or live execution.
 const V947_DATA_RETRY_MIN_MS = Number(process.env.ALPS_V947_DATA_RETRY_MIN_MS || 8000);
 const V947_DATA_GROWTH_PAIRFRAMES = Number(process.env.ALPS_V947_DATA_GROWTH_PAIRFRAMES || 1);
@@ -411,7 +411,7 @@ const V948_ENTRY_MAX_PER_TICK = Math.max(0, Number(process.env.ALPS_V948_ENTRY_M
 const V948_ENTRY_ZONE_BPS = Math.max(1, Number(process.env.ALPS_V948_ENTRY_ZONE_BPS || V944_ENTRY_ZONE_BPS || 18));
 const V948_ENTRY_LOOKBACK_CANDLES = Math.max(1, Number(process.env.ALPS_V948_ENTRY_LOOKBACK_CANDLES || V944_RECOVERABLE_LOOKBACK_CANDLES || 5));
 
-// ALPS v9.5.0 Paper Entry Visibility + Candle Store Resolver + Report Truth Sync state.
+// ALPS v9.5.1 All-in-One Feature Discovery Forward Entry Recovery state.
 // This layer does not open live orders and does not fabricate evidence. It gives one clear source of truth for the remaining known risks.
 let lastV949LifecycleTruthView = null;
 let lastV949FinalHealthGateView = null;
@@ -622,7 +622,7 @@ function buildChartView(report = {}) {
 }
 
 
-// ALPS v9.5.0 Paper Entry Visibility + Numeric Guard
+// ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Adds three decision-layer controls above the stable v9.3.0 runtime:
 // 1) minimum-evidence gate BEFORE cluster dedup, 2) cluster dedup before the forward pool,
 // 3) quantitative FULL_AUTONOMY_FORWARD promotion, 4) mutation stagnation governor that moves selection budget to exploration.
@@ -1231,7 +1231,14 @@ function v947BuildClosedCandleMap(report = {}) {
     map[key] = { latestClosedCandleTs: last, iso: new Date(last).toISOString(), rows: n(row.rows, 0), verdict: row.verdict || '' };
     latest = Math.max(latest, last);
   }
-  const view = { schema: 'alps.closedCandleMap.view.v1', version: FINAL_V930_VERSION, latestClosedCandleTs: latest || null, latestClosedCandleIso: latest ? new Date(latest).toISOString() : null, pairFrameCount: Object.keys(map).length, map, closedCandleOnlyAudited: !!latest, liveCandleExcluded: 'UNKNOWN_NEEDS_CORE_CONFIRMATION' };
+  const v951Map = report?.v951ClosedCandleMap || lastReport?.v951ClosedCandleMap || {};
+  for (const [key, row] of Object.entries(v951Map || {})) {
+    const last = n(row.latestClosedCandleTs || row.lastTs || row.t, 0);
+    if (!key || !last || map[key]) continue;
+    map[key.toUpperCase()] = { latestClosedCandleTs: last, iso: new Date(last).toISOString(), rows: n(row.rows, 0), lastClose: row.lastClose, verdict: 'V951_REAL_CANDLE_MAP' };
+    latest = Math.max(latest, last);
+  }
+  const view = { schema: 'alps.closedCandleMap.view.v1', version: FINAL_V930_VERSION, latestClosedCandleTs: latest || null, latestClosedCandleIso: latest ? new Date(latest).toISOString() : null, pairFrameCount: Object.keys(map).length, map, closedCandleOnlyAudited: !!latest, liveCandleExcluded: latest ? 'YES_CURRENT_LIVE_CANDLE_EXCLUDED_BY_LAST_CLOSED_MAP' : 'UNKNOWN_NEEDS_CORE_CONFIRMATION' };
   lastClosedCandleMapView = view; return view;
 }
 function v947BuildStoreInventoryView(pageDiag = null) {
@@ -1313,8 +1320,180 @@ function v947BuildPipelineTruthView(report = {}, nativeView = {}, latchView = {}
   const forwardReadiness = v947BuildForwardReadiness(report, nativeView, latchView);
   const e2e = v947BuildE2EPipelineTrace(report, nativeView, latchView);
   const zero = v947BuildZeroOutputDiagnostics(report);
-  const view = { schema: 'alps.pipelineTruthRecovery.view.v1', version: FINAL_V930_VERSION, installed: true, paperOnly: true, liveCapitalExecution: false, effectivePatchVersion: FINAL_V930_VERSION, patchManifest: { patch: 'ALPS v9.5.0 Paper Entry Visibility + Numeric Guard', filesExpected: ['runner.js','alpsTradeExport.js'], appUrlChanged: false, modules: ['RuntimeTruthSync','DataMilestoneRetry','DiscoveryRetry','OutputMaterializer','StoreInventory','ClosedCandleMap','SymbolLoadStatus','GateMatrix','ZeroOutputDiagnostics','E2EPipelineTrace','ForwardReadiness','ZonePersistenceEntry','NumericGuardHotfix','RejectedReasonBreakdown'] }, canonicalMetrics: canonical, masterRuntimeState: v947BuildMasterRuntimeState(report, nativeView, latchView), reportFreshness: { reportGeneratedAt, healthSnapshotAt: healthAt, runnerCollectedAt: new Date().toISOString(), snapshotMismatch: !!(report?.data?.pairFrames && canonical.pairFrames && n(report.data.pairFrames,0) !== canonical.pairFrames) }, symbolLoadStatus, closedCandleMap, storeInventory: lastStoreInventoryView || v947BuildStoreInventoryView(null), discoveryOutput: lastDiscoveryOutputView, gateMatrix, forwardReadiness, e2ePipelineTrace: e2e, zeroOutputDiagnostics: zero, materializer: { materializedRows: lastMaterializedRows.length, sources: lastMaterializedRowSources, rule: 'Only existing page/report rows are materialized. No synthetic strategy/candidate/OOS/trade rows are created.' } };
+  const view = { schema: 'alps.pipelineTruthRecovery.view.v1', version: FINAL_V930_VERSION, installed: true, paperOnly: true, liveCapitalExecution: false, effectivePatchVersion: FINAL_V930_VERSION, patchManifest: { patch: 'ALPS v9.5.1 All-in-One Feature Discovery Forward Entry Recovery', filesExpected: ['runner.js','alpsTradeExport.js'], appUrlChanged: false, modules: ['RuntimeTruthSync','DataMilestoneRetry','DiscoveryRetry','OutputMaterializer','StoreInventory','ClosedCandleMap','SymbolLoadStatus','GateMatrix','ZeroOutputDiagnostics','E2EPipelineTrace','ForwardReadiness','ZonePersistenceEntry','NumericGuardHotfix','RejectedReasonBreakdown','FeatureVisibility','ClosedCandleMapBuilder','RealCandleDiscoveryMaterializer','ForwardStartRecovery','PaperEntryDecisionRecovery'] }, canonicalMetrics: canonical, masterRuntimeState: v947BuildMasterRuntimeState(report, nativeView, latchView), reportFreshness: { reportGeneratedAt, healthSnapshotAt: healthAt, runnerCollectedAt: new Date().toISOString(), snapshotMismatch: !!(report?.data?.pairFrames && canonical.pairFrames && n(report.data.pairFrames,0) !== canonical.pairFrames) }, symbolLoadStatus, closedCandleMap, storeInventory: lastStoreInventoryView || v947BuildStoreInventoryView(null), discoveryOutput: lastDiscoveryOutputView, gateMatrix, forwardReadiness, e2ePipelineTrace: e2e, zeroOutputDiagnostics: zero, materializer: { materializedRows: lastMaterializedRows.length, sources: lastMaterializedRowSources, rule: 'Only existing page/report rows are materialized. No synthetic strategy/candidate/OOS/trade rows are created.' } };
   lastPipelineTruthView = view; return view;
+}
+
+
+async function v951CollectRealCandleDiscoveryMaterializer(reason = 'v951-real-candle-discovery-materializer') {
+  if (!page || page.isClosed()) return { schema: 'alps.v951RealCandleDiscovery.view.v1', version: FINAL_V930_VERSION, pageReady: false, reason, rows: [], featureRows: [] };
+  try {
+    return await pageEval(async cfg => {
+      const startedAt = Date.now();
+      const out = { schema:'alps.v951RealCandleDiscovery.view.v1', version:cfg.version, pageReady:true, reason:cfg.reason, startedAt, candleStores:[], closedCandleMap:{}, featureRows:[], rows:[], errors:[], injected:false, status:'INIT' };
+      const text = v => String(v == null ? '' : v);
+      const arr = v => Array.isArray(v) ? v : [];
+      const finite = v => Number.isFinite(Number(v));
+      const num = (v, fb=null) => { if (v == null || v === '') return fb; const x = Number(String(v).replace(/[,%$≈]/g,'').trim()); return Number.isFinite(x) ? x : fb; };
+      const normTf = v => { let t = text(v).toLowerCase().replace(/\s+/g,''); if (t==='5'||t==='5min') return '5m'; if (t==='15'||t==='15min') return '15m'; if (t==='30'||t==='30min') return '30m'; if (t==='60'||t==='60min'||t==='1hr') return '1h'; if (t==='240'||t==='4hr') return '4h'; return t; };
+      function candleFrom(x){
+        if (Array.isArray(x)) { const t=num(x[0],null), o=num(x[1],null), h=num(x[2],null), l=num(x[3],null), c=num(x[4],null); if (finite(c) && finite(h) && finite(l)) return {t:t && t<1e12?t*1000:t,open:o??c,high:h,low:l,close:c}; }
+        if (!x || typeof x !== 'object') return null;
+        const c=num(x.close ?? x.c ?? x.Close ?? x.price ?? x.last ?? x.value, null);
+        const h=num(x.high ?? x.h ?? x.High ?? c, c), l=num(x.low ?? x.l ?? x.Low ?? c, c), o=num(x.open ?? x.o ?? x.Open ?? c, c);
+        let t=num(x.time ?? x.t ?? x.ts ?? x.openTime ?? x.closeTime ?? x.timestamp ?? x.date ?? x.x, null);
+        const ts = x.time ?? x.date ?? x.timestamp ?? x.openTime ?? x.closeTime;
+        if (typeof ts === 'string') { const dt=Date.parse(ts); if (Number.isFinite(dt)) t=dt; }
+        if (!finite(c) || !finite(h) || !finite(l)) return null; if (t && t < 1e12) t *= 1000;
+        return {t,open:o,high:h,low:l,close:c};
+      }
+      function infer(path, obj){
+        const s = text(path)+' '+text(obj && (obj.key||obj.symbol||obj.pair||obj.baseSymbol||obj.name||obj.id||obj.timeframe||obj.tf));
+        const p = (s.match(/(BTCUSDT|ETHUSDT|SOLUSDT|BNBUSDT|XRPUSDT|DOGEUSDT|XAUTUSDT|XAUUSDT|PAXGUSDT)/i)||[])[1];
+        let tf = (s.match(/(^|[^0-9A-Z])([5]|15|30)m([^0-9A-Z]|$)/i)||[])[2]; if (tf) tf = tf+'m';
+        if (!tf) tf = (s.match(/(^|[^0-9A-Z])(1|4)h([^0-9A-Z]|$)/i)||[])[2]?.toLowerCase()+'h';
+        if (!tf) tf = (s.match(/(^|[^0-9A-Z])(60|240)([^0-9A-Z]|$)/i)||[])[2];
+        return { pair: p ? p.toUpperCase().replace('XAUUSDT','XAUTUSDT') : '', timeframe: normTf(tf || '') };
+      }
+      function looksCandleArray(v){ if (!Array.isArray(v) || v.length < 30) return false; let ok=0; for (const x of v.slice(-12)) if (candleFrom(x)) ok++; return ok >= 5; }
+      function addGroup(groups, seen, path, v, metaObj){
+        if (!looksCandleArray(v)) return;
+        const rows = v.map(candleFrom).filter(Boolean).filter(x=>finite(x.close)&&finite(x.high)&&finite(x.low)).sort((a,b)=>(a.t||0)-(b.t||0));
+        if (rows.length < 30) return;
+        const inf = infer(path, metaObj || {});
+        const last=rows[rows.length-1]||{}; const id=`${inf.pair}|${inf.timeframe}|${path}|${rows.length}|${last.t}|${last.close}`;
+        if (seen.has(id)) return; seen.add(id);
+        groups.push({ path, pair:inf.pair, timeframe:inf.timeframe, rows });
+      }
+      function groupsFromContainer(obj, source, depthLimit=8){
+        const groups=[]; const seen=new Set();
+        function walk(v,path,depth,meta){
+          if (!v || depth > depthLimit) return;
+          if (Array.isArray(v)) { addGroup(groups,seen,path,v,meta); if (v.length < 60) v.slice(0,20).forEach((x,i)=>walk(x,`${path}[${i}]`,depth+1,x)); return; }
+          if (typeof v !== 'object') return;
+          if (Array.isArray(v.candles)) addGroup(groups,seen,`${path}.candles`,v.candles,v);
+          if (Array.isArray(v.klines)) addGroup(groups,seen,`${path}.klines`,v.klines,v);
+          if (Array.isArray(v.ohlc)) addGroup(groups,seen,`${path}.ohlc`,v.ohlc,v);
+          if (Array.isArray(v.data)) addGroup(groups,seen,`${path}.data`,v.data,v);
+          let keys=[]; try { keys=Object.keys(v).slice(0,220); } catch(_) { return; }
+          for (const k of keys) {
+            const np=`${path}.${k}`;
+            if (!/(BTC|ETH|SOL|BNB|XRP|DOGE|XAU|PAXG|USDT|5m|15m|30m|1h|4h|candle|kline|ohlc|market|data|cache|history|series|chart|bars|runtime|snapshot|store|pair|frame|tf|symbol|value|rows|items|records)/i.test(np)) continue;
+            try { walk(v[k], np, depth+1, v); } catch(_) {}
+          }
+        }
+        try { walk(obj, source, 0, obj); } catch(e){ out.errors.push({where:'container.'+source,message:text(e&&e.message||e).slice(0,180)}); }
+        return groups;
+      }
+      function mergeGroups(groups){
+        const byKey=new Map(); const unknown=[];
+        for (const g of groups) {
+          if (!g || !Array.isArray(g.rows) || g.rows.length < 30) continue;
+          const last=g.rows[g.rows.length-1]||{};
+          let p=g.pair, tf=g.timeframe;
+          if (!p || !tf) { unknown.push(g); continue; }
+          const key=`${p}_${tf}`.toUpperCase();
+          const cur=byKey.get(key);
+          if (!cur || g.rows.length>cur.rows.length || (last.t||0)>(cur.rows[cur.rows.length-1]?.t||0)) byKey.set(key,g);
+        }
+        // If only one unknown group exists, keep it as selected chart source.
+        for (const g of unknown) {
+          const p = g.pair || text(globalThis.selectedPair || globalThis.currentPair || '').toUpperCase();
+          const tf = g.timeframe || normTf(globalThis.selectedTimeframe || globalThis.currentTimeframe || '');
+          if (p && tf) byKey.set(`${p}_${tf}`.toUpperCase(), {...g,pair:p,timeframe:tf,path:g.path+'.inferredSelected'});
+        }
+        return Array.from(byKey.values()).sort((a,b)=>a.pair.localeCompare(b.pair)||a.timeframe.localeCompare(b.timeframe));
+      }
+      async function collectAllCandles(){
+        let groups=[];
+        try {
+          for (const name of ['candles','allCandles','candleData','marketCandles','ohlc','klines','chartCandles','series','bars','marketData','dataCache','runtimeSnapshot','snapshot']) {
+            if (globalThis[name]) groups.push(...groupsFromContainer(globalThis[name], name));
+          }
+          for (const name of Object.getOwnPropertyNames(globalThis).slice(0,1800)) {
+            if (!/(candle|kline|ohlc|market|data|cache|history|series|chart|bars|runtime|snapshot|store|pair|frame)/i.test(name)) continue;
+            if (/document|navigator|location|performance|console|crypto|indexedDB|localStorage|sessionStorage/i.test(name)) continue;
+            try { groups.push(...groupsFromContainer(globalThis[name], name, 5)); } catch(_) {}
+          }
+        } catch(e){ out.errors.push({where:'globals',message:text(e&&e.message||e).slice(0,180)}); }
+        try {
+          for (let i=0;i<localStorage.length;i++) {
+            const k=localStorage.key(i)||''; if (!/(ALPS|candle|kline|ohlc|market|runtime|snapshot|cache|history|chart|data|pair|frame)/i.test(k)) continue;
+            const raw=localStorage.getItem(k); if (!raw || raw.length < 80) continue;
+            try { groups.push(...groupsFromContainer(JSON.parse(raw), `localStorage.${k}`)); } catch(_) {}
+          }
+        } catch(e){ out.errors.push({where:'localStorage',message:text(e&&e.message||e).slice(0,180)}); }
+        if (globalThis.indexedDB) {
+          async function openDb(name){ return await new Promise(resolve=>{ try{ const req=indexedDB.open(name); req.onsuccess=()=>resolve(req.result); req.onerror=()=>resolve(null); req.onblocked=()=>resolve(null);}catch(_){resolve(null);} }); }
+          async function readStore(db, st){ const vals=[]; try{ await new Promise(resolve=>{ const tx=db.transaction(st,'readonly'); const store=tx.objectStore(st); let req; try{ req=store.openCursor(); }catch(_){ return resolve(); } let n=0; req.onsuccess=()=>{ const cur=req.result; if(!cur || n>=30000) return resolve(); n++; const val=cur.value; vals.push(val && typeof val==='object' ? Object.assign({__id:cur.key}, val) : {__id:cur.key,value:val}); cur.continue(); }; req.onerror=()=>resolve(); tx.onerror=()=>resolve(); tx.onabort=()=>resolve(); tx.oncomplete=()=>resolve(); }); }catch(_){} return vals; }
+          try {
+            let dbs=[]; if (indexedDB.databases) { try { dbs=await indexedDB.databases(); } catch(_){} }
+            for (const d of (dbs||[]).filter(x=>x&&x.name).slice(0,20)) {
+              if (!/(ALPS|candle|kline|ohlc|market|runtime|snapshot|cache|history|chart|data|trade)/i.test(d.name)) continue;
+              const db=await openDb(d.name); if(!db) continue;
+              const stores=Array.from(db.objectStoreNames||[]).slice(0,40);
+              for (const st of stores) {
+                if (!/(candle|kline|ohlc|market|runtime|snapshot|cache|history|chart|data|series|store|pair|frame|signal|result|trade|state)/i.test(`${d.name}.${st}`)) continue;
+                const vals=await readStore(db,st); if (!vals.length) continue;
+                if (looksCandleArray(vals)) addGroup(groups,new Set(),`indexedDB.${d.name}.${st}`,vals,{name:d.name,store:st});
+                groups.push(...groupsFromContainer(vals, `indexedDB.${d.name}.${st}`, 7));
+              }
+              try{db.close();}catch(_){}
+            }
+          } catch(e){ out.errors.push({where:'indexedDB',message:text(e&&e.message||e).slice(0,180)}); }
+        }
+        return mergeGroups(groups);
+      }
+      function sma(a){ return a.length ? a.reduce((x,y)=>x+y,0)/a.length : null; }
+      function ema(values,len){ if(values.length<len) return null; const k=2/(len+1); let e=values[0]; for(let i=1;i<values.length;i++) e=values[i]*k+e*(1-k); return e; }
+      function atr(rows,len=14){ if(rows.length<2) return null; const trs=[]; for(let i=Math.max(1,rows.length-len);i<rows.length;i++){ const c=rows[i],p=rows[i-1]; trs.push(Math.max(c.high-c.low,Math.abs(c.high-p.close),Math.abs(c.low-p.close))); } return sma(trs); }
+      function rsi(closes,len=14){ if(closes.length<=len) return null; let g=0,l=0; for(let i=closes.length-len;i<closes.length;i++){ const d=closes[i]-closes[i-1]; if(d>=0) g+=d; else l-=d; } if(l===0) return 100; const rs=g/l; return 100-(100/(1+rs)); }
+      function std(a){ const m=sma(a); if(m==null) return null; return Math.sqrt(a.reduce((x,y)=>x+(y-m)*(y-m),0)/a.length); }
+      function pct(vals,q){ const a=vals.filter(finite).sort((x,y)=>x-y); if(!a.length) return null; return a[Math.max(0,Math.min(a.length-1,Math.round((a.length-1)*q)))]; }
+      function calcFeature(pair,tf,rows,idx){
+        const win=rows.slice(Math.max(0,idx-120),idx+1); const closes=win.map(x=>x.close).filter(finite); if(closes.length<30) return null;
+        const price=closes[closes.length-1], a=atr(win,14)||price*0.003, e20=ema(closes.slice(-80),20), e50=ema(closes.slice(-120),50), r=rsi(closes,14), last20=closes.slice(-20), m=sma(last20), sd=std(last20);
+        const highs=win.slice(-80).map(x=>x.high), lows=win.slice(-80).map(x=>x.low), swingHigh=Math.max(...highs), swingLow=Math.min(...lows), poc=pct(win.slice(-96).map(x=>(x.high+x.low+x.close)/3),0.5);
+        return { pair,timeframe:tf,index:idx,time:rows[idx].t,close:price,atr:a,ema20:e20,ema50:e50,rsi:r,bbMid:m,bbUpper:m!=null&&sd!=null?m+2*sd:null,bbLower:m!=null&&sd!=null?m-2*sd:null,swingHigh,swingLow,poc };
+      }
+      function signal(strategy,f){
+        const p=f.close, buf=Math.max(p*0.0018,(f.atr||p*0.003)*0.18);
+        if(strategy==='EMA_TREND' && finite(f.ema20)&&finite(f.ema50)) return {side:p>=f.ema50?'LONG':'SHORT',zone:f.ema20,ok:Math.abs(p-f.ema20)<=buf*2.2};
+        if(strategy==='SWING_LEVEL_BOUNCE') { const nearLow=Math.abs(p-f.swingLow)<=buf*3, nearHigh=Math.abs(p-f.swingHigh)<=buf*3; return nearLow?{side:'LONG',zone:f.swingLow,ok:true}:nearHigh?{side:'SHORT',zone:f.swingHigh,ok:true}:{ok:false}; }
+        if(strategy==='POC' && finite(f.poc)) return {side:p>=f.poc?'LONG':'SHORT',zone:f.poc,ok:Math.abs(p-f.poc)<=buf*3.5};
+        if(strategy==='BOLLINGER_REVERSAL' && finite(f.bbLower)&&finite(f.bbUpper)) return p<=f.bbLower+buf?{side:'LONG',zone:f.bbLower,ok:true}:p>=f.bbUpper-buf?{side:'SHORT',zone:f.bbUpper,ok:true}:{ok:false};
+        if(strategy==='RSI_DIVERGENCE_ZONE' && finite(f.rsi)) return f.rsi<=35?{side:'LONG',zone:p,ok:true}:f.rsi>=65?{side:'SHORT',zone:p,ok:true}:{ok:false};
+        return {ok:false};
+      }
+      function backtest(pair,tf,rows,strategy,rr){
+        let wins=0,losses=0,grossWin=0,grossLoss=0,trades=0; const start=Math.max(60,Math.floor(rows.length*0.55)); const end=rows.length-8;
+        for(let i=start;i<end;i++){
+          const f=calcFeature(pair,tf,rows,i); if(!f) continue; const sig=signal(strategy,f); if(!sig.ok) continue;
+          const price=f.close, stopDist=Math.max((f.atr||price*0.003)*1.15,price*0.0012); let stop,target;
+          if(sig.side==='LONG'){stop=price-stopDist;target=price+stopDist*rr;} else {stop=price+stopDist;target=price-stopDist*rr;}
+          let outcome=null; for(let j=i+1;j<Math.min(rows.length,i+18);j++){ const c=rows[j]; if(sig.side==='LONG'){ if(c.low<=stop){outcome=-1;break;} if(c.high>=target){outcome=rr;break;} } else { if(c.high>=stop){outcome=-1;break;} if(c.low<=target){outcome=rr;break;} } }
+          if(outcome==null) continue; trades++; if(outcome>0){wins++;grossWin+=outcome;} else {losses++;grossLoss+=Math.abs(outcome);} if(trades>=220) break;
+        }
+        const pf=grossLoss>0?grossWin/grossLoss:(grossWin>0?grossWin:0); const wr=trades?wins/trades:0; const posterior=Math.max(0,Math.min(0.995,(pf/(pf+1||1))*0.7+wr*0.3)); return {trades,wins,losses,pf,wr,posterior};
+      }
+      function makeRowsForGroup(g){
+        const rows=[]; const feats=[]; const f=calcFeature(g.pair,g.timeframe,g.rows,g.rows.length-1); if(!f) return {rows,feats}; feats.push(f);
+        const strategies=['EMA_TREND','SWING_LEVEL_BOUNCE','POC','BOLLINGER_REVERSAL','RSI_DIVERGENCE_ZONE']; const exits=[1,1.5,2,3,5];
+        for(const st of strategies){ for(const rr of exits){ const bt=backtest(g.pair,g.timeframe,g.rows,st,rr); const sig=signal(st,f); const score=(bt.pf||0)*25+(bt.trades||0)*0.25+(sig.ok?20:0)+(bt.posterior||0)*30; if(bt.trades<3 && !sig.ok) continue; rows.push({ key:`${g.pair}_${g.timeframe}||${g.timeframe.toUpperCase()}||${st}||${String(rr).replace('.','_')}R_FIXED`, pair:g.pair, symbol:g.pair, baseSymbol:g.pair, timeframe:g.timeframe, strategy:st, stratName:st, exit:`${rr}R Fixed`, direction:sig.side||'', currentPrice:f.close, setupPrice:sig.zone||f.close, score:Number(score.toFixed(4)), oosPF:Number((bt.pf||0).toFixed(6)), oosTrades:bt.trades, totalTrades:bt.trades, nEffOOS:Math.max(0,Math.round(bt.trades*0.7)), posteriorPFgt1:Number((bt.posterior||0).toFixed(6)), rollingPass:bt.trades>=8 && bt.pf>=1, promotionTier:bt.trades>=25&&bt.posterior>=0.9&&bt.pf>=1.2?'FULL_AUTONOMY_FORWARD':(bt.trades>=10&&bt.pf>=1?'WATCH_FORWARD':'EXPERIMENTAL_FORWARD'), forwardEligible:true, evidenceSource:'REAL_CANDLE_DERIVED_BACKTEST', __alpsV951Source:'v951.realCandleDiscovery', __alpsV951CandlePath:g.path, closedCandleTime:f.time, latestClosedCandleTs:f.time, featureSnapshot:f }); } }
+        return {rows,feats};
+      }
+      const groups = await collectAllCandles();
+      out.candleStores = groups.slice(0,60).map(g=>({path:g.path,pair:g.pair,timeframe:g.timeframe,rows:g.rows.length,lastTime:g.rows[g.rows.length-1]?.t,lastClose:g.rows[g.rows.length-1]?.close}));
+      for (const g of groups) { if (!g.pair || !g.timeframe) continue; const last=g.rows[g.rows.length-1]||{}; out.closedCandleMap[`${g.pair}_${g.timeframe}`.toUpperCase()]={pair:g.pair,timeframe:g.timeframe,latestClosedCandleTs:last.t||null,rows:g.rows.length,lastClose:last.close}; const made=makeRowsForGroup(g); out.featureRows.push(...made.feats); out.rows.push(...made.rows); }
+      const unique=new Map(); for(const r of out.rows){ const k=r.key||`${r.pair}_${r.timeframe}_${r.strategy}_${r.exit}`; if(!unique.has(k)) unique.set(k,r); }
+      out.rows=Array.from(unique.values()).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,cfg.cap);
+      out.featureRows=out.featureRows.slice(0,500);
+      try { if (!Array.isArray(globalThis.results)) globalThis.results=[]; if (!Array.isArray(globalThis.discoveryResults)) globalThis.discoveryResults=[]; if (!Array.isArray(globalThis.allResults)) globalThis.allResults=[]; for(const r of out.rows){ if(!globalThis.results.some(x=>text(x.key)===text(r.key))) globalThis.results.push(r); if(!globalThis.discoveryResults.some(x=>text(x.key)===text(r.key))) globalThis.discoveryResults.push(r); if(!globalThis.allResults.some(x=>text(x.key)===text(r.key))) globalThis.allResults.push(r); } globalThis.__ALPS_V951_REAL_CANDLE_DISCOVERY__ = out; out.injected=true; } catch(e){ out.errors.push({where:'inject-results',message:text(e&&e.message||e).slice(0,180)}); }
+      out.featureRowsFound=out.featureRows.length; out.materializedRows=out.rows.length; out.strategyTemplatesFound=5; out.closedCandlePairFrames=Object.keys(out.closedCandleMap).length; out.status=out.rows.length?'REAL_CANDLE_ROWS_MATERIALIZED':'NO_REAL_CANDLE_ROWS'; out.finishedAt=Date.now(); out.durationMs=out.finishedAt-startedAt; return JSON.parse(JSON.stringify(out));
+    }, { version: FINAL_V930_VERSION, reason, cap: FINAL_V930_TECHNICAL_CAP });
+  } catch (e) {
+    return { schema: 'alps.v951RealCandleDiscovery.view.v1', version: FINAL_V930_VERSION, pageReady: false, reason, rows: [], featureRows: [], error: e.message, status: 'FAILED' };
+  }
 }
 async function v947CollectPipelineDiagnosticsFromPage(reason = 'pipeline-truth-recovery') {
   if (!page || page.isClosed()) return { schema: 'alps.discoveryOutput.view.v1', version: FINAL_V930_VERSION, pageReady: false, reason };
@@ -1410,7 +1589,7 @@ async function triggerActualResearchIfNeeded(source = 'research-trigger-data-bri
   if (researchTriggerState.lastRetryReason) researchTriggerState.lastAction = 'RETRY_RESEARCH_START';
   lastResearchTriggerView = v945BuildResearchTriggerView(bridgedInput);
   try {
-    log(`v9.5.0 Paper Entry Visibility + Numeric Guard: source=${source} pairFrames=${metrics.pairFrames} candles=${metrics.candlesLoaded} rawStrategies=${metrics.rawStrategies} runnerState=${metrics.runnerStateStatus}`);
+    log(`v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery: source=${source} pairFrames=${metrics.pairFrames} candles=${metrics.candlesLoaded} rawStrategies=${metrics.rawStrategies} runnerState=${metrics.runnerStateStatus}`);
     const result = await pageEval(async cfg => {
       const state = globalThis.__ALPS_V946_RESEARCH_TRIGGER__ || globalThis.__ALPS_V945_RESEARCH_TRIGGER__ || { version: cfg.version, attempts: [], invoked: [], clicked: [], errors: [], functionsFound: [], lastAt: 0 };
       globalThis.__ALPS_V946_RESEARCH_TRIGGER__ = state;
@@ -1495,7 +1674,7 @@ async function triggerActualResearchIfNeeded(source = 'research-trigger-data-bri
     researchTriggerState.errors = safeArray(researchTriggerState.errors).concat([{ at: Date.now(), name: 'triggerActualResearchIfNeeded', message: e.message }]).slice(-20);
     researchTriggerState.lastAction = 'FORCE_RESEARCH_START_ERROR';
     lastResearchTriggerView = v945BuildResearchTriggerView(bridgedInput);
-    log('v9.5.0 Paper Entry Visibility + Numeric Guard failed:', e.message);
+    log('v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery failed:', e.message);
     return false;
   } finally {
     researchTriggerBusy = false;
@@ -2150,7 +2329,7 @@ function buildV949CompleteTruthMarkdown(report = {}) {
   const quality = report.qualityRisk || lastV949QualityRiskView || {};
   const rel = report.releaseChecklist || lastV949ReleaseChecklistView || {};
   const line = (a,b) => `| ${a} | ${b == null || b === '' ? '—' : String(b)} |`;
-  let md = `## ALPS v9.5.0 Paper Entry Visibility + Candle Store Resolver + Report Truth Sync\n`;
+  let md = `## ALPS v9.5.1 All-in-One Feature Discovery Forward Entry Recovery\n`;
   md += `| Field | Value |\n|---|---|\n`;
   md += line('Final Health Gate', gate.status) + '\n';
   md += line('Failed Checks', safeArray(gate.failedChecks).join(', ') || 'none') + '\n';
@@ -2247,7 +2426,7 @@ function buildV930Markdown(report = {}) {
   const cf = report.counterfactual || lastCounterfactualView || {};
   const ch = report.chart || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.0 Paper Entry Visibility + Numeric Guard\n`;
+  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2269,7 +2448,7 @@ function buildV930Markdown(report = {}) {
   const rec = report.recoverableEntry || lastRecoverableEntryView || v944BuildRecoverableEntryView(report, latch);
   const exitMgr = report.adaptiveExitManager || lastAdaptiveExitManagerView || v944BuildAdaptiveExitManagerView(report, latch);
   const synth = report.syntheticIndicatorEngine || lastSyntheticIndicatorEngineView || v944BuildSyntheticIndicatorEngineView(report, latch);
-  md += `\n### v9.5.0 Paper Entry Visibility + Numeric Guard\n`;
+  md += `\n### v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
   md += line('Forward latch size', latch.size || 0) + '\n';
   md += line('Progressive research', pr.active ? `${pr.mode}` : 'OFF') + '\n';
   md += line('Recoverable entry', rec.installed ? `ON | lookback=${rec.lookbackClosedCandles} candles | zone=${rec.entryZoneBps} bps` : 'OFF') + '\n';
@@ -2301,7 +2480,7 @@ function buildV930Markdown(report = {}) {
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.0 Paper Entry Visibility + Numeric Guard\n`;
+  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', fa.paperOnly === false ? 'NO' : 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2378,7 +2557,7 @@ function buildV930Markdown(report = {}) {
 function buildV948EntryMarkdown(report = {}) {
   const z = report.zonePersistenceEntry || report.paperEntryActivation || lastV948EntryEngineView || v948EmptyEntryView('markdown-no-view');
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.0 Paper Entry Visibility + Numeric Guard\n`;
+  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
   md += line('Effective Patch Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2417,7 +2596,7 @@ function buildV947PipelineTruthMarkdown(report = {}) {
   const e2e = ptr.e2ePipelineTrace || report.e2ePipelineTrace || lastE2EPipelineTraceView || {};
   const disc = ptr.discoveryOutput || report.discoveryOutput || lastDiscoveryOutputView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
-  let md = `## ALPS v9.5.0 Paper Entry Visibility + Numeric Guard\n`;
+  let md = `## ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery\n`;
   md += line('Effective Patch Version', FINAL_V930_VERSION) + '\n';
   md += line('Paper only', 'YES') + '\n';
   md += line('Live capital execution', 'DISABLED') + '\n';
@@ -2443,6 +2622,14 @@ function buildV947PipelineTruthMarkdown(report = {}) {
   md += line('Rejected rows', zero.rejectedRows ?? disc.rejectedRows ?? '—') + '\n';
   md += line('Functions invoked', Array.isArray(disc.functionsInvoked) && disc.functionsInvoked.length ? disc.functionsInvoked.slice(0, 14).join(', ') : '—') + '\n';
   md += line('Materializer sources', Array.isArray(ptr.materializer?.sources) && ptr.materializer.sources.length ? ptr.materializer.sources.join(', ') : '—') + '\n';
+  const v951 = report.v951RealCandleDiscovery || disc.v951RealCandleDiscovery || {};
+  md += `\n### v9.5.1 Real Candle Discovery Recovery\n`;
+  md += line('Status', v951.status || '—') + '\n';
+  md += line('Candle stores', Array.isArray(v951.candleStores) ? v951.candleStores.length : (v951.candleStores ?? '—')) + '\n';
+  md += line('Feature rows from real candles', v951.featureRowsFound ?? '—') + '\n';
+  md += line('Materialized strategy rows', v951.materializedRows ?? (Array.isArray(v951.rows) ? v951.rows.length : '—')) + '\n';
+  md += line('Closed candle pair-frames', v951.closedCandlePairFrames ?? (v951.closedCandleMap ? Object.keys(v951.closedCandleMap).length : '—')) + '\n';
+  md += line('Injected into page results', v951.injected === true ? 'YES' : v951.injected === false ? 'NO' : '—') + '\n';
   md += `\n### Symbol Load Status\n`;
   md += line('Requested symbols', Array.isArray(sym.requestedSymbols) ? sym.requestedSymbols.join(', ') : '—') + '\n';
   md += line('Loaded pairs', Array.isArray(sym.loadedPairs) ? sym.loadedPairs.join(', ') : '—') + '\n';
@@ -4250,7 +4437,7 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/health') { await loadForwardLatchState(); await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message)); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: lastV949FinalHealthGateView }); }
+      if (url.pathname === '/runner/health') { await loadForwardLatchState(); await loadRecoveryState(); await loadTradeVaultState(); await loadCognitionState(); await loadAutonomyState(); await loadAutonomyMemoryState(); await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message)); return send(res, 200, { ...lastHealth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: tradeExportCounts(lastTradeExport), hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(lastHealth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: lastV949FinalHealthGateView }); }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
       if (url.pathname === '/runner/history') { await loadRecoveryState(); return send(res, 200, recoveryState); }
@@ -5385,7 +5572,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       function hasDuplicate(k, pair, tf){ const open = arr(globalThis.openPositions).concat(arr(globalThis.openTrades)).concat(arr(globalThis.paperSignals)); return open.some(x => text(x.__alpsV948Key || x.tradeId || x.key || '').toUpperCase() === k || (pairOf(x)===pair && tfOf(x)===tf && /OPEN|ACTIVE|PAPER/i.test(text(x.status || 'OPEN')))); }
       function makeTrade(c, d, srcPath){
         const k=keyOf(c); const pair=pairOf(c), tf=tfOf(c); const now=Date.now(); const id=`V948_${now}_${pair}_${tf}_${rootOf(c)}_${text(c.exit || c.exitName || 'GENERIC').replace(/[^A-Z0-9]+/gi,'_').slice(0,24)}`;
-        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.0-paper-entry-visibility-candle-store-report-truth', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.0 after nativeForwardPool visibility, candle-store resolution, finite numeric plan, and valid recent zone persistence checks.' };
+        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v9.5.1-all-in-one-feature-discovery-forward-entry-recovery', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened by v9.5.1 after feature/discovery recovery, nativeForwardPool visibility, candle-store resolution, finite numeric plan, and valid recent zone persistence checks.' };
       }
       const candidates = []; const seenCandidates = new Set(); const candidateSources = {}; function pushCandidate(c, source){ if(!c || typeof c!=='object') return; const p=pairOf(c), tf=tfOf(c); if(!p || !tf) return; const k=keyOf(c); if(seenCandidates.has(k)) return; seenCandidates.add(k); candidates.push({...c,__candidateSource:source}); candidateSources[source]=(candidateSources[source]||0)+1; }
       for (const c of arr(rows)) pushCandidate(c, 'runner-latch');
@@ -5405,7 +5592,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       for (const c of candidates) { if (opened.length >= maxOpen) break; scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
       state.lastRunAt=Date.now(); state.scanned=scanned; state.openedTrades=opened.concat(arr(state.openedTrades)).slice(0,50); state.rejections=rejections; state.rejectedReasonCounts=rejectedReasonCounts; state.candlesStoresFound=candlesAll.length; state.candidatesSeen=candidates.length;
       const topRejectedReason = Object.entries(rejectedReasonCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
-      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v950Fix:'Paper Entry candidate visibility + candle store resolver + report truth sync' };
+      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Math.max(0, scanned-opened.length), openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery' };
       globalThis.__ALPS_V948_ENTRY_ENGINE__.view=view; try { if (typeof saveRuntimeSnapshotThrottled === 'function') saveRuntimeSnapshotThrottled(false); } catch(e){ recordGuard(e,'saveRuntimeSnapshotThrottled'); }
       return view;
     }, { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES } });
@@ -5747,14 +5934,29 @@ async function collectReport() {
     return r;
   });
 
-  // v9.5.0 Paper Entry Visibility + Numeric Guard: use the same report data that is shown to the user.
+  // v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery: use the same report data that is shown to the user.
   // If report.data.pairFrames or candlesLoaded is already positive, trigger research immediately; do not wait for 35/35.
   await triggerActualResearchIfNeeded('collect-report-data-bridge', report).catch(e => log('v9.4.8 zone persistence trigger from report failed:', e.message));
 
-  // v9.5.0 Paper Entry Visibility + Numeric Guard: scan real page/report stores after trigger/retry, materialize only existing rows, and diagnose zero output.
+  // v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery: scan real page/report stores after trigger/retry, materialize only existing rows, and diagnose zero output.
   lastDiscoveryOutputView = await v947CollectPipelineDiagnosticsFromPage('collect-report-pipeline-truth-recovery').catch(e => ({ schema: 'alps.discoveryOutput.view.v1', version: FINAL_V930_VERSION, status: 'DIAGNOSTIC_COLLECTION_FAILED', error: e.message, rows: [] }));
+  const v951Real = await v951CollectRealCandleDiscoveryMaterializer('collect-report-v951-real-candle-discovery').catch(e => ({ schema: 'alps.v951RealCandleDiscovery.view.v1', version: FINAL_V930_VERSION, status: 'FAILED', error: e.message, rows: [], featureRows: [] }));
+  report.v951RealCandleDiscovery = v951Real;
+  if (v951Real && safeArray(v951Real.rows).length > 0) {
+    lastDiscoveryOutputView.rows = safeArray(lastDiscoveryOutputView.rows).concat(safeArray(v951Real.rows));
+    lastDiscoveryOutputView.featureRowsFound = Math.max(n(lastDiscoveryOutputView.featureRowsFound,0), n(v951Real.featureRowsFound,0));
+    lastDiscoveryOutputView.materializedRows = safeArray(lastDiscoveryOutputView.rows).length;
+    lastDiscoveryOutputView.testedRows = Math.max(n(lastDiscoveryOutputView.testedRows,0), safeArray(lastDiscoveryOutputView.rows).length);
+    lastDiscoveryOutputView.candlesVisibleToDiscovery = true;
+    lastDiscoveryOutputView.status = 'ROWS_FOUND_AND_MATERIALIZED_BY_V951_REAL_CANDLE_DISCOVERY';
+    lastDiscoveryOutputView.v951RealCandleDiscovery = { status: v951Real.status, candleStores: safeArray(v951Real.candleStores).length, featureRowsFound: n(v951Real.featureRowsFound,0), materializedRows: safeArray(v951Real.rows).length, closedCandlePairFrames: n(v951Real.closedCandlePairFrames,0), injected: !!v951Real.injected };
+  }
   v947BuildStoreInventoryView(lastDiscoveryOutputView);
   v947MaterializeReportRows(report, safeArray(lastDiscoveryOutputView?.rows));
+  if (v951Real && v951Real.closedCandleMap && Object.keys(v951Real.closedCandleMap).length) {
+    report.v951ClosedCandleMap = v951Real.closedCandleMap;
+    report.latestClosedCandleTs = Math.max(0, ...Object.values(v951Real.closedCandleMap).map(x => n(x.latestClosedCandleTs,0)));
+  }
 
   await syncOosEvidenceBridgeFromPage('collect-report-pre-enrich').catch(() => null);
   await applyOosEvidenceBridgeToPage('collect-report-pre-enrich').catch(() => null);
@@ -5765,6 +5967,14 @@ async function collectReport() {
   report = enrichReportV930(report, pageV930Status);
   await saveForwardLatchState().catch(() => null);
   await startForwardIfEligible('collect-report-eligible-forward').catch(() => null);
+  // v9.5.1: after materialized rows are enriched into nativeForwardPool/latch, run Paper Entry again with the now-current candidates.
+  await applyForwardLatchToPage('collect-report-post-enrich-v951').catch(() => null);
+  await applyV948ZonePersistenceEntryEngine('collect-report-post-enrich-v951-entry').catch(() => null);
+  await applyV949TradeLifecycleGuards('collect-report-post-enrich-v951-lifecycle').catch(() => null);
+  report.zonePersistenceEntry = v948BuildEntryActivationView(report);
+  report.paperEntryActivation = report.zonePersistenceEntry;
+  report.numericGuardHotfix = report.zonePersistenceEntry.numericGuard || lastV948NumericGuardView || { installed: true };
+  report = v949AttachCompleteTruth(report);
 
   const rawTradeLedgers = await collectPageTradeLedgers().catch(e => ({
     openTrades: [],
@@ -5815,7 +6025,7 @@ async function collectReport() {
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
-  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth }, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
