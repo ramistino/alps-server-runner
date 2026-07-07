@@ -5705,6 +5705,79 @@ async function v1016HealthPaperEntryRescan(healthTruth = {}, reason = 'health-en
   return proof;
 }
 
+// v10.1.6 Health Fast Response Guard:
+// /runner/health must always return a JSON response even while Chromium/page research
+// or Market Data Vision recovery is busy. Heavy recovery work is moved to the
+// background so mobile dashboard/report checks do not hang or time out.
+let v1016HealthEndpointRecoveryBusy = false;
+function v1016TimeoutView(schema, status, error, extra = {}) {
+  return {
+    schema,
+    version: FINAL_V930_VERSION,
+    installed: true,
+    status,
+    error: error ? textValue(error).slice(0, 240) : '',
+    paperOnly: true,
+    liveCapitalExecution: false,
+    ...extra
+  };
+}
+async function v1016WithTimeout(promise, ms, label) {
+  let t = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        t = setTimeout(() => reject(new Error(label || 'ALPS_TIMEOUT')), Math.max(500, ms || 2500));
+      })
+    ]);
+  } finally {
+    if (t) clearTimeout(t);
+  }
+}
+function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health-endpoint-background-recovery') {
+  if (v1016HealthEndpointRecoveryBusy || shuttingDown) {
+    return { queued: false, reason: v1016HealthEndpointRecoveryBusy ? 'ALREADY_RUNNING' : 'SHUTTING_DOWN' };
+  }
+  v1016HealthEndpointRecoveryBusy = true;
+  const seed = { ...(seedHealthTruth || {}) };
+  setTimeout(async () => {
+    try {
+      await v1016WithTimeout(v1015HealthMarketDataBootstrap(seed, reason + '-v1015-market-data'), 12000, 'V1015_HEALTH_BACKGROUND_TIMEOUT').catch(e => {
+        seed.v1015HealthMarketDataBootstrap = v1016TimeoutView('alps.v1015HealthMarketDataBootstrap.view.v1', 'BACKGROUND_FAILED_OR_TIMED_OUT', e && e.message || e);
+      });
+      await v1016WithTimeout(v1016HealthPaperEntryRescan(seed, reason + '-v1016-paper-entry-rescan'), 12000, 'V1016_PAPER_ENTRY_BACKGROUND_TIMEOUT').catch(e => {
+        seed.v1016HealthPaperEntryRescan = v1016TimeoutView('alps.v1016HealthPaperEntryRescan.view.v1', 'BACKGROUND_FAILED_OR_TIMED_OUT', e && e.message || e);
+      });
+      lastHealth = {
+        ...(lastHealth || {}),
+        ...(seed || {}),
+        effectivePatchVersion: FINAL_V930_VERSION,
+        v1016HealthFastResponseGuard: {
+          schema: 'alps.v1016HealthFastResponseGuard.view.v1',
+          version: FINAL_V930_VERSION,
+          installed: true,
+          status: 'BACKGROUND_RECOVERY_COMPLETED_OR_RECORDED',
+          reason,
+          completedAt: new Date().toISOString(),
+          paperOnly: true,
+          liveCapitalExecution: false
+        }
+      };
+    } catch (e) {
+      lastHealth = {
+        ...(lastHealth || {}),
+        effectivePatchVersion: FINAL_V930_VERSION,
+        v1016HealthFastResponseGuard: v1016TimeoutView('alps.v1016HealthFastResponseGuard.view.v1', 'BACKGROUND_RECOVERY_CRASH_GUARDED', e && e.message || e, { reason })
+      };
+      log('v10.1.6 health background recovery guarded:', e && e.message || e);
+    } finally {
+      v1016HealthEndpointRecoveryBusy = false;
+    }
+  }, 0);
+  return { queued: true, reason };
+}
+
 async function createServer() {
   const server = http.createServer(async (req, res) => {
     try {
@@ -5723,10 +5796,12 @@ async function createServer() {
         await loadCognitionState();
         await loadAutonomyState();
         await loadAutonomyMemoryState();
-        await maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }).catch(e => log('Runner watchdog health action failed:', e.message));
+        await v1016WithTimeout(maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }), 2500, 'HEALTH_WATCHDOG_TIMEOUT').catch(e => log('Runner watchdog health action skipped/timeout:', e.message));
         let healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
-        await v1015HealthMarketDataBootstrap(healthTruth, 'health-endpoint-v1015-market-data-vision-bootstrap').catch(e => { healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status:'FAILED', error:textValue(e.message||e).slice(0,240) }; });
-        await v1016HealthPaperEntryRescan(healthTruth, 'health-endpoint-v1016-paper-entry-rescan-after-authority').catch(e => { healthTruth.v1016HealthPaperEntryRescan = { schema:'alps.v1016HealthPaperEntryRescan.view.v1', version: FINAL_V930_VERSION, installed:true, status:'FAILED', error:textValue(e.message||e).slice(0,240), paperOnly:true, liveCapitalExecution:false }; });
+        const healthBackgroundQueue = v1016QueueHealthEndpointRecovery(healthTruth, 'health-endpoint-fast-response-background-recovery');
+        healthTruth.v1016HealthFastResponseGuard = { schema:'alps.v1016HealthFastResponseGuard.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_QUEUED' : 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_' + healthBackgroundQueue.reason, queue: healthBackgroundQueue, rule:'/runner/health does not block on Chromium, Market Data Vision, or Paper Entry rescan. Heavy recovery runs in background and updates next health response.', paperOnly:true, liveCapitalExecution:false };
+        if (!healthTruth.v1015HealthMarketDataBootstrap) healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status:'BACKGROUND_QUEUED_FAST_HEALTH_RESPONSE', paperOnly:true, liveCapitalExecution:false };
+        if (!healthTruth.v1016HealthPaperEntryRescan) healthTruth.v1016HealthPaperEntryRescan = { schema:'alps.v1016HealthPaperEntryRescan.view.v1', version: FINAL_V930_VERSION, installed:true, status:'BACKGROUND_QUEUED_FAST_HEALTH_RESPONSE', paperOnly:true, liveCapitalExecution:false };
         const v1001HealthTradeCounts = tradeExportCounts(lastTradeExport);
         if (v1001HealthTradeCounts.open > 0) {
           healthTruth.openPositions = Math.max(n(healthTruth.openPositions, 0), v1001HealthTradeCounts.open);
