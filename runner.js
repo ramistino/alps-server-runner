@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.9 Integrated System: Server Paper Ledger Persistence + Bootstrap Authority
+ * ALPS Server Runner — v10.1.12 Integrated System: Dashboard Truth Console
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v10.1.9-server-paper-ledger-persistence';
+const RECOVERY_PATCH_VERSION = 'v10.1.12-dashboard-truth-console';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v10.1.9-server-paper-ledger-persistence';
+const COGNITION_PATCH_VERSION = 'v10.1.12-dashboard-truth-console';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v10.1.9-server-paper-ledger-persistence';
+const AUTONOMY_PATCH_VERSION = 'v10.1.12-dashboard-truth-console';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.9-server-paper-ledger-persistence';
+const FINAL_V930_VERSION = 'v10.1.12-dashboard-truth-console';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -359,6 +359,7 @@ let lastEngineHookView = null;
 let lastCircuitBreakerView = null;
 let lastCounterfactualView = null;
 let lastChartView = null;
+let lastChartTruthView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery + Progressive Forward Latch
 const V944_FORWARD_LATCH_FILE = path.join(DATA_DIR, 'forward-latch-v944.json');
@@ -414,7 +415,7 @@ let lastMaterializedRowSources = [];
 let lastV948EntryEngineView = null;
 let lastV948NumericGuardView = null;
 let lastV948RejectedReasonView = null;
-const V948_ENTRY_MAX_PER_TICK = Math.max(0, Number(process.env.ALPS_V948_ENTRY_MAX_PER_TICK || 1));
+const V948_ENTRY_MAX_PER_TICK = Math.max(0, Number(process.env.ALPS_V948_ENTRY_MAX_PER_TICK || process.env.ALPS_MAX_ENTRIES_PER_TICK || 5));
 const V948_ENTRY_ZONE_BPS = Math.max(1, Number(process.env.ALPS_V948_ENTRY_ZONE_BPS || V944_ENTRY_ZONE_BPS || 18));
 const V948_ENTRY_LOOKBACK_CANDLES = Math.max(1, Number(process.env.ALPS_V948_ENTRY_LOOKBACK_CANDLES || V944_RECOVERABLE_LOOKBACK_CANDLES || 5));
 
@@ -658,6 +659,10 @@ function buildChartView(report = {}) {
     candidateTradesShown: safeArray(report?.research?.topStrategies).length,
     openTradesShown: Number(fw.openPositions || 0),
     closedTradesShown: Number(fw.closedTrades || 0),
+    chartUrl: '/runner/chart',
+    chartTruthEndpoint: '/runner/chart-truth.json',
+    permanentInteractiveChart: true,
+    chartTruthReady: !!lastChartTruthView,
     lastError: ''
   };
 }
@@ -5323,44 +5328,398 @@ function v1010NormalizeCandleRow(r) {
   if (![t,o,h,l,c].every(Number.isFinite)) return null;
   return { t,o,h,l,c,v };
 }
-function v1010TradeRowsForChart(symbol='BTCUSDT') {
-  const sym = textValue(symbol).toUpperCase().replace(/[^A-Z0-9]/g,'');
-  const base = sym.replace('USDT','');
-  return v1010SanitizeExecutionRows([...(lastTradeExport?.openTrades||[]), ...(lastTradeExport?.closedTrades||[]), ...(lastReport?.paperEntryActivation?.openedTrades||[]), ...(lastReport?.zonePersistenceEntry?.openedTrades||[])]).filter(t => {
-    const s = textValue(t.pair||t.baseSymbol||t.symbol||t.sym||t.key).toUpperCase();
-    return s.includes(sym) || s.includes(base);
+
+const V1011_CHART_DEFAULT_PAIRS = ['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','XAUTUSDT'];
+const V1011_CHART_DEFAULT_FRAMES = ['5m','15m','30m','1h','4h'];
+
+function v1011ChartText(value) { return textValue(value).trim(); }
+function v1011CanonicalChartPair(value) {
+  const text = v1011ChartText(value || '').toUpperCase();
+  const first = text.split(/[|_\s:]+/)[0] || text;
+  const raw = first.replace(/[^A-Z0-9]/g, '');
+  if (!raw || raw === 'AUTO') return '';
+  if (raw === 'XAUUSDT' || raw === 'GOLDUSDT' || raw === 'PAXGUSDT') return 'XAUTUSDT';
+  return raw.endsWith('USDT') ? raw : `${raw}USDT`;
+}
+function v1011CanonicalChartFrame(value) {
+  const raw = v1011ChartText(value || '').toLowerCase().replace(/\s+/g, '');
+  const map = { '5':'5m', '15':'15m', '30':'30m', '60':'1h', '240':'4h', '5min':'5m', '15min':'15m', '30min':'30m', '1hr':'1h', '4hr':'4h' };
+  return map[raw] || raw || '1h';
+}
+function v1011PickChartNumber(obj = {}, names = []) {
+  for (const name of names) {
+    const value = obj && obj[name];
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(String(value).replace(/[,%$≈]/g, '').trim());
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+function v1011TradeStatus(trade = {}) {
+  const raw = v1011ChartText(trade.status || trade.state || trade.result || trade.outcome || '').toUpperCase();
+  if (/CLOSED|WIN|LOSS|STOP|TARGET|EXIT/.test(raw)) return 'CLOSED';
+  return 'OPEN';
+}
+function v1011TradeRowsForChart(symbol='BTCUSDT') {
+  const sym = v1011CanonicalChartPair(symbol) || 'BTCUSDT';
+  const base = sym.replace(/USDT$/, '');
+  const sources = [
+    ...(lastTradeExport?.openTrades || []),
+    ...(lastTradeExport?.closedTrades || []),
+    ...(lastReport?.alpsTradeExport?.openTrades || []),
+    ...(lastReport?.alpsTradeExport?.closedTrades || []),
+    ...(lastReport?.paperEntryActivation?.openedTrades || []),
+    ...(lastReport?.zonePersistenceEntry?.openedTrades || []),
+    ...(lastV948EntryEngineView?.openedTrades || [])
+  ];
+  const seen = new Set();
+  return safeArray(sources).filter(t => {
+    if (!t || typeof t !== 'object') return false;
+    const s = v1011CanonicalChartPair(t.pair || t.baseSymbol || t.symbol || t.sym || t.market || t.key || '');
+    const raw = textValue(t.pair || t.baseSymbol || t.symbol || t.sym || t.market || t.key || '').toUpperCase();
+    const ok = s === sym || raw.includes(sym) || raw.includes(base);
+    if (!ok) return false;
+    const key = textValue(t.tradeId || t.id || t.signalId || `${s}|${t.timeframe || t.tf || ''}|${t.entry || t.entryPrice || ''}|${t.openedAt || t.timestamp || ''}|${v1011TradeStatus(t)}`);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
-async function v1010FetchChartTruth(pair='BTCUSDT', timeframe='1h', limit=120) {
-  const symbol = textValue(pair || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g,'') || 'BTCUSDT';
-  const interval = ({'5M':'5m','15M':'15m','30M':'30m','1H':'1h','4H':'4h','1D':'1d'}[textValue(timeframe).toUpperCase()] || textValue(timeframe || '1h').toLowerCase());
-  const capped = Math.max(20, Math.min(300, Number(limit)||120));
+function v1011CandidateRowsForChart(symbol='BTCUSDT', timeframe='') {
+  const sym = v1011CanonicalChartPair(symbol) || 'BTCUSDT';
+  const tf = v1011CanonicalChartFrame(timeframe || '');
+  const bundle = v952CollectCandidateRows([lastReport || {}, 'lastReport'], [{ nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView }, 'runnerState'], [{ nativeForwardPool:{ candidates:v1000ActiveRows() } }, 'stateAuthority']);
+  const seen = new Set();
+  return safeArray(bundle.rows).filter(c => {
+    const pair = v1011CanonicalChartPair(c.pair || c.baseSymbol || c.symbol || c.sym || c.key || '');
+    const ctf = v1011CanonicalChartFrame(c.timeframe || c.tf || c.frame || '');
+    const raw = textValue(c.key || c.pair || c.symbol || '').toUpperCase();
+    const pairOk = pair === sym || raw.includes(sym);
+    const tfOk = !tf || !ctf || ctf === tf;
+    const key = v952CandidateKey(c);
+    if (!pairOk || !tfOk || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function v1011AvailableChartPairs() {
+  const rows = [];
+  const push = v => { const p = v1011CanonicalChartPair(v); if (p) rows.push(p); };
+  V1011_CHART_DEFAULT_PAIRS.forEach(push);
+  safeArray(lastReport?.dataPairs || lastReport?.data?.pairs || lastHealth?.dataPairs || lastV949UniverseCompletionView?.loadedPairs).forEach(push);
+  safeArray(lastNativeForwardPoolView?.candidates).forEach(c => push(c.pair || c.baseSymbol || c.symbol || c.sym));
+  safeArray(lastForwardLatchView?.candidates).forEach(c => push(c.pair || c.baseSymbol || c.symbol || c.sym));
+  safeArray(v1000ActiveRows()).forEach(c => push(c.pair || c.baseSymbol || c.symbol || c.sym));
+  safeArray(lastTradeExport?.openTrades).forEach(t => push(t.pair || t.symbol));
+  safeArray(lastTradeExport?.closedTrades).forEach(t => push(t.pair || t.symbol));
+  return [...new Set(rows)].filter(Boolean).sort((a,b) => V1011_CHART_DEFAULT_PAIRS.indexOf(a) - V1011_CHART_DEFAULT_PAIRS.indexOf(b) || a.localeCompare(b));
+}
+function v1011AvailableChartFrames(symbol='') {
+  const frames = [...V1011_CHART_DEFAULT_FRAMES];
+  const sym = v1011CanonicalChartPair(symbol || '');
+  const push = v => { const tf = v1011CanonicalChartFrame(v); if (tf && !frames.includes(tf)) frames.push(tf); };
+  safeArray(lastNativeForwardPoolView?.candidates).forEach(c => { if (!sym || v1011CanonicalChartPair(c.pair || c.baseSymbol || c.symbol || c.sym || c.key) === sym) push(c.timeframe || c.tf); });
+  safeArray(lastForwardLatchView?.candidates).forEach(c => { if (!sym || v1011CanonicalChartPair(c.pair || c.baseSymbol || c.symbol || c.sym || c.key) === sym) push(c.timeframe || c.tf); });
+  safeArray(lastTradeExport?.openTrades).forEach(t => { if (!sym || v1011CanonicalChartPair(t.pair || t.symbol) === sym) push(t.timeframe || t.tf); });
+  return frames.filter(Boolean);
+}
+function v1011DefaultChartSelection(pair='', timeframe='') {
+  const requestedPair = v1011CanonicalChartPair(pair);
+  const requestedTf = v1011CanonicalChartFrame(timeframe || '');
+  const open = safeArray(lastTradeExport?.openTrades).find(t => v1011CanonicalChartPair(t.pair || t.symbol));
+  const candidate = safeArray(lastForwardLatchView?.candidates || lastNativeForwardPoolView?.candidates || v1000ActiveRows()).find(c => v1011CanonicalChartPair(c.pair || c.symbol || c.baseSymbol || c.sym));
+  const selectedPair = requestedPair || v1011CanonicalChartPair(open?.pair || open?.symbol || candidate?.pair || candidate?.symbol || candidate?.baseSymbol || 'BTCUSDT') || 'BTCUSDT';
+  const selectedFrame = requestedTf || v1011CanonicalChartFrame(open?.timeframe || candidate?.timeframe || '1h');
+  return { pair:selectedPair, timeframe:selectedFrame };
+}
+function v1011BuildChartLevels(candidates = [], trades = []) {
+  const levels = [];
+  for (const t of safeArray(trades)) {
+    const id = textValue(t.tradeId || t.id || t.signalId || '').slice(0, 80);
+    const status = v1011TradeStatus(t);
+    const direction = textValue(t.direction || t.side || '').toUpperCase();
+    const entry = v1011PickChartNumber(t, ['entry','entryPrice','open','openPrice','signalPrice','price']);
+    const stop = v1011PickChartNumber(t, ['stop','stopPrice','sl','stopLoss']);
+    const target = v1011PickChartNumber(t, ['target','targetPrice','tp','takeProfit']);
+    const exit = v1011PickChartNumber(t, ['exit','exitPrice','close','closePrice','finalPrice']);
+    if (entry != null) levels.push({ type:'TRADE_ENTRY', id, price:entry, label:`${status} ${direction} entry`, status, direction, source:t.source || t.__alpsSource || '' });
+    if (stop != null) levels.push({ type:'TRADE_STOP', id, price:stop, label:'stop', status, direction });
+    if (target != null) levels.push({ type:'TRADE_TARGET', id, price:target, label:'target', status, direction });
+    if (exit != null) levels.push({ type:'TRADE_EXIT', id, price:exit, label:'exit', status, direction });
+  }
+  for (const c of safeArray(candidates).slice(0, 80)) {
+    const setup = v1011PickChartNumber(c, ['setupPrice','entry','entryPrice','currentPrice','price']);
+    const stop = v1011PickChartNumber(c, ['stop','stopPrice','sl','stopLoss']);
+    const target = v1011PickChartNumber(c, ['target','targetPrice','tp','takeProfit']);
+    const id = textValue(c.key || v952CandidateKey(c)).slice(0, 80);
+    if (setup != null) levels.push({ type:'CANDIDATE_SETUP', id, price:setup, label:`candidate ${c.strategy || c.stratName || ''}`.trim(), tier:c.tier || c.promotionTier || c.candidateTier || '' });
+    if (stop != null) levels.push({ type:'CANDIDATE_STOP', id, price:stop, label:'candidate stop', tier:c.tier || '' });
+    if (target != null) levels.push({ type:'CANDIDATE_TARGET', id, price:target, label:'candidate target', tier:c.tier || '' });
+  }
+  const seen = new Set();
+  return levels.filter(x => Number.isFinite(Number(x.price))).filter(x => { const k = `${x.type}|${x.id}|${x.price}`; if (seen.has(k)) return false; seen.add(k); return true; });
+}
+function v1011BuildChartMarkers(trades = [], candles = []) {
+  const firstT = Number(safeArray(candles)[0]?.t || 0);
+  const lastT = Number(safeArray(candles).slice(-1)[0]?.t || Date.now());
+  return safeArray(trades).map(t => {
+    const openedAtRaw = t.openedAt || t.openTime || t.timestamp || t.signalTime || t.createdAt;
+    const closedAtRaw = t.closedAt || t.closeTime || t.exitTime || t.completedAt;
+    let openedAt = Date.parse(openedAtRaw);
+    if (!Number.isFinite(openedAt)) openedAt = Number(openedAtRaw);
+    if (Number.isFinite(openedAt) && openedAt < 1e12) openedAt *= 1000;
+    let closedAt = Date.parse(closedAtRaw);
+    if (!Number.isFinite(closedAt)) closedAt = Number(closedAtRaw);
+    if (Number.isFinite(closedAt) && closedAt < 1e12) closedAt *= 1000;
+    const entry = v1011PickChartNumber(t, ['entry','entryPrice','open','openPrice','signalPrice','price']);
+    const exit = v1011PickChartNumber(t, ['exit','exitPrice','close','closePrice','finalPrice']);
+    return {
+      id: textValue(t.tradeId || t.id || t.signalId || '').slice(0, 80),
+      pair: t.pair || t.symbol || '',
+      timeframe: t.timeframe || t.tf || '',
+      direction: normalizeDirection(t.direction || t.side || t.bias),
+      status: v1011TradeStatus(t),
+      entry,
+      exit,
+      openedAt: Number.isFinite(openedAt) ? Math.max(firstT || openedAt, Math.min(lastT || openedAt, openedAt)) : null,
+      closedAt: Number.isFinite(closedAt) ? Math.max(firstT || closedAt, Math.min(lastT || closedAt, closedAt)) : null,
+      source: t.source || t.__alpsSource || ''
+    };
+  }).filter(x => x.entry != null || x.exit != null);
+}
+async function v1011FetchChartTruth(pair='BTCUSDT', timeframe='1h', limit=220) {
+  const selected = v1011DefaultChartSelection(pair, timeframe);
+  const symbol = selected.pair;
+  const interval = v1011CanonicalChartFrame(selected.timeframe || '1h');
+  const capped = Math.max(80, Math.min(500, Number(limit)||220));
   let rows = [];
   let source = 'NO_CANDLES_AVAILABLE';
+  let fetchStatus = '';
+  let attempts = [];
+  let error = '';
   try {
     const fetched = await v1012FetchBinanceKlines(symbol, interval, capped);
     rows = safeArray(fetched.rows).map(x => ({ t:x.t, o:x.open, h:x.high, l:x.low, c:x.close, v:x.volume })).map(v1010NormalizeCandleRow).filter(Boolean);
     source = rows.length ? `MARKET_DATA_${fetched.status}_${fetched.sourceName || fetched.sourceSymbol || symbol}` : `MARKET_DATA_EMPTY_${fetched.status || 'UNKNOWN'}`;
-  } catch (e) { source = `CANDLE_FETCH_FAILED:${textValue(e.message || e).slice(0,80)}`; }
-  const candidateRows = v1010SanitizeExecutionRows(safeArray(lastNativeForwardPoolView?.candidates || lastReport?.nativeForwardPool?.candidates || []))
-    .filter(c => textValue(c.pair||c.baseSymbol||c.symbol).toUpperCase().includes(symbol) || textValue(c.key).toUpperCase().includes(symbol));
-  const tradeRows = v1010TradeRowsForChart(symbol);
-  const indicatorGovernance = v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || { candidates: candidateRows });
+    fetchStatus = fetched.status || '';
+    attempts = safeArray(fetched.attempts);
+  } catch (e) { error = textValue(e.message || e).slice(0, 180); source = `CANDLE_FETCH_FAILED:${error}`; }
+  const candidateRows = v1011CandidateRowsForChart(symbol, interval);
+  const tradeRows = v1011TradeRowsForChart(symbol);
+  const levels = v1011BuildChartLevels(candidateRows, tradeRows);
+  const markers = v1011BuildChartMarkers(tradeRows, rows);
+  const indicatorGovernance = v1010BuildIndicatorGovernanceView(lastReport || {}, { candidates: candidateRows });
   const view = {
-    schema: 'alps.chartTruth.view.v1',
+    schema: 'alps.chartTruth.view.v2',
     version: FINAL_V930_VERSION,
+    installed: true,
+    ready: rows.length > 0,
     pair: symbol,
     timeframe: interval,
     source,
+    fetchStatus,
+    attempts,
     candles: rows,
-    candidates: candidateRows.slice(0, 80),
+    candleCount: rows.length,
+    lastCandle: rows.length ? rows[rows.length - 1] : null,
+    candidates: candidateRows.slice(0, 160),
+    candidateCount: candidateRows.length,
     trades: tradeRows,
-    indicatorResearch: indicatorGovernance,
+    tradeCount: tradeRows.length,
+    openTrades: tradeRows.filter(t => v1011TradeStatus(t) === 'OPEN').length,
+    closedTrades: tradeRows.filter(t => v1011TradeStatus(t) === 'CLOSED').length,
+    levels,
+    markers,
+    availablePairs: v1011AvailableChartPairs(),
+    availableTimeframes: v1011AvailableChartFrames(symbol),
+    selected: { pair:symbol, timeframe:interval, limit:capped },
+    diagnostics: {
+      lastReportAvailable: !!lastReport,
+      nativeForwardCandidates: v952Num(lastNativeForwardPoolView?.totalCandidates),
+      latchCandidates: v952Num(lastForwardLatchView?.size),
+      stateAuthorityRows: safeArray(v1000ActiveRows()).length,
+      serverPaperLedgerOpen: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && v1011TradeStatus(t) === 'OPEN').length,
+      tradeExportOpen: safeArray(lastTradeExport?.openTrades).length,
+      tradeExportClosed: safeArray(lastTradeExport?.closedTrades).length
+    },
+    lastError: error,
+    paperOnly: true,
+    liveCapitalExecution: false,
     executionInfluenceAllowedForUnvalidatedIndicators: false,
-    rule: 'Chart displays real candles, real candidate levels, real paper trades, and governed indicator research overlays. It does not create trades or promote indicators.'
+    indicatorResearch: indicatorGovernance,
+    rule: 'Permanent chart truth endpoint: real closed candles from market-data failover, real candidate levels, and real server paper-ledger trades. It draws overlays only and never creates trades or OOS evidence.'
   };
-  lastChartView = view;
+  lastChartTruthView = view;
   return view;
+}
+async function v1010FetchChartTruth(pair='BTCUSDT', timeframe='1h', limit=120) {
+  return v1011FetchChartTruth(pair, timeframe, limit);
+}
+function v1011BuildChartHtml() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>ALPS Live Chart</title><style>
+:root{color-scheme:dark;--bg:#05070a;--card:#0d1117;--line:#202938;--text:#f3f7fb;--muted:#8e9aab;--good:#b9f6ca;--bad:#ffb4ab;--accent:#ffffff}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#141923,#05070a 55%);color:var(--text);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}main{max-width:1120px;margin:0 auto;padding:14px 12px 80px}.top{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;margin:8px 0 14px}.brand{letter-spacing:.16em;font-size:12px;color:var(--muted);text-transform:uppercase}.title{font-size:24px;font-weight:850;margin:2px 0}.status{font-size:12px;color:var(--muted);text-align:right}.controls{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;margin:10px 0 12px}.controls select,.controls button{width:100%;border:1px solid var(--line);border-radius:14px;background:#0b1018;color:var(--text);padding:11px 12px;font:inherit}.controls button{background:#f5f7fa;color:#05070a;font-weight:900}.card{border:1px solid var(--line);background:rgba(13,17,23,.86);box-shadow:0 10px 40px rgba(0,0,0,.35);border-radius:22px;padding:12px;margin:10px 0}.chartWrap{position:relative;height:58vh;min-height:390px}.chartWrap canvas{width:100%;height:100%;display:block;border-radius:16px;background:#080c12}.hud{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.tile{border:1px solid var(--line);border-radius:14px;padding:10px;background:#090d14}.tile .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.tile .v{font-size:17px;font-weight:850;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.legend{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);font-size:12px;margin-top:8px}.pill{border:1px solid var(--line);border-radius:999px;padding:6px 9px;background:#090d14}.list{display:grid;gap:8px}.row{border:1px solid var(--line);border-radius:14px;padding:10px;background:#090d14;font-size:13px}.muted{color:var(--muted)}.err{color:var(--bad)}@media(max-width:650px){main{padding:10px 9px 80px}.top{display:block}.status{text-align:left;margin-top:6px}.title{font-size:21px}.controls{grid-template-columns:1fr 1fr}.controls button{grid-column:1/-1}.chartWrap{height:55vh;min-height:330px}.hud{grid-template-columns:1fr 1fr}.tile .v{font-size:15px}}
+</style></head><body><main><section class="top"><div><div class="brand">ALPS SERVER RUNNER</div><div class="title">Live Chart Truth</div><div class="muted">Real candles + paper trades + candidate levels</div></div><div class="status" id="status">Loading…</div></section><section class="card"><div class="controls"><select id="pair"></select><select id="tf"></select><button id="refresh">Refresh</button></div><div class="chartWrap"><canvas id="chart"></canvas></div><div class="legend"><span class="pill">Candles: real closed market data</span><span class="pill">Entry/Stop/Target: paper ledger</span><span class="pill">Candidate lines: research only</span></div></section><section class="hud" id="hud"></section><section class="card"><h3 style="margin:2px 0 10px">Visible Trades / Candidates</h3><div id="list" class="list"></div></section></main><script>
+const pairEl=document.getElementById('pair'),tfEl=document.getElementById('tf'),statusEl=document.getElementById('status'),hud=document.getElementById('hud'),list=document.getElementById('list'),canvas=document.getElementById('chart'),ctx=canvas.getContext('2d');
+let state=null;function fmt(n){return Number.isFinite(Number(n))?Number(n).toLocaleString(undefined,{maximumFractionDigits:4}):'—'}function esc(s){return String(s??'').replace(/[&<>]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]))}
+function resize(){const r=canvas.getBoundingClientRect();const d=Math.max(1,Math.min(2,devicePixelRatio||1));canvas.width=Math.floor(r.width*d);canvas.height=Math.floor(r.height*d);ctx.setTransform(d,0,0,d,0,0);draw()}window.addEventListener('resize',resize);
+async function load(){statusEl.textContent='Loading chart truth…';const p=pairEl.value||new URLSearchParams(location.search).get('pair')||'auto';const t=tfEl.value||new URLSearchParams(location.search).get('timeframe')||'1h';const r=await fetch('/runner/chart-truth.json?pair='+encodeURIComponent(p)+'&timeframe='+encodeURIComponent(t)+'&limit=260',{cache:'no-store'});state=await r.json();fillSelectors();renderHud();renderList();resize();statusEl.innerHTML=(state.ready?'READY':'WAITING')+' · '+esc(state.pair)+' '+esc(state.timeframe)+' · '+esc(state.source||'');if(state.lastError)statusEl.innerHTML+='<br><span class="err">'+esc(state.lastError)+'</span>'}
+function fillSelectors(){const pairs=state.availablePairs||[state.pair];const frames=state.availableTimeframes||['5m','15m','30m','1h','4h'];pairEl.innerHTML=pairs.map(p=>'<option '+(p===state.pair?'selected':'')+'>'+esc(p)+'</option>').join('');tfEl.innerHTML=frames.map(t=>'<option '+(t===state.timeframe?'selected':'')+'>'+esc(t)+'</option>').join('')}
+function renderHud(){const last=state.lastCandle||{};hud.innerHTML=[['Price',fmt(last.c)],['Candles',state.candleCount||0],['Trades',(state.openTrades||0)+' open / '+(state.closedTrades||0)+' closed'],['Candidates',state.candidateCount||0]].map(x=>'<div class="tile"><div class="k">'+x[0]+'</div><div class="v">'+x[1]+'</div></div>').join('')}
+function renderList(){const trades=(state.trades||[]).slice(0,12).map(t=>'<div class="row"><b>'+esc(t.status||'OPEN')+' '+esc(t.direction||'')+' '+esc(t.pair||'')+' '+esc(t.timeframe||'')+'</b><br><span class="muted">'+esc(t.strategy||t.source||'paper ledger')+'</span><br>Entry '+fmt(t.entry)+' · Stop '+fmt(t.stop)+' · Target '+fmt(t.target)+' · Source '+esc(t.source||'')+'</div>');const cands=(state.candidates||[]).slice(0,10).map(c=>'<div class="row"><b>'+esc(c.pair||'')+' '+esc(c.timeframe||'')+' · '+esc(c.tier||c.promotionTier||'CANDIDATE')+'</b><br><span class="muted">'+esc(c.strategy||c.stratName||'')+'</span><br>Setup '+fmt(c.setupPrice||c.currentPrice||c.entry)+' · PF '+fmt(c.oosPF)+' · Trades '+fmt(c.oosTrades)+'</div>');list.innerHTML=(trades.concat(cands).join(''))||'<div class="row muted">No trades or candidate overlays for this pair/timeframe yet.</div>'}
+function yMap(min,max,h,pad){return v=>pad+(max-v)/(max-min||1)*(h-pad*2)}function xMap(n,w,pad){return i=>pad+i/Math.max(1,n-1)*(w-pad*2)}
+function draw(){if(!state)return;const W=canvas.clientWidth,H=canvas.clientHeight;ctx.clearRect(0,0,W,H);ctx.fillStyle='#080c12';ctx.fillRect(0,0,W,H);const candles=state.candles||[];if(!candles.length){ctx.fillStyle='#8e9aab';ctx.font='14px system-ui';ctx.fillText('No real candles available yet for '+(state.pair||''),18,30);return}const prices=[];candles.forEach(c=>prices.push(c.h,c.l));(state.levels||[]).forEach(l=>prices.push(Number(l.price)));let min=Math.min(...prices),max=Math.max(...prices);const span=(max-min)||1;min-=span*.04;max+=span*.04;const pad=42,y=yMap(min,max,H,pad),x=xMap(candles.length,W,pad);ctx.strokeStyle='#1f2937';ctx.lineWidth=1;for(let i=0;i<5;i++){const yy=pad+i*(H-pad*2)/4;ctx.beginPath();ctx.moveTo(pad,yy);ctx.lineTo(W-pad,yy);ctx.stroke();const price=max-i*(max-min)/4;ctx.fillStyle='#7f8b9b';ctx.font='11px system-ui';ctx.fillText(fmt(price),6,yy+4)}const cw=Math.max(2,(W-pad*2)/candles.length*.62);candles.forEach((c,i)=>{const xx=x(i),up=c.c>=c.o;ctx.strokeStyle=up?'#d6f5df':'#ffcabf';ctx.fillStyle=up?'#d6f5df':'#ffcabf';ctx.beginPath();ctx.moveTo(xx,y(c.h));ctx.lineTo(xx,y(c.l));ctx.stroke();const top=Math.min(y(c.o),y(c.c)),bot=Math.max(y(c.o),y(c.c));ctx.fillRect(xx-cw/2,top,cw,Math.max(1,bot-top))});(state.levels||[]).forEach(l=>{const yy=y(Number(l.price));ctx.setLineDash(l.type.includes('CANDIDATE')?[5,5]:[]);ctx.strokeStyle=l.type.includes('STOP')?'#ffb4ab':l.type.includes('TARGET')?'#b9f6ca':l.type.includes('EXIT')?'#cdbdff':'#ffffff';ctx.globalAlpha=l.type.includes('CANDIDATE')?.45:.9;ctx.beginPath();ctx.moveTo(pad,yy);ctx.lineTo(W-pad,yy);ctx.stroke();ctx.setLineDash([]);ctx.globalAlpha=1;ctx.fillStyle=ctx.strokeStyle;ctx.font='11px system-ui';ctx.fillText((l.type||'LEVEL').replace('TRADE_','')+' '+fmt(l.price),pad+4,yy-4)});(state.markers||[]).forEach(m=>{const entry=Number(m.entry);if(Number.isFinite(entry)){let idx=candles.length-1;if(m.openedAt){idx=candles.findIndex(c=>Number(c.t)>=Number(m.openedAt));if(idx<0)idx=candles.length-1}ctx.fillStyle=m.direction==='SHORT'?'#ffb4ab':'#b9f6ca';ctx.beginPath();ctx.arc(x(idx),y(entry),5,0,Math.PI*2);ctx.fill()}});ctx.fillStyle='#f3f7fb';ctx.font='12px system-ui';ctx.fillText((state.pair||'')+' '+(state.timeframe||'')+' · '+(state.candleCount||0)+' candles',pad,20)}
+document.getElementById('refresh').onclick=load;pairEl.onchange=load;tfEl.onchange=load;load().catch(e=>{statusEl.innerHTML='<span class="err">Chart failed: '+esc(e.message||e)+'</span>'});
+</script></body></html>`;
+}
+
+
+// ALPS v10.1.12 Dashboard Truth Console
+// Mobile-first server dashboard that reflects the v10.1.9-v10.1.11 paper ledger, health queue, throttling, and chart-truth updates.
+function v10112DashText(value) { return textValue(value == null ? '' : value); }
+function v10112DashNum(value, fallback = 0) { const x = Number(String(value == null ? '' : value).replace(/[,%$≈]/g, '').trim()); return Number.isFinite(x) ? x : fallback; }
+function v10112DashIso(value) {
+  if (!value) return '';
+  const n = Number(value);
+  if (Number.isFinite(n) && n > 10000000000) return new Date(n).toISOString();
+  if (Number.isFinite(n) && n > 1000000000) return new Date(n * 1000).toISOString();
+  const d = Date.parse(String(value));
+  return Number.isFinite(d) ? new Date(d).toISOString() : String(value);
+}
+function v10112OpenTradeRows() {
+  const rows = [];
+  const push = (list, source) => {
+    for (const t of safeArray(list)) {
+      if (!t || typeof t !== 'object') continue;
+      const status = v10112DashText(t.status || 'OPEN').toUpperCase();
+      if (/CLOSED|WIN|LOSS|STOP|TARGET/.test(status)) continue;
+      rows.push({ ...t, __dashSource: source });
+    }
+  };
+  push(lastTradeExport?.openTrades, 'tradeExport.openTrades');
+  push(lastV948EntryEngineView?.openedTrades, 'zonePersistenceEntry.openedTrades');
+  push(lastHealth?.openTrades, 'health.openTrades');
+  push(lastReport?.openTrades, 'report.openTrades');
+  const seen = new Set();
+  return rows.filter(t => {
+    const key = [t.tradeId || t.id || '', t.pair || t.symbol || '', t.timeframe || t.tf || '', t.direction || t.side || '', t.entry || t.entryPrice || '', t.openedAt || t.createdAt || ''].map(v10112DashText).join('|').toUpperCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function v10112ClosedTradeRows() {
+  const rows = [];
+  for (const t of safeArray(lastTradeExport?.closedTrades)) if (t && typeof t === 'object') rows.push({ ...t, __dashSource: 'tradeExport.closedTrades' });
+  return rows.slice(-50).reverse();
+}
+function v10112TopRejected(rejectedReasonCounts = {}) {
+  return Object.entries(rejectedReasonCounts || {}).map(([reason, count]) => ({ reason, count: v10112DashNum(count) })).sort((a,b) => b.count - a.count).slice(0, 12);
+}
+function v10112StatusSeverity(value = '') {
+  const s = v10112DashText(value).toUpperCase();
+  if (/FAIL|ERROR|TIMEOUT|DENIED|BLOCKED|FAILED|INVALID/.test(s)) return 'bad';
+  if (/WARN|WAIT|QUEUED|PARTIAL|SKIPPED|THROTTLED|UNKNOWN/.test(s)) return 'warn';
+  if (/PASS|READY|OK|ACTIVE|OPENED|SYNCED|COMPLETED|AVAILABLE|RUNNING/.test(s)) return 'good';
+  return 'neutral';
+}
+function v10112BuildDashboardState(source = 'dashboard-endpoint') {
+  const health = v953HealthTruthFromCurrentHealth(lastHealth || {}, source);
+  const entry = health.paperEntryActivation || health.zonePersistenceEntry || lastV948EntryEngineView || {};
+  const bridge = health.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView || {};
+  const feature = health.v1017FeatureMaterializer || lastV1017FeatureMaterializerView || {};
+  const fast = health.v1016HealthFastResponseGuard || lastHealth?.v1016HealthFastResponseGuard || {};
+  const tradeCounts = tradeExportCounts(lastTradeExport || {});
+  const openTrades = v10112OpenTradeRows();
+  const closedTrades = v10112ClosedTradeRows();
+  const native = health.nativeForwardPool || lastNativeForwardPoolView || {};
+  const latch = health.forwardLatch || lastForwardLatchView || v944BuildForwardLatchView();
+  const counts = health.candidateCountTruth || lastV949CandidateCountTruthView || {};
+  const qualityBuckets = health.v952CandidateQualityBuckets || lastV952QualityBucketsView || {};
+  const finalGate = health.finalHealthGate || lastV949FinalHealthGateView || {};
+  const universe = health.universeCompletion || lastV949UniverseCompletionView || {};
+  const proxy = health.proxyTruth || lastV949ProxyTruthView || {};
+  const chartTruth = lastChartTruthView || lastChartView || {};
+  const lifecycle = health.tradeLifecycleTruth || lastV949LifecycleTruthView || {};
+  const queueStatus = fast.status || feature.status || '';
+  const rejectedCounts = entry.rejectedReasonCounts || bridge.rejectedReasonCounts || health?.v954EntryConstructionAudit?.rejectedReasonCounts || {};
+  const topRejected = v10112TopRejected(rejectedCounts);
+  const maxEntriesPerTick = v10112DashNum(entry.maxEntriesPerTick ?? bridge.maxEntriesPerTick ?? process.env.ALPS_MAX_ENTRIES_PER_TICK ?? process.env.ALPS_V948_ENTRY_MAX_PER_TICK ?? V948_ENTRY_MAX_PER_TICK, 0);
+  const opened = Math.max(v10112DashNum(entry.opened), v10112DashNum(bridge.opened), tradeCounts.open, openTrades.length, v10112DashNum(health.openPositions));
+  const rejected = Math.max(v10112DashNum(entry.rejected), v10112DashNum(bridge.rejected), v10112DashNum(health.rejectedSignals));
+  const candidates = Math.max(v10112DashNum(health.candidates), v10112DashNum(health.officialCandidates), v10112DashNum(native.totalCandidates), v10112DashNum(latch.size), v10112DashNum(counts.nativePoolCandidates));
+  const results = Math.max(v10112DashNum(health.results), v10112DashNum(counts.rawStrategies), v10112DashNum(native.generatedStrategies));
+  const candles = Math.max(v10112DashNum(health.candlesLoaded), v10112DashNum(health?.runtimeTruth?.candlesLoaded), v10112DashNum(lastCanonicalMetrics?.candlesLoaded), v10112DashNum(chartTruth.candleCount), v10112DashNum(chartTruth.candles?.length));
+  const pairFrames = Math.max(v10112DashNum(health.dataPairFrames), v10112DashNum(health?.runtimeTruth?.pairFrames), v10112DashNum(lastCanonicalMetrics?.pairFrames));
+  const failedChecks = safeArray(finalGate.failedChecks);
+  const status = failedChecks.includes('DATA_OK') || failedChecks.includes('LIVE_EXECUTION_LOCKED') ? 'ATTENTION' : (opened > 0 ? 'PAPER_ACTIVE' : (candidates > 0 ? 'READY_FOR_PAPER_ENTRY' : 'BOOTSTRAPPING'));
+  const healthSummary = {
+    schema: 'alps.dashboardTruthConsole.view.v1',
+    version: FINAL_V930_VERSION,
+    generatedAt: new Date().toISOString(),
+    source,
+    status,
+    statusSeverity: v10112StatusSeverity(status),
+    patchLine: 'v10.1.12 dashboard aligns v10.1.9 paper ledger persistence, v10.1.10 queue/throttle tuning, and v10.1.11 live chart truth.',
+    paperOnly: true,
+    liveCapitalExecution: false
+  };
+  const metrics = {
+    candidates, results, candlesLoaded: candles, pairFrames,
+    openPositions: opened,
+    paperSignals: Math.max(v10112DashNum(health.paperSignals), opened),
+    closedTrades: Math.max(v10112DashNum(health.closedTrades), tradeCounts.closed, closedTrades.length),
+    rejectedSignals: rejected,
+    maxEntriesPerTick,
+    throttledValidZones: v10112DashNum(rejectedCounts.VALID_ZONE_THROTTLED_MAX_ENTRIES_PER_TICK),
+    nativePoolCandidates: v10112DashNum(native.totalCandidates),
+    latchedCandidates: v10112DashNum(latch.size),
+    experimentalForward: v10112DashNum(native.experimentalForward),
+    watchForward: v10112DashNum(native.watchForward),
+    fullAutonomyForward: v10112DashNum(native.fullAutonomyForward)
+  };
+  const modules = [
+    { key:'finalHealthGate', label:'Final Health Gate', status: finalGate.status || 'UNKNOWN', severity:v10112StatusSeverity(finalGate.status), detail: failedChecks.length ? failedChecks.join(', ') : 'No failed checks reported' },
+    { key:'featureMaterializer', label:'Feature Materializer', status: feature.status || 'UNKNOWN', severity:v10112StatusSeverity(feature.status), detail: `finishedAt=${feature.finishedAt || feature.completedAt || '—'}` },
+    { key:'healthFastResponseGuard', label:'Health Fast Response Guard', status: queueStatus || 'UNKNOWN', severity:v10112StatusSeverity(queueStatus), detail: `completedAt=${fast.completedAt || fast.finishedAt || feature.finishedAt || '—'}` },
+    { key:'paperEntryBridge', label:'Paper Entry Authority Bridge', status: opened > 0 ? 'OPENED_OR_SYNCED' : (rejected > 0 ? 'SCANNED_WITH_REJECTIONS' : 'WAITING_SCAN'), severity:v10112StatusSeverity(opened > 0 ? 'OPENED' : (rejected > 0 ? 'WARN' : 'WAITING')), detail: `opened=${opened} rejected=${rejected}` },
+    { key:'serverPaperLedger', label:'Server Paper Ledger', status: openTrades.length ? 'PERSISTENT_OPEN_TRADES' : 'WAITING_OPEN_TRADE', severity:v10112StatusSeverity(openTrades.length ? 'OK' : 'WAITING'), detail: `open=${openTrades.length} closed=${closedTrades.length}` },
+    { key:'chartTruth', label:'Live Chart Truth', status: chartTruth.ready ? 'READY' : 'WAITING', severity:v10112StatusSeverity(chartTruth.ready ? 'READY' : 'WAITING'), detail: `${chartTruth.pair || chartTruth.selectedPair || 'auto'} ${chartTruth.timeframe || chartTruth.selectedTimeframe || ''} candles=${chartTruth.candleCount || safeArray(chartTruth.candles).length || 0}` },
+    { key:'universe', label:'Universe Completion', status: universe.status || 'UNKNOWN', severity:v10112StatusSeverity(universe.status), detail: `loaded=${safeArray(universe.loadedPairs).length} missing=${safeArray(universe.missingSymbols).join(', ') || 'none'}` },
+    { key:'proxyTruth', label:'Proxy Truth', status: proxy.status || 'UNKNOWN', severity:v10112StatusSeverity(proxy.status), detail: proxy.likelyIssue || 'Proxy/data truth routed from health/runtime snapshots' },
+    { key:'lifecycle', label:'Trade Lifecycle', status: (lifecycle.openTrades || openTrades.length) ? 'OPEN_LIFECYCLE_VISIBLE' : 'WAITING_OPEN_LIFECYCLE', severity:v10112StatusSeverity((lifecycle.openTrades || openTrades.length) ? 'OK' : 'WAITING'), detail: `open=${lifecycle.openTrades || openTrades.length || 0} closed=${lifecycle.closedTrades || closedTrades.length || 0}` }
+  ];
+  return {
+    schema: 'alps.runner.dashboard.v1',
+    version: FINAL_V930_VERSION,
+    generatedAt: healthSummary.generatedAt,
+    dashboard: healthSummary,
+    metrics,
+    modules,
+    topRejected,
+    openTrades: openTrades.slice(0, 50).map(t => ({
+      tradeId: t.tradeId || t.id || '', pair: t.pair || t.symbol || '', timeframe: t.timeframe || t.tf || '', direction: t.direction || t.side || '', strategy: t.strategy || t.stratName || t.setup || '', entry: t.entry ?? t.entryPrice ?? null, current: t.current ?? t.currentPrice ?? t.lastPrice ?? null, stop: t.stop ?? t.stopPrice ?? null, target: t.target ?? t.targetPrice ?? null, pnlBps: t.pnlBps ?? t.unrealizedPnlBps ?? null, openedAt: v10112DashIso(t.openedAt || t.openTime || t.createdAt || t.timestamp), source: t.source || t.__alpsSource || t.paperSource || t.__dashSource || ''
+    })),
+    closedTrades: closedTrades.slice(0, 20).map(t => ({ tradeId:t.tradeId || t.id || '', pair:t.pair || t.symbol || '', timeframe:t.timeframe || t.tf || '', direction:t.direction || t.side || '', entry:t.entry ?? t.entryPrice ?? null, exit:t.exit ?? t.exitPrice ?? null, pnlBps:t.pnlBps ?? null, result:t.result || '', closedAt:v10112DashIso(t.closedAt || t.closeTime || t.exitTime), source:t.source || t.__alpsSource || t.__dashSource || '' })),
+    candidateBuckets: { counts: qualityBuckets.counts || {}, samples: qualityBuckets.samples || {} },
+    entryEngine: { scanned:v10112DashNum(entry.scanned || bridge.scanned), opened:v10112DashNum(entry.opened || bridge.opened), rejected:v10112DashNum(entry.rejected || bridge.rejected), maxEntriesPerTick, rejectedReasonCounts: rejectedCounts, status: entry.status || bridge.status || '' },
+    healthQueue: { fastResponseGuard: fast, featureMaterializer: feature, paperEntryRescan: health.v1016HealthPaperEntryRescan || {}, healthMarketDataBootstrap: health.v1015HealthMarketDataBootstrap || {} },
+    chart: { ready: !!chartTruth.ready, pair: chartTruth.pair || chartTruth.selectedPair || '', timeframe: chartTruth.timeframe || chartTruth.selectedTimeframe || '', candleCount: chartTruth.candleCount || safeArray(chartTruth.candles).length || 0, source: chartTruth.source || '', url:'/runner/chart', endpoint:'/runner/chart-truth.json' },
+    links: { dashboard:'/runner/dashboard', health:'/runner/health', chart:'/runner/chart', chartTruth:'/runner/chart-truth.json', trades:'/runner/trades.json', report:'/runner/report.md', nativeForwardPool:'/runner/native-forward-pool.json' },
+    rawRefs: { finalHealthGate: finalGate, candidateCountTruth: counts, v953HealthTruthSync: health.v953HealthTruthSync || null, v10StateAuthority: v1000BuildView() }
+  };
+}
+function v10112DashboardHtml() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>ALPS Dashboard</title><style>
+:root{--bg:#05070a;--panel:#0c1118;--panel2:#101820;--line:#24313f;--text:#f3f7fb;--muted:#8fa2b4;--good:#b9f6ca;--warn:#ffe0a3;--bad:#ffb4ab;--accent:#dfe8f2}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0%,#162235 0,#05070a 42%);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}main{width:min(980px,100%);margin:0 auto;padding:16px 12px 34px}.hero{border:1px solid var(--line);border-radius:24px;padding:18px;background:linear-gradient(145deg,rgba(255,255,255,.08),rgba(255,255,255,.02));box-shadow:0 16px 60px rgba(0,0,0,.28)}.brand{letter-spacing:.18em;color:var(--muted);font-size:11px;font-weight:800}.title{font-size:28px;font-weight:900;margin-top:4px}.subtitle{color:var(--muted);margin-top:4px}.status{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap}.pill{border:1px solid var(--line);background:rgba(255,255,255,.04);border-radius:999px;padding:7px 10px;font-weight:800}.good{color:var(--good);border-color:rgba(185,246,202,.45)}.warn{color:var(--warn);border-color:rgba(255,224,163,.45)}.bad{color:var(--bad);border-color:rgba(255,180,171,.45)}.neutral{color:var(--accent)}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}.btn{display:block;text-align:center;text-decoration:none;color:#061018;background:#f3f7fb;border-radius:14px;padding:12px 10px;font-weight:900}.btn.secondary{background:#121b25;color:var(--text);border:1px solid var(--line)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}.card{border:1px solid var(--line);background:rgba(12,17,24,.82);border-radius:18px;padding:13px;min-width:0}.metric .k{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.metric .v{font-size:26px;font-weight:900;margin-top:4px;overflow-wrap:anywhere}.sectionTitle{margin:20px 4px 9px;color:#dfe8f2;font-weight:900;font-size:15px}.module{display:grid;gap:6px}.moduleTop{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.moduleName{font-weight:900}.moduleStatus{font-size:11px;border-radius:999px;padding:4px 7px;border:1px solid var(--line);max-width:48%;overflow-wrap:anywhere;text-align:right}.detail{color:var(--muted);font-size:12px;overflow-wrap:anywhere}.list{display:grid;gap:10px}.trade{border:1px solid var(--line);border-radius:16px;padding:12px;background:#0b1118}.tradeHead{display:flex;justify-content:space-between;gap:8px;font-weight:900}.row{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;color:var(--muted);font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.reasons{display:grid;gap:8px}.reason{display:grid;grid-template-columns:1fr auto;gap:8px;border:1px solid var(--line);border-radius:14px;padding:10px;background:#0a1017}.bar{height:5px;background:#1d2a36;border-radius:999px;margin-top:7px;overflow:hidden}.bar span{display:block;height:100%;background:#e6edf3;border-radius:999px}.empty{color:var(--muted);padding:12px;border:1px dashed var(--line);border-radius:16px}.footer{color:var(--muted);font-size:12px;margin-top:20px;text-align:center}@media (min-width:760px){main{padding:22px}.grid{grid-template-columns:repeat(4,minmax(0,1fr))}.actions{grid-template-columns:repeat(4,1fr)}.modules{grid-template-columns:repeat(3,minmax(0,1fr))}.trades{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (max-width:390px){.title{font-size:24px}.grid{gap:8px}.card{padding:11px}.metric .v{font-size:23px}.actions{grid-template-columns:1fr}}
+</style></head><body><main><section class="hero"><div class="brand">ALPS SERVER RUNNER</div><div class="title">Command Dashboard</div><div class="subtitle" id="subtitle">Loading dashboard truth…</div><div class="status" id="status"></div><div class="actions"><a class="btn" href="/runner/chart">Live Chart</a><a class="btn secondary" href="/runner/report.md">Report</a><a class="btn secondary" href="/runner/trades.json">Trades JSON</a><a class="btn secondary" href="/runner/health">Health JSON</a></div></section><div class="sectionTitle">Core Metrics</div><section class="grid" id="metrics"></section><div class="sectionTitle">Health Modules</div><section class="grid modules" id="modules"></section><div class="sectionTitle">Open Paper Trades</div><section class="list trades" id="openTrades"></section><div class="sectionTitle">Rejected Reason Audit</div><section class="reasons" id="reasons"></section><div class="sectionTitle">Candidate Quality Buckets</div><section class="grid" id="buckets"></section><div class="footer" id="footer"></div></main><script>
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function sevClass(v){v=String(v||'').toLowerCase();return v==='good'||v==='bad'||v==='warn'||v==='neutral'?v:(/fail|bad|error|blocked|denied/.test(v)?'bad':/warn|wait|queue|skip|partial|unknown|throttled/.test(v)?'warn':/pass|ok|ready|active|open|sync|complete|available/.test(v)?'good':'neutral')}
+function metric(label,value,sub){return '<div class="card metric"><div class="k">'+esc(label)+'</div><div class="v">'+esc(value==null?'—':value)+'</div><div class="detail">'+esc(sub||'')+'</div></div>'}
+function moduleCard(m){return '<div class="card module"><div class="moduleTop"><div class="moduleName">'+esc(m.label)+'</div><div class="moduleStatus '+sevClass(m.severity||m.status)+'">'+esc(m.status||'UNKNOWN')+'</div></div><div class="detail">'+esc(m.detail||'')+'</div></div>'}
+function tradeCard(t){return '<div class="trade"><div class="tradeHead"><div>'+esc(t.pair)+' '+esc(t.timeframe)+'</div><div class="'+(String(t.direction).toUpperCase()==='SHORT'?'warn':'good')+'">'+esc(t.direction)+'</div></div><div class="detail mono">'+esc(t.tradeId)+'</div><div class="row"><div>Entry: '+esc(t.entry)+'</div><div>Current: '+esc(t.current)+'</div><div>Stop: '+esc(t.stop)+'</div><div>Target: '+esc(t.target)+'</div><div>PnL bps: '+esc(t.pnlBps)+'</div><div>Source: '+esc(t.source)+'</div></div><div class="detail" style="margin-top:8px">'+esc(t.strategy||'')+'</div></div>'}
+async function load(){const r=await fetch('/runner/dashboard.json',{cache:'no-store'});const s=await r.json();document.getElementById('subtitle').textContent=s.dashboard.patchLine+' · '+s.generatedAt;document.getElementById('status').innerHTML='<span class="pill '+sevClass(s.dashboard.statusSeverity)+'">'+esc(s.dashboard.status)+'</span><span class="pill good">Paper only</span><span class="pill bad">Live capital disabled</span><span class="pill neutral">'+esc(s.version)+'</span>';const m=s.metrics||{};document.getElementById('metrics').innerHTML=[metric('Candidates',m.candidates,'native/latch truth'),metric('Open Paper',m.openPositions,'server ledger synced'),metric('Closed Trades',m.closedTrades,'trade export'),metric('Rejected',m.rejectedSignals,'paper entry audit'),metric('Candles',m.candlesLoaded,'closed-candle truth'),metric('Pair Frames',m.pairFrames,'data coverage'),metric('Max Entries/Tick',m.maxEntriesPerTick,'throttle tune'),metric('Throttled Zones',m.throttledValidZones,'should fall after v10.1.10')].join('');document.getElementById('modules').innerHTML=(s.modules||[]).map(moduleCard).join('')||'<div class="empty">No module state yet.</div>';document.getElementById('openTrades').innerHTML=(s.openTrades||[]).map(tradeCard).join('')||'<div class="empty">No open paper trades exported yet.</div>';const max=Math.max(1,...(s.topRejected||[]).map(x=>Number(x.count)||0));document.getElementById('reasons').innerHTML=(s.topRejected||[]).map(x=>'<div class="reason"><div><b>'+esc(x.reason)+'</b><div class="bar"><span style="width:'+Math.max(2,Math.round((Number(x.count)||0)/max*100))+'%"></span></div></div><b>'+esc(x.count)+'</b></div>').join('')||'<div class="empty">No rejected reason counts yet.</div>';const counts=(s.candidateBuckets&&s.candidateBuckets.counts)||{};document.getElementById('buckets').innerHTML=Object.keys(counts).length?Object.keys(counts).map(k=>metric(k,counts[k],'quality bucket')).join(''):'<div class="empty">No candidate buckets yet.</div>';document.getElementById('footer').textContent='Updated '+new Date().toLocaleString()+' · Dashboard endpoint: /runner/dashboard.json'}
+load().catch(e=>{document.getElementById('subtitle').innerHTML='<span class="bad">Dashboard failed: '+esc(e.message||e)+'</span>'});setInterval(load,30000);
+</script></body></html>`;
 }
 
 
@@ -5683,6 +6042,9 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
     const existingRows = Math.max(out.before.candidates, out.before.nativePoolRows, out.before.latchRows, out.before.authorityRows);
     if (existingRows > 0) {
       out.status = 'SKIPPED_ROWS_ALREADY_AVAILABLE';
+      out.finishedAt = new Date().toISOString();
+      out.completedAt = out.finishedAt;
+      out.skipReason = 'ROWS_ALREADY_AVAILABLE_IN_HEALTH_NATIVE_LATCH_OR_STATE_AUTHORITY';
       out.after = { candidates: existingRows, nativePoolRows: out.before.nativePoolRows, latchRows: out.before.latchRows, authorityRows: out.before.authorityRows };
       healthTruth.v1017FeatureMaterializer = out;
       lastV1017FeatureMaterializerView = out;
@@ -6342,7 +6704,68 @@ async function v1016WithTimeout(promise, ms, label) {
     if (t) clearTimeout(t);
   }
 }
+
+const V10110_HEALTH_RECOVERY_COOLDOWN_MS = Number(process.env.ALPS_HEALTH_RECOVERY_COOLDOWN_MS || 120000);
+function v10110HealthRowsVisible(health = {}) {
+  return Math.max(
+    v952Num(health.candidates),
+    v952Num(health.officialCandidates),
+    v952Num(health.results),
+    v952Num(health?.nativeForwardPool?.totalCandidates),
+    v952Num(health?.fullAutonomyNativeForwardPool?.totalCandidates),
+    v952Num(health?.forwardLatch?.size),
+    v952Num(lastNativeForwardPoolView?.totalCandidates),
+    v952Num(lastForwardLatchView?.size),
+    safeArray(v1000ActiveRows()).length
+  );
+}
+function v10110ShouldSkipHealthBackgroundRecovery(seedHealthTruth = {}) {
+  const rowsVisible = v10110HealthRowsVisible(seedHealthTruth);
+  if (rowsVisible <= 0) return null;
+  const lastFinished = Date.parse(v1016HealthBackgroundRecoveryState?.finishedAt || lastV1017FeatureMaterializerView?.finishedAt || lastV1017cPaperEntryAuthorityBridgeView?.finishedAt || 0) || 0;
+  const ageMs = lastFinished ? Date.now() - lastFinished : Number.MAX_SAFE_INTEGER;
+  const materializerStatus = textValue(lastV1017FeatureMaterializerView?.status || seedHealthTruth?.v1017FeatureMaterializer?.status || '');
+  const entryStatus = textValue(lastV1017cPaperEntryAuthorityBridgeView?.status || seedHealthTruth?.v1017cPaperEntryAuthorityBridge?.status || '');
+  const completedEnough = /SKIPPED_ROWS_ALREADY_AVAILABLE|COMMITTED|MATERIALIZED|COMPLETED|OPENED|NO_ENTRY_OPENED/.test(materializerStatus + ' ' + entryStatus);
+  if (completedEnough && ageMs < V10110_HEALTH_RECOVERY_COOLDOWN_MS) {
+    const finishedAt = new Date().toISOString();
+    return {
+      status: 'SKIPPED_ROWS_ALREADY_AVAILABLE_FAST_PATH',
+      rowsVisible,
+      finishedAt,
+      completedAt: finishedAt,
+      lastFinishedAt: lastFinished ? new Date(lastFinished).toISOString() : null,
+      ageMs,
+      cooldownMs: V10110_HEALTH_RECOVERY_COOLDOWN_MS,
+      materializerStatus,
+      entryStatus,
+      reason: 'Rows/candidates are already visible and the last background recovery completed recently; do not show a false QUEUED state on every health call.'
+    };
+  }
+  return null;
+}
 function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health-endpoint-background-recovery') {
+  const fastPathSkip = v10110ShouldSkipHealthBackgroundRecovery(seedHealthTruth || {});
+  if (fastPathSkip) {
+    v1016HealthBackgroundRecoveryState = { ...(v1016HealthBackgroundRecoveryState || {}), ...fastPathSkip };
+    lastHealth = {
+      ...(lastHealth || {}),
+      effectivePatchVersion: FINAL_V930_VERSION,
+      v1017FeatureMaterializer: lastV1017FeatureMaterializerView || seedHealthTruth?.v1017FeatureMaterializer || null,
+      v1016HealthFastResponseGuard: {
+        schema: 'alps.v1016HealthFastResponseGuard.view.v1',
+        version: FINAL_V930_VERSION,
+        installed: true,
+        status: 'FAST_RESPONSE_BACKGROUND_RECOVERY_SKIPPED_ROWS_ALREADY_AVAILABLE',
+        reason,
+        state: v1016HealthBackgroundRecoveryState,
+        completedAt: fastPathSkip.finishedAt,
+        paperOnly: true,
+        liveCapitalExecution: false
+      }
+    };
+    return { queued: false, reason: 'ROWS_ALREADY_AVAILABLE_FAST_PATH', state: v1016HealthBackgroundRecoveryState };
+  }
   if (v1016HealthEndpointRecoveryBusy || shuttingDown) {
     return { queued: false, reason: v1016HealthEndpointRecoveryBusy ? 'ALREADY_RUNNING' : 'SHUTTING_DOWN', state: v1016HealthBackgroundRecoveryState };
   }
@@ -6415,11 +6838,22 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      if (url.pathname === '/runner/dashboard' || url.pathname === '/runner/command-dashboard' || url.pathname === '/runner/mobile') {
+        return send(res, 200, v10112DashboardHtml(), 'text/html; charset=utf-8');
+      }
+      if (url.pathname === '/runner/dashboard.json' || url.pathname === '/runner/command-dashboard.json') {
+        await loadForwardLatchState();
+        await loadTradeVaultState();
+        return send(res, 200, v10112BuildDashboardState('dashboard-json-endpoint'));
+      }
+      if (url.pathname === '/runner/chart' || url.pathname === '/runner/live-chart') {
+        return send(res, 200, v1011BuildChartHtml(), 'text/html; charset=utf-8');
+      }
       if (url.pathname === '/runner/chart-candles.json' || url.pathname === '/runner/chart-truth.json') {
-        const pair = url.searchParams.get('pair') || url.searchParams.get('symbol') || 'BTCUSDT';
+        const pair = url.searchParams.get('pair') || url.searchParams.get('symbol') || 'auto';
         const timeframe = url.searchParams.get('timeframe') || url.searchParams.get('interval') || '1h';
-        const limit = Number(url.searchParams.get('limit') || 120);
-        return send(res, 200, await v1010FetchChartTruth(pair, timeframe, limit));
+        const limit = Number(url.searchParams.get('limit') || 220);
+        return send(res, 200, await v1011FetchChartTruth(pair, timeframe, limit));
       }
       if (url.pathname === '/runner/health') {
         await loadForwardLatchState();
@@ -6431,7 +6865,7 @@ async function createServer() {
         await v1016WithTimeout(maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }), 2500, 'HEALTH_WATCHDOG_TIMEOUT').catch(e => log('Runner watchdog health action skipped/timeout:', e.message));
         let healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
         const healthBackgroundQueue = v1016QueueHealthEndpointRecovery(healthTruth, 'health-endpoint-fast-response-background-recovery');
-        healthTruth.v1016HealthFastResponseGuard = { schema:'alps.v1016HealthFastResponseGuard.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_QUEUED' : 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_' + healthBackgroundQueue.reason, queue: healthBackgroundQueue, rule:'/runner/health does not block on Chromium, Market Data Vision, or Paper Entry rescan. Heavy recovery runs in background and updates next health response.', paperOnly:true, liveCapitalExecution:false };
+        healthTruth.v1016HealthFastResponseGuard = { schema:'alps.v1016HealthFastResponseGuard.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_QUEUED' : 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_' + healthBackgroundQueue.reason, queue: healthBackgroundQueue, finishedAt: healthBackgroundQueue?.state?.finishedAt || null, completedAt: healthBackgroundQueue?.state?.completedAt || healthBackgroundQueue?.state?.finishedAt || null, rule:'/runner/health does not block on Chromium, Market Data Vision, or Paper Entry rescan. Heavy recovery runs in background only when needed; when rows are already available it returns a completed fast-path state instead of a false perpetual QUEUED status.', paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1017FeatureMaterializer) healthTruth.v1017FeatureMaterializer = lastV1017FeatureMaterializerView || { schema:'alps.v1017FeatureMaterializer.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), queuedAt: healthBackgroundQueue?.state?.queuedAt || null, startedAt: healthBackgroundQueue?.state?.startedAt || null, finishedAt: healthBackgroundQueue?.state?.finishedAt || null, attempts:[], sourcesUsed:[], paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1015HealthMarketDataBootstrap) healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1016HealthPaperEntryRescan) healthTruth.v1016HealthPaperEntryRescan = { schema:'alps.v1016HealthPaperEntryRescan.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
@@ -6443,7 +6877,7 @@ async function createServer() {
         if (v1001HealthTradeCounts.closed > 0) healthTruth.closedTrades = Math.max(n(healthTruth.closedTrades, 0), v1001HealthTradeCounts.closed);
         healthTruth.v1001TradeLedgerExportSync = { schema:'alps.v1001TradeLedgerExportSync.view.v1', version: FINAL_V930_VERSION, installed:true, openTradesExported:v1001HealthTradeCounts.open, closedTradesExported:v1001HealthTradeCounts.closed, status: v1001HealthTradeCounts.total > 0 ? 'HEALTH_COUNTERS_SYNCED_FROM_TRADE_EXPORT' : 'WAITING_FOR_REAL_TRADE_LEDGER_ROWS', paperOnly:true, liveCapitalExecution:false };
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, serverPaperLedger: { openTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && t.status === 'OPEN').length, closedTrades: safeArray(lastTradeExport?.closedTrades).length } });
+        return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartTruthView || lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, serverPaperLedger: { openTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && t.status === 'OPEN').length, closedTrades: safeArray(lastTradeExport?.closedTrades).length } });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
@@ -6556,7 +6990,7 @@ async function createServer() {
       if (url.pathname === '/runner/v930.json') {
         if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
         await collectReport().catch(() => null);
-        return send(res, 200, { version: FINAL_V930_VERSION, fullAutonomy: lastFullAutonomyView, nativeForwardPool: lastNativeForwardPoolView, engineHook: lastEngineHookView, circuitBreaker: lastCircuitBreakerView, counterfactual: lastCounterfactualView, chart: lastChartView, dataSource: 'LIVE SNAPSHOT' });
+        return send(res, 200, { version: FINAL_V930_VERSION, fullAutonomy: lastFullAutonomyView, nativeForwardPool: lastNativeForwardPoolView, engineHook: lastEngineHookView, circuitBreaker: lastCircuitBreakerView, counterfactual: lastCounterfactualView, chart: lastChartView, chartTruth: lastChartTruthView, chartUrl: '/runner/chart', dataSource: 'LIVE SNAPSHOT' });
       }
       if (url.pathname.startsWith('/runner/')) return send(res, 404, { error: 'Unknown runner endpoint' });
       return serveStatic(req, res, url);
