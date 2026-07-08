@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.19-currenthealth-report-authority';
+const FINAL_V930_VERSION = 'v10.1.20-report-export-authority-guard';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -733,11 +733,18 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const symbolStatusRows = safeArray(sym.statusBySymbol);
   return {
     generatedAt: new Date().toISOString(),
-    schema: 'alps.chatgptCompactReport.v10116',
+    schema: 'alps.chatgptCompactReport.v10120',
     version: FINAL_V930_VERSION,
-    reportQuality: 'FULL_COMPACT_OPERATIONAL_TRUTH',
+    reportQuality: 'FULL_CURRENTHEALTH_AUTHORITY_EXPORT',
     warningIfOnlySevenColumns: 'If this CSV has only status,forwardStatus,engineReady,fwRunning,paperSignals,openPositions,closedTrades then the old dashboard/export was used, not this endpoint.',
     sourceOfTruth: op.sourceOfTruth || 'currentHealth',
+    authorityStatus: v10119CurrentHealthTruthStatus(truthSeed),
+    currentHealthPresent: v10119CurrentHealthTruthStatus(truthSeed) === 'CURRENT_HEALTH_TRUTH_READY',
+    reportExportGuard: 'LEGACY_SEVEN_COLUMN_BLOCKED',
+    noOldSnapshotMixing: true,
+    oldSnapshotOverwriteBlocked: true,
+    dashboardLocalGuessBlocked: true,
+    reportInputRole: 'AUDIT_ONLY',
     status: base.status || op.status || '',
     forwardStatus: base.forwardStatus || mat.status || op.status || '',
     engineReady: v10116First(base.engineReady, op.engineReady),
@@ -792,7 +799,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
 function v10116CompactReport(seed = {}, chart = null, source = 'chatgpt-compact') {
   const row = v10116CompactRow(seed, chart, source);
   return {
-    schema: 'alps.chatgptCompactReport.v10116',
+    schema: 'alps.chatgptCompactReport.v10120',
     version: FINAL_V930_VERSION,
     generatedAt: row.generatedAt,
     sourceOfTruth: row.sourceOfTruth,
@@ -804,7 +811,7 @@ function v10116CompactReport(seed = {}, chart = null, source = 'chatgpt-compact'
     layerLog: lastV10115LayerLogView || null,
     tradeExport: lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }),
     chartTruth: chart || lastChartView || null,
-    note: 'Use this JSON/CSV for ChatGPT diagnostics. Legacy seven-column system CSV is intentionally superseded.'
+    note: 'Use this JSON/CSV for ChatGPT diagnostics. Legacy seven-column system CSV is blocked and intentionally superseded by currentHealth authority export.'
   };
 }
 function v10116CompactCsv(report) {
@@ -890,7 +897,7 @@ function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
     'zeroFocusedCandidatesLegacyDiagnosis', 'oldSnapshotSupersededByCurrentHealth', 'reportSnapshotOverwriteBlocked', 'dashboardLocalGuessBlocked'
   ];
   return {
-    schema: 'alps.reportAuthority.view.v10119',
+    schema: 'alps.reportAuthority.view.v10120',
     version: FINAL_V930_VERSION,
     installed: true,
     generatedAt: new Date().toISOString(),
@@ -7208,7 +7215,7 @@ async function createServer() {
         const sel = v10115PreferredChartSelection(lastHealth || {});
         if (!lastChartView || !safeArray(lastChartView.candles).length) await v1016WithTimeout(v1010FetchChartTruth(sel.pair, sel.timeframe, 120), 3500, 'V10115_DASHBOARD_CHART_TRUTH_TIMEOUT').catch(() => null);
         const truth = v10115AttachOperationalTruth({ ...(lastHealth || {}), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, 'dashboard-json-currentHealth-final');
-        return send(res, 200, { schema:'alps.runner.dashboardTruth.v10119', version:FINAL_V930_VERSION, generatedAt:new Date().toISOString(), reportAuthority:v10118ReportAuthorityView(truth, 'dashboard-json'), currentHealth:truth, operationalTruth:truth.v10115OperationalTruth, compactReport:v10116CompactReport(truth, lastChartView || null, 'dashboard-json'), chatgptCompact:v10116CompactRow(truth, lastChartView || null, 'dashboard-json-row'), chartTruth:lastChartView || null, tradeExport:lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, rejectedReasonAudit:lastV952RejectedAuditView, deferredEntryQueue:lastV10115DeferredEntryQueueView, featureGateDiagnostics:lastV10115FeatureGateDiagnosticsView, symbolStatus:lastV10115SymbolStatusView, layerLog:lastV10115LayerLogView });
+        return send(res, 200, { schema:'alps.runner.dashboardTruth.v10120', version:FINAL_V930_VERSION, generatedAt:new Date().toISOString(), reportAuthority:v10118ReportAuthorityView(truth, 'dashboard-json'), currentHealth:truth, operationalTruth:truth.v10115OperationalTruth, compactReport:v10116CompactReport(truth, lastChartView || null, 'dashboard-json'), chatgptCompact:v10116CompactRow(truth, lastChartView || null, 'dashboard-json-row'), chartTruth:lastChartView || null, tradeExport:lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, rejectedReasonAudit:lastV952RejectedAuditView, deferredEntryQueue:lastV10115DeferredEntryQueueView, featureGateDiagnostics:lastV10115FeatureGateDiagnosticsView, symbolStatus:lastV10115SymbolStatusView, layerLog:lastV10115LayerLogView });
       }
       if (url.pathname === '/runner/trades.json') {
         if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
