@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.20-report-export-authority-guard';
+const FINAL_V930_VERSION = 'v10.1.21-legacy-export-kill-switch';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -733,7 +733,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const symbolStatusRows = safeArray(sym.statusBySymbol);
   return {
     generatedAt: new Date().toISOString(),
-    schema: 'alps.chatgptCompactReport.v10120',
+    schema: 'alps.chatgptCompactReport.v10121',
     version: FINAL_V930_VERSION,
     reportQuality: 'FULL_CURRENTHEALTH_AUTHORITY_EXPORT',
     warningIfOnlySevenColumns: 'If this CSV has only status,forwardStatus,engineReady,fwRunning,paperSignals,openPositions,closedTrades then the old dashboard/export was used, not this endpoint.',
@@ -799,7 +799,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
 function v10116CompactReport(seed = {}, chart = null, source = 'chatgpt-compact') {
   const row = v10116CompactRow(seed, chart, source);
   return {
-    schema: 'alps.chatgptCompactReport.v10120',
+    schema: 'alps.chatgptCompactReport.v10121',
     version: FINAL_V930_VERSION,
     generatedAt: row.generatedAt,
     sourceOfTruth: row.sourceOfTruth,
@@ -816,7 +816,15 @@ function v10116CompactReport(seed = {}, chart = null, source = 'chatgpt-compact'
 }
 function v10116CompactCsv(report) {
   const row = report?.row || report || {};
-  const keys = Object.keys(row);
+  const legacyKeys = ['status','forwardStatus','engineReady','fwRunning','paperSignals','openPositions','closedTrades'];
+  let keys = Object.keys(row);
+  const isLegacySeven = keys.length === legacyKeys.length && legacyKeys.every((k, i) => keys[i] === k);
+  if (!keys.length || isLegacySeven) {
+    const authorityRow = v10116CompactRow(lastHealth || {}, lastChartView || null, 'v10121-legacy-csv-kill-switch');
+    authorityRow.reportExportGuard = 'LEGACY_SEVEN_COLUMN_BLOCKED_AT_SERVER';
+    keys = Object.keys(authorityRow);
+    return keys.map(v10116CsvEscape).join(',') + '\n' + keys.map(k => v10116CsvEscape(authorityRow[k])).join(',') + '\n';
+  }
   return keys.map(v10116CsvEscape).join(',') + '\n' + keys.map(k => v10116CsvEscape(row[k])).join(',') + '\n';
 }
 
@@ -897,7 +905,7 @@ function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
     'zeroFocusedCandidatesLegacyDiagnosis', 'oldSnapshotSupersededByCurrentHealth', 'reportSnapshotOverwriteBlocked', 'dashboardLocalGuessBlocked'
   ];
   return {
-    schema: 'alps.reportAuthority.view.v10120',
+    schema: 'alps.reportAuthority.view.v10121',
     version: FINAL_V930_VERSION,
     installed: true,
     generatedAt: new Date().toISOString(),
@@ -7138,7 +7146,7 @@ async function createServer() {
         const md = await v10118BuildCompactMarkdownForEndpoint(url, url.pathname.slice(1).replace(/\//g, '-'));
         return send(res, 200, md, 'text/markdown; charset=utf-8');
       }
-      if (['/runner/chatgpt-report.csv','/runner/chatgpt-compact.csv','/runner/system-report.csv','/runner/alps-system-report.csv','/runner/alps_system_report.csv','/runner/report.csv'].includes(url.pathname)) {
+      if (['/runner/chatgpt-report.csv','/runner/chatgpt-compact.csv','/runner/system-report.csv','/runner/alps-system-report.csv','/runner/alps_system_report.csv','/runner/report.csv','/runner/report-authority.csv','/runner/latest-report-authority.csv'].includes(url.pathname)) {
         const compact = await v10116BuildCompactReportForEndpoint(url, url.pathname.slice(1).replace(/\//g, '-'));
         const csv = v10116CompactCsv(compact);
         return send(res, 200, csv, 'text/csv; charset=utf-8');
@@ -7215,7 +7223,7 @@ async function createServer() {
         const sel = v10115PreferredChartSelection(lastHealth || {});
         if (!lastChartView || !safeArray(lastChartView.candles).length) await v1016WithTimeout(v1010FetchChartTruth(sel.pair, sel.timeframe, 120), 3500, 'V10115_DASHBOARD_CHART_TRUTH_TIMEOUT').catch(() => null);
         const truth = v10115AttachOperationalTruth({ ...(lastHealth || {}), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, 'dashboard-json-currentHealth-final');
-        return send(res, 200, { schema:'alps.runner.dashboardTruth.v10120', version:FINAL_V930_VERSION, generatedAt:new Date().toISOString(), reportAuthority:v10118ReportAuthorityView(truth, 'dashboard-json'), currentHealth:truth, operationalTruth:truth.v10115OperationalTruth, compactReport:v10116CompactReport(truth, lastChartView || null, 'dashboard-json'), chatgptCompact:v10116CompactRow(truth, lastChartView || null, 'dashboard-json-row'), chartTruth:lastChartView || null, tradeExport:lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, rejectedReasonAudit:lastV952RejectedAuditView, deferredEntryQueue:lastV10115DeferredEntryQueueView, featureGateDiagnostics:lastV10115FeatureGateDiagnosticsView, symbolStatus:lastV10115SymbolStatusView, layerLog:lastV10115LayerLogView });
+        return send(res, 200, { schema:'alps.runner.dashboardTruth.v10121', version:FINAL_V930_VERSION, generatedAt:new Date().toISOString(), reportAuthority:v10118ReportAuthorityView(truth, 'dashboard-json'), currentHealth:truth, operationalTruth:truth.v10115OperationalTruth, compactReport:v10116CompactReport(truth, lastChartView || null, 'dashboard-json'), chatgptCompact:v10116CompactRow(truth, lastChartView || null, 'dashboard-json-row'), chartTruth:lastChartView || null, tradeExport:lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, rejectedReasonAudit:lastV952RejectedAuditView, deferredEntryQueue:lastV10115DeferredEntryQueueView, featureGateDiagnostics:lastV10115FeatureGateDiagnosticsView, symbolStatus:lastV10115SymbolStatusView, layerLog:lastV10115LayerLogView });
       }
       if (url.pathname === '/runner/trades.json') {
         if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
