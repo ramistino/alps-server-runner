@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.12 Integrated System: Dashboard Truth Console
+ * ALPS Server Runner — v10.1.14 Direction + Chart Truth Report Sync
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v10.1.12-dashboard-truth-console';
+const RECOVERY_PATCH_VERSION = 'v10.1.14-direction-chart-truth-sync';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v10.1.12-dashboard-truth-console';
+const COGNITION_PATCH_VERSION = 'v10.1.14-direction-chart-truth-sync';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v10.1.12-dashboard-truth-console';
+const AUTONOMY_PATCH_VERSION = 'v10.1.14-direction-chart-truth-sync';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.12-dashboard-truth-console';
+const FINAL_V930_VERSION = 'v10.1.14-direction-chart-truth-sync';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -471,6 +471,14 @@ function v1019MergeOpenTradeRows(...groups) {
 function safeArray(value) { return Array.isArray(value) ? value : []; }
 function textValue(value) { return String(value == null ? '' : value); }
 function boolValue(value) { return !!value; }
+function normalizeDirection(raw = '') {
+  const d = String(raw == null ? '' : raw).toUpperCase().trim();
+  if (d === 'BUY' || d === 'LONG' || d === 'BULL' || d === 'BULLISH') return 'LONG';
+  if (d === 'SELL' || d === 'SHORT' || d === 'BEAR' || d === 'BEARISH') return 'SHORT';
+  if (/\bLONG\b|\bBUY\b|BULL/i.test(d)) return 'LONG';
+  if (/\bSHORT\b|\bSELL\b|BEAR/i.test(d)) return 'SHORT';
+  return d;
+}
 function uniqueKeyFromCandidate(c = {}) {
   return [c.sym || c.pair || c.baseSymbol || '', c.timeframe || c.tf || '', c.strategy || c.stratName || c.name || '', c.exit || c.exitName || ''].map(textValue).join('||').toUpperCase();
 }
@@ -3278,7 +3286,7 @@ function buildV930Markdown(report = {}) {
   const eh = report.engineHook || lastEngineHookView || {};
   const cb = report.circuitBreaker || lastCircuitBreakerView || {};
   const cf = report.counterfactual || lastCounterfactualView || {};
-  const ch = report.chart || lastChartView || {};
+  const ch = report.chartTruth || report.chart || lastChartTruthView || lastChartView || {};
   const line = (k, v) => `- ${k}: ${v == null || v === '' ? '—' : v}`;
   let md = `## ALPS v10.1.1 Integrated System\n`;
   md += line('Version', FINAL_V930_VERSION) + '\n';
@@ -3315,9 +3323,9 @@ function buildV930Markdown(report = {}) {
   md += line('Rollback recommended', cf.rollbackRecommended ? 'YES' : 'NO') + '\n';
   md += `\n### Live Chart Status\n`;
   md += line('Ready', ch.ready ? 'YES' : 'NO') + '\n';
-  md += line('Selected pair', ch.selectedPair) + '\n';
-  md += line('Selected timeframe', ch.selectedTimeframe) + '\n';
-  md += line('Candles loaded', ch.candlesLoaded) + '\n';
+  md += line('Selected pair', ch.pair || ch.selectedPair) + '\n';
+  md += line('Selected timeframe', ch.timeframe || ch.selectedTimeframe) + '\n';
+  md += line('Candles loaded', ch.candleCount || ch.candlesLoaded || safeArray(ch.candles).length) + '\n';
   md += `\n> v9.3.0 note: sample, drawdown, PF, LAB_ONLY and robustness are evidence labels, not fixed human blockers. Operational safety remains a hard boundary.\n`;
   return md;
 }
@@ -3329,7 +3337,7 @@ function buildV930Markdown(report = {}) {
   const eh = report.engineHook || lastEngineHookView || {};
   const cb = report.circuitBreaker || lastCircuitBreakerView || {};
   const cf = report.counterfactual || lastCounterfactualView || {};
-  const ch = report.chart || lastChartView || {};
+  const ch = report.chartTruth || report.chart || lastChartTruthView || lastChartView || {};
   const mg = report.mutationGovernor || nfp.mutationGovernor || {};
   const dc = nfp.duplicateCompression || {};
   const qp = nfp.quantitativePromotion || {};
@@ -3391,9 +3399,9 @@ function buildV930Markdown(report = {}) {
   md += line('Rollback recommended', cf.rollbackRecommended ? 'YES' : 'NO') + '\n';
   md += `\n### Live Chart Status\n`;
   md += line('Ready', ch.ready ? 'YES' : 'NO') + '\n';
-  md += line('Selected pair', ch.selectedPair) + '\n';
-  md += line('Selected timeframe', ch.selectedTimeframe) + '\n';
-  md += line('Candles loaded', ch.candlesLoaded) + '\n';
+  md += line('Selected pair', ch.pair || ch.selectedPair) + '\n';
+  md += line('Selected timeframe', ch.timeframe || ch.selectedTimeframe) + '\n';
+  md += line('Candles loaded', ch.candleCount || ch.candlesLoaded || safeArray(ch.candles).length) + '\n';
   const rw = report.runnerWatchdog || buildRunnerWatchdogView(lastHealth || {});
   md += `\n### Runner Watchdog\n`;
   md += line('Installed', rw.installed ? 'YES' : 'NO') + '\n';
@@ -5573,6 +5581,50 @@ document.getElementById('refresh').onclick=load;pairEl.onchange=load;tfEl.onchan
 }
 
 
+// ALPS v10.1.14 — Direction + Chart Truth Report Sync
+// Fixes the missing normalizeDirection crash path and makes chartTruth a first-class report/health truth,
+// not only an on-demand dashboard endpoint. Read-only: no trades, OOS evidence, or live orders are created.
+function v10114ChartSelectionFromState(report = {}, fallbackPair = 'XAUTUSDT', fallbackTimeframe = '5m') {
+  const openTrade = safeArray(lastTradeExport?.openTrades).find(t => t && (t.pair || t.symbol))
+    || safeArray(lastV948EntryEngineView?.openedTrades).find(t => t && (t.pair || t.symbol))
+    || safeArray(report?.alpsTradeExport?.openTrades).find(t => t && (t.pair || t.symbol))
+    || safeArray(report?.paperEntryActivation?.openedTrades).find(t => t && (t.pair || t.symbol));
+  const candidate = safeArray(lastForwardLatchView?.candidates).find(c => c && (c.pair || c.symbol || c.baseSymbol || c.sym))
+    || safeArray(lastNativeForwardPoolView?.candidates).find(c => c && (c.pair || c.symbol || c.baseSymbol || c.sym))
+    || safeArray(report?.nativeForwardPool?.candidates).find(c => c && (c.pair || c.symbol || c.baseSymbol || c.sym))
+    || safeArray(v1000ActiveRows()).find(c => c && (c.pair || c.symbol || c.baseSymbol || c.sym));
+  const pair = v1011CanonicalChartPair(openTrade?.pair || openTrade?.symbol || openTrade?.sym || candidate?.pair || candidate?.symbol || candidate?.baseSymbol || candidate?.sym || fallbackPair) || fallbackPair;
+  const timeframe = v1011CanonicalChartFrame(openTrade?.timeframe || openTrade?.tf || candidate?.timeframe || candidate?.tf || candidate?.frame || fallbackTimeframe) || fallbackTimeframe;
+  return { pair, timeframe };
+}
+async function v10114EnsureChartTruthSnapshot(report = {}, reason = 'v10114-chart-truth-sync', limit = 220, timeoutMs = 18000) {
+  const sel = v10114ChartSelectionFromState(report);
+  const existing = lastChartTruthView || null;
+  const sameSelection = existing && v1011CanonicalChartPair(existing.pair || existing.selectedPair) === sel.pair && v1011CanonicalChartFrame(existing.timeframe || existing.selectedTimeframe) === sel.timeframe;
+  if (sameSelection && safeArray(existing.candles).length > 0 && Date.now() - n(existing.generatedAtMs || existing.fetchedAtMs || 0, 0) < 2 * 60 * 1000) {
+    if (report && typeof report === 'object') {
+      report.chartTruth = existing;
+      report.chart = { ...(report.chart || lastChartView || {}), ready: !!existing.ready, selectedPair: existing.pair, selectedTimeframe: existing.timeframe, candlesLoaded: existing.candleCount || safeArray(existing.candles).length, source: existing.source || '' };
+    }
+    return existing;
+  }
+  let chart;
+  try {
+    chart = await v1016WithTimeout(v1011FetchChartTruth(sel.pair, sel.timeframe, limit), timeoutMs, 'V10114_CHART_TRUTH_TIMEOUT');
+    chart = { ...(chart || {}), generatedAt: new Date().toISOString(), generatedAtMs: Date.now(), syncReason: reason, status: chart?.ready ? 'READY' : 'NO_CANDLES_RETURNED' };
+  } catch (e) {
+    chart = { schema:'alps.chartTruth.view.v2', version: FINAL_V930_VERSION, installed:true, ready:false, pair:sel.pair, timeframe:sel.timeframe, candles:[], candleCount:0, trades:[], candidates:[], levels:[], markers:[], generatedAt:new Date().toISOString(), generatedAtMs:Date.now(), syncReason:reason, status:'FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,240), error:textValue(e && e.message || e).slice(0,240), paperOnly:true, liveCapitalExecution:false };
+    lastChartTruthView = chart;
+  }
+  if (report && typeof report === 'object') {
+    report.chartTruth = chart;
+    report.chart = { ...(report.chart || lastChartView || {}), ready: !!chart.ready, selectedPair: chart.pair, selectedTimeframe: chart.timeframe, candlesLoaded: chart.candleCount || safeArray(chart.candles).length, source: chart.source || '', lastError: chart.lastError || chart.error || '' };
+    report.v10114ChartTruthReportSync = { schema:'alps.v10114ChartTruthReportSync.view.v1', version:FINAL_V930_VERSION, installed:true, status: chart.ready ? 'CHART_TRUTH_ATTACHED_TO_REPORT' : 'CHART_TRUTH_ATTACHED_WITH_NO_CANDLES_OR_ERROR', pair:chart.pair, timeframe:chart.timeframe, candleCount:chart.candleCount || safeArray(chart.candles).length, reason, error:chart.lastError || chart.error || '', paperOnly:true, liveCapitalExecution:false };
+  }
+  return chart;
+}
+
+
 // ALPS v10.1.12 Dashboard Truth Console
 // Mobile-first server dashboard that reflects the v10.1.9-v10.1.11 paper ledger, health queue, throttling, and chart-truth updates.
 function v10112DashText(value) { return textValue(value == null ? '' : value); }
@@ -6833,17 +6885,151 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
   return { queued: true, reason, state: v1016HealthBackgroundRecoveryState };
 }
 
+
+// ALPS v10.1.13 — ChatGPT Compact Diagnostic Export
+// This endpoint is intentionally tiny and upload-friendly. It summarizes the health/trade/chart truth in one flat row
+// so mobile uploads do not fail on large PDF/Markdown reports. It is read-only and never opens/modifies trades.
+function v10113CompactFirstNonEmpty(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return '';
+}
+function v10113CompactCount(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const n = Number(String(value).replace(/[,%$≈]/g, '').trim());
+  return Number.isFinite(n) ? n : fallback;
+}
+function v10113TopReason(reasons = {}) {
+  const entries = Object.entries(reasons || {}).filter(([, v]) => Number.isFinite(Number(v))).sort((a, b) => Number(b[1]) - Number(a[1]));
+  return entries.length ? `${entries[0][0]}:${entries[0][1]}` : '';
+}
+function v10113SafeJson(value) {
+  try { return JSON.stringify(value == null ? null : value); } catch (_) { return 'null'; }
+}
+function v10113CompactCsvEscape(value) {
+  const s = String(value == null ? '' : value);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function v10113CompactRowsToCsv(rows = []) {
+  const allKeys = [];
+  for (const row of rows) {
+    for (const key of Object.keys(row || {})) if (!allKeys.includes(key)) allKeys.push(key);
+  }
+  if (!allKeys.length) return '';
+  return [allKeys.map(v10113CompactCsvEscape).join(','), ...rows.map(row => allKeys.map(k => v10113CompactCsvEscape(row[k])).join(','))].join('\n') + '\n';
+}
+async function v10113BuildChatGPTCompactReport(params = new URLSearchParams()) {
+  const pair = String(params.get('pair') || params.get('symbol') || 'XAUTUSDT').toUpperCase();
+  const timeframe = String(params.get('timeframe') || params.get('interval') || '5m');
+  await loadForwardLatchState().catch(() => null);
+  await loadTradeVaultState().catch(() => null);
+  let health = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'chatgpt-compact-report-v10113');
+  const tradeCounts = tradeExportCounts(lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] }));
+  if (tradeCounts.open > 0) {
+    health.openPositions = Math.max(v10113CompactCount(health.openPositions), tradeCounts.open);
+    health.paperSignals = Math.max(v10113CompactCount(health.paperSignals), tradeCounts.open);
+  }
+  if (tradeCounts.closed > 0) health.closedTrades = Math.max(v10113CompactCount(health.closedTrades), tradeCounts.closed);
+  const chart = await v1010FetchChartTruth(pair, timeframe, Number(params.get('limit') || 160)).catch(e => ({ ready:false, error:e && e.message || String(e), candles:[], trades:[], candidates:[], pair, timeframe }));
+  const pe = health.paperEntryActivation || health.zonePersistenceEntry || {};
+  const bridge = health.v1017cPaperEntryAuthorityBridge || pe.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView || {};
+  const mat = health.v1017FeatureMaterializer || lastV1017FeatureMaterializerView || {};
+  const guard = health.v1016HealthFastResponseGuard || {};
+  const pool = health.nativeForwardPool || lastNativeForwardPoolView || {};
+  const latch = health.forwardLatch || lastForwardLatchView || {};
+  const universe = health.universeCompletion || lastV949UniverseCompletionView || {};
+  const proxy = health.proxyTruth || lastV949ProxyTruthView || {};
+  const finalGate = health.finalHealthGate || lastV949FinalHealthGateView || {};
+  const quality = health.v952CandidateQualityBuckets || lastV952QualityBucketsView || health.qualityRisk || {};
+  const rejectionCounts = bridge.rejectedReasonCounts || pe.rejectedReasonCounts || health.rejectedReasonCounts || {};
+  const openTrades = safeArray(lastTradeExport?.openTrades).concat(safeArray(chart?.trades).filter(t => /OPEN|ACTIVE|PAPER/i.test(textValue(t.status || 'OPEN'))));
+  const openSummary = openTrades.slice(0, 5).map(t => ({ tradeId:t.tradeId || t.id || '', pair:t.pair || t.symbol || '', timeframe:t.timeframe || t.tf || '', direction:t.direction || t.side || '', entry:t.entry ?? t.entryPrice ?? '', stop:t.stop ?? t.stopPrice ?? '', target:t.target ?? t.targetPrice ?? '', source:t.source || t.__alpsSource || '' }));
+  const row = {
+    generatedAt: new Date().toISOString(),
+    schema: 'alps.chatgptCompactReport.v1',
+    version: FINAL_V930_VERSION,
+    status: health.status || '',
+    forwardStatus: health.forwardStatus || health.status || '',
+    engineReady: !!health.engineReady,
+    labRunning: !!health.labRunning,
+    fwRunning: !!health.fwRunning,
+    candidates: v10113CompactCount(health.candidates || health.officialCandidates || pool.totalCandidates || latch.size),
+    nativePoolCandidates: v10113CompactCount(pool.totalCandidates),
+    forwardLatchSize: v10113CompactCount(latch.size),
+    rawStrategies: v10113CompactCount(health.results || health.rawResearchStrategies || health.totalGeneratedStrategies),
+    paperSignals: v10113CompactCount(health.paperSignals),
+    openPositions: v10113CompactCount(health.openPositions),
+    closedTrades: v10113CompactCount(health.closedTrades),
+    tradeExportOpen: tradeCounts.open,
+    tradeExportClosed: tradeCounts.closed,
+    serverPaperLedgerOpen: v10113CompactCount(health?.serverPaperLedger?.openTrades, tradeCounts.open),
+    serverPaperLedgerClosed: v10113CompactCount(health?.serverPaperLedger?.closedTrades, tradeCounts.closed),
+    rowsCollected: v10113CompactCount(bridge.rowsCollected || bridge.candidatesSeen || pe.candidatesSeen),
+    scanned: v10113CompactCount(bridge.scanned || pe.scanned),
+    opened: v10113CompactCount(bridge.opened || pe.opened || health.paperSignals),
+    rejected: v10113CompactCount(bridge.rejected || pe.rejected || health.rejectedSignals),
+    maxEntriesPerTick: v10113CompactFirstNonEmpty(bridge.maxEntriesPerTick, pe.maxEntriesPerTick, health.maxEntriesPerTick, process.env.ALPS_MAX_ENTRIES_PER_TICK, process.env.ALPS_V948_ENTRY_MAX_PER_TICK, ''),
+    topRejectedReason: v10113TopReason(rejectionCounts),
+    featureMaterializerStatus: mat.status || '',
+    featureMaterializerQueuedAt: mat.queuedAt || '',
+    featureMaterializerStartedAt: mat.startedAt || '',
+    featureMaterializerFinishedAt: mat.finishedAt || mat.completedAt || '',
+    healthGuardStatus: guard.status || '',
+    healthGuardCompletedAt: guard.completedAt || guard?.state?.finishedAt || '',
+    chartReady: chart.ready !== false && safeArray(chart.candles).length > 0,
+    chartPair: chart.pair || pair,
+    chartTimeframe: chart.timeframe || timeframe,
+    chartCandles: safeArray(chart.candles).length,
+    chartTrades: safeArray(chart.trades).length,
+    chartCandidates: safeArray(chart.candidates).length,
+    chartError: chart.error || chart.lastError || '',
+    universeStatus: universe.status || '',
+    loadedPairs: safeArray(universe.loadedPairs).join('|'),
+    missingSymbols: safeArray(universe.missingSymbols).join('|'),
+    proxyStatus: proxy.status || String(health.proxyOK ?? ''),
+    finalHealthStatus: finalGate.status || '',
+    finalHealthFailedChecks: safeArray(finalGate.failedChecks).join('|'),
+    finalHealthNextAction: finalGate.nextRequiredAction || '',
+    qualityBucketCounts: v10113SafeJson(quality.counts || {}),
+    rejectedReasonCountsJson: v10113SafeJson(rejectionCounts),
+    openTradeSummaryJson: v10113SafeJson(openSummary),
+    note: 'Upload this CSV/JSON to ChatGPT instead of the full PDF when mobile upload fails.'
+  };
+  return {
+    schema: 'alps.chatgptCompactReport.v1',
+    version: FINAL_V930_VERSION,
+    generatedAt: row.generatedAt,
+    pair,
+    timeframe,
+    row,
+    sections: { health, chart, tradeCounts, rejectionCounts, openTradeSummary: openSummary, universe, proxy, finalGate, materializer: mat, healthGuard: guard, paperEntryAuthority: bridge, quality },
+    uploadHint: 'For ChatGPT diagnosis, upload /runner/chatgpt-report.csv first. Use JSON only if asked for deeper details.',
+    paperOnly: true,
+    liveCapitalExecution: false
+  };
+}
+
 async function createServer() {
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      if (url.pathname === '/runner/chatgpt-report.json' || url.pathname === '/runner/compact-report.json') {
+        const compact = await v10113BuildChatGPTCompactReport(url.searchParams);
+        return send(res, 200, compact);
+      }
+      if (url.pathname === '/runner/chatgpt-report.csv' || url.pathname === '/runner/compact-report.csv' || url.pathname === '/runner/system-report.csv') {
+        const compact = await v10113BuildChatGPTCompactReport(url.searchParams);
+        return send(res, 200, v10113CompactRowsToCsv([compact.row]), 'text/csv; charset=utf-8');
+      }
       if (url.pathname === '/runner/dashboard' || url.pathname === '/runner/command-dashboard' || url.pathname === '/runner/mobile') {
         return send(res, 200, v10112DashboardHtml(), 'text/html; charset=utf-8');
       }
       if (url.pathname === '/runner/dashboard.json' || url.pathname === '/runner/command-dashboard.json') {
         await loadForwardLatchState();
         await loadTradeVaultState();
+        await v10114EnsureChartTruthSnapshot(lastReport || {}, 'dashboard-json-chart-truth-preload', 180, 12000).catch(e => log('v10.1.14 dashboard chart truth preload skipped:', e.message));
         return send(res, 200, v10112BuildDashboardState('dashboard-json-endpoint'));
       }
       if (url.pathname === '/runner/chart' || url.pathname === '/runner/live-chart') {
@@ -6876,7 +7062,8 @@ async function createServer() {
         }
         if (v1001HealthTradeCounts.closed > 0) healthTruth.closedTrades = Math.max(n(healthTruth.closedTrades, 0), v1001HealthTradeCounts.closed);
         healthTruth.v1001TradeLedgerExportSync = { schema:'alps.v1001TradeLedgerExportSync.view.v1', version: FINAL_V930_VERSION, installed:true, openTradesExported:v1001HealthTradeCounts.open, closedTradesExported:v1001HealthTradeCounts.closed, status: v1001HealthTradeCounts.total > 0 ? 'HEALTH_COUNTERS_SYNCED_FROM_TRADE_EXPORT' : 'WAITING_FOR_REAL_TRADE_LEDGER_ROWS', paperOnly:true, liveCapitalExecution:false };
-        lastHealth = { ...lastHealth, ...healthTruth };
+        if (!lastChartTruthView || !lastChartTruthView.ready) await v10114EnsureChartTruthSnapshot(lastReport || healthTruth || {}, 'health-endpoint-chart-truth-preload', 160, 10000).catch(e => log('v10.1.14 health chart truth preload skipped:', e.message));
+        lastHealth = { ...lastHealth, ...healthTruth, chartTruth: lastChartTruthView || healthTruth.chartTruth || null };
         return send(res, 200, { ...healthTruth, browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartTruthView || lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, serverPaperLedger: { openTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && t.status === 'OPEN').length, closedTrades: safeArray(lastTradeExport?.closedTrades).length } });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
@@ -9027,6 +9214,10 @@ async function collectReport() {
   await updateTradeVault(lastTradeExport, 'report');
   report.alpsTradeExport = lastTradeExport;
   report = v1001SyncReportCountersFromTradeExport(report, lastTradeExport);
+  await v10114EnsureChartTruthSnapshot(report, 'collect-report-final-chart-truth-sync', 220, 20000).catch(e => {
+    report.chartTruth = { schema:'alps.chartTruth.view.v2', version:FINAL_V930_VERSION, installed:true, ready:false, status:'FAILED_TO_ATTACH', error:textValue(e && e.message || e).slice(0,240), paperOnly:true, liveCapitalExecution:false };
+    log('v10.1.14 chart truth report sync skipped:', e.message);
+  });
   report.tradeLifecycleTruth = v949BuildTradeLifecycleTruth(report);
   report = v949AttachCompleteTruth(report);
   report.alpsTradeContinuityVault = buildTradeVaultView();
@@ -9075,7 +9266,7 @@ ${buildV952Markdown(report)}`;
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
   await v1014PersistRuntimeNonzeroSnapshot(report, 'collect-report-final').catch(() => null);
-  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView }, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, chartTruth: report.chartTruth || lastChartTruthView || null, v10114ChartTruthReportSync: report.v10114ChartTruthReportSync || null, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
