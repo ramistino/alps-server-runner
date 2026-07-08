@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.21-legacy-export-kill-switch';
+const FINAL_V930_VERSION = 'v10.1.22-authority-ledger-chart-flush';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -713,6 +713,68 @@ function v10116CountClosedTrades() {
     n(lastHealth?.closedTrades, 0)
   );
 }
+
+// ALPS v10.1.22 — Authority Ledger + Chart Flush Helpers
+// The v10.1.21 report proved currentHealth can see paper entries before the server trade export has
+// persisted the same rows. Keep both facts visible: server ledger count remains raw, while canonicalPaperOpen
+// preserves currentHealth truth so reports never collapse active paper entries back to zero.
+function v10122CountMaybe(value) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === 'object') {
+    if (Array.isArray(value.openTrades)) return value.openTrades.length;
+    if (Array.isArray(value.rows)) return value.rows.length;
+    if (Array.isArray(value.signals)) return value.signals.length;
+  }
+  return n(value, 0);
+}
+function v10122CurrentHealthPaperOpen(base = {}, pe = {}, bridge = {}) {
+  return Math.max(
+    v10122CountMaybe(base.paperSignals),
+    v10122CountMaybe(base.openPositions),
+    v10122CountMaybe(base.openTrades),
+    v10122CountMaybe(pe.opened),
+    v10122CountMaybe(pe.paperSignals),
+    v10122CountMaybe(pe.openPositions),
+    safeArray(pe.openedTrades).length,
+    v10122CountMaybe(bridge.opened),
+    safeArray(bridge.openedTrades).length
+  );
+}
+function v10122PaperLedgerStatus(serverOpen = 0, currentHealthOpen = 0, closed = 0) {
+  const canonical = Math.max(n(serverOpen,0), n(currentHealthOpen,0));
+  if (canonical > 0 && n(serverOpen,0) === 0) return 'CURRENTHEALTH_OPEN_NOT_PERSISTED_TO_SERVER_LEDGER';
+  if (canonical > n(serverOpen,0)) return 'CURRENTHEALTH_OPEN_EXCEEDS_SERVER_LEDGER';
+  if (n(serverOpen,0) > 0) return 'SERVER_LEDGER_SYNCED';
+  if (n(closed,0) > 0) return 'NO_OPEN_TRADES_CLOSED_LEDGER_PRESENT';
+  return 'NO_OPEN_PAPER_TRADES';
+}
+async function v10122RefreshCurrentHealthForEndpoint(reason = 'authority-endpoint') {
+  try {
+    if (!page || page.isClosed()) {
+      lastHealth = { ...(lastHealth || {}), v10122ReportRefreshStatus:'PAGE_NOT_READY_FAST_AUTHORITY' };
+      return lastHealth;
+    }
+    const h = enhanceHealth(await v1016WithTimeout(getPageHealth(), 8000, 'V10122_CURRENTHEALTH_FAST_REFRESH_TIMEOUT'));
+    lastHealth = {
+      ...(lastHealth || {}),
+      ...(h || {}),
+      sourceOfTruth:'currentHealth',
+      dataSource:'CURRENT_HEALTH_AUTHORITY',
+      v10122ReportRefreshStatus:'CURRENT_HEALTH_FAST_REFRESHED',
+      v10122ReportRefreshReason: reason,
+      v10122ReportRefreshAt: new Date().toISOString()
+    };
+  } catch (e) {
+    lastHealth = {
+      ...(lastHealth || {}),
+      v10122ReportRefreshStatus:'CURRENT_HEALTH_FAST_REFRESH_FAILED_USING_LAST_HEALTH',
+      v10122ReportRefreshError:textValue(e && e.message || e).slice(0,200),
+      v10122ReportRefreshReason: reason,
+      v10122ReportRefreshAt: new Date().toISOString()
+    };
+  }
+  return lastHealth;
+}
 function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const base = { ...(lastHealth || {}), ...(seed || {}) };
   const truthSeed = v10115AttachOperationalTruth({ ...base, nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, source + '-currentHealth');
@@ -731,9 +793,16 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const openTrades = safeArray(lastTradeExport?.openTrades).concat(safeArray(lastV948EntryEngineView?.openedTrades)).filter(Boolean);
   const closedTrades = safeArray(lastTradeExport?.closedTrades).filter(Boolean);
   const symbolStatusRows = safeArray(sym.statusBySymbol);
+  const serverOpenCount = v10116CountOpenTrades();
+  const serverClosedCount = v10116CountClosedTrades();
+  const currentHealthOpenCount = v10122CurrentHealthPaperOpen(base, pe, bridge);
+  const canonicalOpenCount = Math.max(serverOpenCount, currentHealthOpenCount);
+  const paperLedgerStatus = v10122PaperLedgerStatus(serverOpenCount, currentHealthOpenCount, serverClosedCount);
+  const chartRowsCount = safeArray(chartView.candles).length;
+  const chartTradesCount = safeArray(chartView.trades).length;
   return {
     generatedAt: new Date().toISOString(),
-    schema: 'alps.chatgptCompactReport.v10121',
+    schema: 'alps.chatgptCompactReport.v10122',
     version: FINAL_V930_VERSION,
     reportQuality: 'FULL_CURRENTHEALTH_AUTHORITY_EXPORT',
     warningIfOnlySevenColumns: 'If this CSV has only status,forwardStatus,engineReady,fwRunning,paperSignals,openPositions,closedTrades then the old dashboard/export was used, not this endpoint.',
@@ -758,12 +827,16 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     forwardLatchSize: Math.max(n(latch.size,0), safeArray(forwardLatchState?.candidates).length),
     paperEntryVisibilityCandidatesSeen: Math.max(n(pe.candidatesSeen,0), n(bridge.candidatesSeen,0)),
     paperEntryScanned: Math.max(n(pe.scanned,0), n(bridge.scanned,0)),
-    paperOpened: Math.max(n(pe.opened,0), n(bridge.opened,0), n(base.paperSignals,0), n(base.openPositions,0), v10116CountOpenTrades()),
-    paperSignals: Math.max(n(base.paperSignals,0), v10116CountOpenTrades()),
-    openPositions: Math.max(n(base.openPositions,0), v10116CountOpenTrades()),
-    closedTrades: Math.max(n(base.closedTrades,0), v10116CountClosedTrades()),
-    serverPaperLedgerOpen: v10116CountOpenTrades(),
-    serverPaperLedgerClosed: v10116CountClosedTrades(),
+    paperOpened: canonicalOpenCount,
+    paperSignals: canonicalOpenCount,
+    openPositions: canonicalOpenCount,
+    closedTrades: Math.max(n(base.closedTrades,0), serverClosedCount),
+    serverPaperLedgerOpen: serverOpenCount,
+    currentHealthPaperOpen: currentHealthOpenCount,
+    canonicalPaperOpen: canonicalOpenCount,
+    paperLedgerStatus,
+    paperLedgerMismatch: canonicalOpenCount !== serverOpenCount,
+    serverPaperLedgerClosed: serverClosedCount,
     rejected: Math.max(n(base.rejectedSignals,0), n(pe.rejected,0), n(bridge.rejected,0)),
     maxEntriesPerTick: v10116First(pe.maxEntriesPerTick, bridge.maxEntriesPerTick, V948_ENTRY_MAX_PER_TICK),
     deferredQueue: Math.max(n(lastV10115DeferredEntryQueueView?.queued,0), n(pe?.throttleQueue?.queued,0), n(bridge?.throttleQueue?.queued,0)),
@@ -782,16 +855,19 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     featureGateStatus: feature.status || '',
     indexedDbFirst: !!(lastV10115IndexedDbCandleBankView?.usedIndexedDb || lastV10115IndexedDbCandleBankView?.storesFound || mat.usedIndexedDb),
     candleGroups: safeArray(mat.candleGroups || lastV10115IndexedDbCandleBankView?.groups).length,
-    chartTruthReady: !!(chartView.ready || safeArray(chartView.candles).length),
+    chartTruthReady: !!(chartView.ready || chartRowsCount),
+    chartTruthStatus: chartRowsCount > 0 ? 'CHART_TRUTH_READY' : 'CHART_TRUTH_EMPTY_OR_NOT_FETCHED',
     chartPair: chartView.pair || chartView.selectedPair || '',
     chartTimeframe: chartView.timeframe || chartView.selectedTimeframe || '',
-    chartCandles: safeArray(chartView.candles).length,
-    chartTrades: safeArray(chartView.trades).length,
+    chartCandles: chartRowsCount,
+    chartTrades: chartTradesCount,
     chartLevels: safeArray(chartView.levels).length,
     chartError: chartView.error || chartView.lastError || '',
     finalHealthStatus: truthSeed.finalHealthGate?.status || lastV949FinalHealthGateView?.status || '',
     finalHealthNextAction: truthSeed.finalHealthGate?.nextRequiredAction || lastV949FinalHealthGateView?.nextRequiredAction || '',
-    lastError: base.lastError || '',
+    reportRefreshStatus: base.v10122ReportRefreshStatus || '',
+    reportRefreshError: base.v10122ReportRefreshError || '',
+    lastError: base.lastError && !/V10116_COMPACT_COLLECT_REPORT_TIMEOUT/.test(String(base.lastError)) ? base.lastError : '',
     openTradeSummaryJson: v10116FlatJson(openTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction:normalizeDirection(t.direction||t.side||''), entry:t.entry||t.entryPrice, stop:t.stop||t.stopPrice, target:t.target||t.targetPrice, status:t.status||'OPEN', source:t.source||t.__alpsSource||'' }))),
     closedTradeSummaryJson: v10116FlatJson(closedTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', result:t.result||'', pnlBps:t.pnlBps, status:t.status||'CLOSED' })))
   };
@@ -799,7 +875,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
 function v10116CompactReport(seed = {}, chart = null, source = 'chatgpt-compact') {
   const row = v10116CompactRow(seed, chart, source);
   return {
-    schema: 'alps.chatgptCompactReport.v10121',
+    schema: 'alps.chatgptCompactReport.v10122',
     version: FINAL_V930_VERSION,
     generatedAt: row.generatedAt,
     sourceOfTruth: row.sourceOfTruth,
@@ -820,7 +896,7 @@ function v10116CompactCsv(report) {
   let keys = Object.keys(row);
   const isLegacySeven = keys.length === legacyKeys.length && legacyKeys.every((k, i) => keys[i] === k);
   if (!keys.length || isLegacySeven) {
-    const authorityRow = v10116CompactRow(lastHealth || {}, lastChartView || null, 'v10121-legacy-csv-kill-switch');
+    const authorityRow = v10116CompactRow(lastHealth || {}, lastChartView || null, 'v10122-legacy-csv-kill-switch');
     authorityRow.reportExportGuard = 'LEGACY_SEVEN_COLUMN_BLOCKED_AT_SERVER';
     keys = Object.keys(authorityRow);
     return keys.map(v10116CsvEscape).join(',') + '\n' + keys.map(k => v10116CsvEscape(authorityRow[k])).join(',') + '\n';
@@ -905,7 +981,7 @@ function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
     'zeroFocusedCandidatesLegacyDiagnosis', 'oldSnapshotSupersededByCurrentHealth', 'reportSnapshotOverwriteBlocked', 'dashboardLocalGuessBlocked'
   ];
   return {
-    schema: 'alps.reportAuthority.view.v10121',
+    schema: 'alps.reportAuthority.view.v10122',
     version: FINAL_V930_VERSION,
     installed: true,
     generatedAt: new Date().toISOString(),
@@ -936,7 +1012,7 @@ function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
     universe: { status: compact.universeStatus || sym.universeCompletion || '', loadedPairs: compact.loadedPairs || '', missingSymbols: compact.missingSymbols || '', counts: sym.counts || {}, rows: safeArray(sym.statusBySymbol).slice(0, 20) },
     featureGate: { status: compact.featureGateStatus || feature.status || '', featureRowsFound: compact.featureRowsFound, candlesVisible: feature.candlesVisible, pairFrames: feature.pairFrames || safeArray(feature.pairFrameDiagnostics).length },
     chartTruth: { ready: compact.chartTruthReady, pair: compact.chartPair || chart.pair || chart.selectedPair || '', timeframe: compact.chartTimeframe || chart.timeframe || chart.selectedTimeframe || '', candles: compact.chartCandles, trades: compact.chartTrades, levels: compact.chartLevels, error: compact.chartError || '' },
-    paperLedger: { open: compact.serverPaperLedgerOpen, closed: compact.serverPaperLedgerClosed, exportOpen: safeArray(trade.openTrades).length, exportClosed: safeArray(trade.closedTrades).length },
+    paperLedger: { open: compact.serverPaperLedgerOpen, currentHealthOpen: compact.currentHealthPaperOpen, canonicalOpen: compact.canonicalPaperOpen, closed: compact.serverPaperLedgerClosed, exportOpen: safeArray(trade.openTrades).length, exportClosed: safeArray(trade.closedTrades).length, status: compact.paperLedgerStatus, mismatch: compact.paperLedgerMismatch },
     layerLog: lastV10115LayerLogView || null,
     compactRow: compact,
     reportInputRole: 'AUDIT_ONLY',
@@ -1066,17 +1142,26 @@ async function v10118BuildCompactMarkdownForEndpoint(url, reason = 'endpoint-md'
 }
 
 async function v10116BuildCompactReportForEndpoint(url, reason = 'endpoint') {
-  const pair = url?.searchParams?.get('pair') || url?.searchParams?.get('symbol') || v10115PreferredChartSelection(lastHealth || {}).pair || 'XAUTUSDT';
-  const timeframe = url?.searchParams?.get('timeframe') || url?.searchParams?.get('interval') || v10115PreferredChartSelection(lastHealth || {}).timeframe || '30m';
+  const preferred = v10115PreferredChartSelection(lastHealth || {});
+  const pair = url?.searchParams?.get('pair') || url?.searchParams?.get('symbol') || preferred.pair || 'XAUTUSDT';
+  const timeframe = url?.searchParams?.get('timeframe') || url?.searchParams?.get('interval') || preferred.timeframe || '30m';
   const limit = Number(url?.searchParams?.get('limit') || 160);
+  const collectRequested = ['1','true','yes','full'].includes(textValue(url?.searchParams?.get('collect') || url?.searchParams?.get('full')).toLowerCase());
   await loadForwardLatchState().catch(() => null);
   await loadTradeVaultState().catch(() => null);
-  await v1016WithTimeout(collectReport(), 12000, 'V10116_COMPACT_COLLECT_REPORT_TIMEOUT').catch(e => {
-    lastHealth = { ...(lastHealth || {}), lastError: textValue(e && e.message || e).slice(0, 240) };
-  });
+  await v10122RefreshCurrentHealthForEndpoint(reason).catch(() => null);
+  if (collectRequested) {
+    await v1016WithTimeout(collectReport(), 12000, 'V10122_OPTIONAL_COLLECT_REPORT_TIMEOUT').catch(e => {
+      lastHealth = { ...(lastHealth || {}), v10122ReportRefreshStatus:'OPTIONAL_COLLECT_REPORT_TIMEOUT_CURRENTHEALTH_PRESERVED', v10122ReportRefreshError:textValue(e && e.message || e).slice(0, 240) };
+    });
+  } else {
+    lastHealth = { ...(lastHealth || {}), v10122ReportRefreshStatus: lastHealth?.v10122ReportRefreshStatus || 'CURRENT_HEALTH_FAST_AUTHORITY_NO_FULL_COLLECT' };
+  }
   let chart = lastChartView || null;
-  if (!chart || !safeArray(chart.candles).length || (pair && chart.pair && v10115CanonicalSymbol(chart.pair) !== v10115CanonicalSymbol(pair))) {
-    chart = await v1016WithTimeout(v1010FetchChartTruth(pair, timeframe, limit), 8000, 'V10116_COMPACT_CHART_TIMEOUT').catch(e => ({ schema:'alps.chartTruth.view.v1', version: FINAL_V930_VERSION, ready:false, pair, timeframe, candles:[], trades:[], levels:[], error:textValue(e && e.message || e).slice(0,240) }));
+  const chartPairMismatch = pair && chart && chart.pair && v10115CanonicalSymbol(chart.pair) !== v10115CanonicalSymbol(pair);
+  const chartTfMismatch = timeframe && chart && chart.timeframe && textValue(chart.timeframe).toLowerCase() !== textValue(timeframe).toLowerCase();
+  if (!chart || !safeArray(chart.candles).length || chartPairMismatch || chartTfMismatch) {
+    chart = await v1016WithTimeout(v1010FetchChartTruth(pair, timeframe, limit), 10000, 'V10122_COMPACT_CHART_FLUSH_TIMEOUT').catch(e => ({ schema:'alps.chartTruth.view.v1', version: FINAL_V930_VERSION, ready:false, pair, timeframe, candles:[], trades:[], levels:[], error:textValue(e && e.message || e).slice(0,240), status:'CHART_TRUTH_FLUSH_FAILED' }));
   }
   return v10116CompactReport({ ...(lastHealth || {}), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, chart, reason);
 }
@@ -7223,7 +7308,7 @@ async function createServer() {
         const sel = v10115PreferredChartSelection(lastHealth || {});
         if (!lastChartView || !safeArray(lastChartView.candles).length) await v1016WithTimeout(v1010FetchChartTruth(sel.pair, sel.timeframe, 120), 3500, 'V10115_DASHBOARD_CHART_TRUTH_TIMEOUT').catch(() => null);
         const truth = v10115AttachOperationalTruth({ ...(lastHealth || {}), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, 'dashboard-json-currentHealth-final');
-        return send(res, 200, { schema:'alps.runner.dashboardTruth.v10121', version:FINAL_V930_VERSION, generatedAt:new Date().toISOString(), reportAuthority:v10118ReportAuthorityView(truth, 'dashboard-json'), currentHealth:truth, operationalTruth:truth.v10115OperationalTruth, compactReport:v10116CompactReport(truth, lastChartView || null, 'dashboard-json'), chatgptCompact:v10116CompactRow(truth, lastChartView || null, 'dashboard-json-row'), chartTruth:lastChartView || null, tradeExport:lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, rejectedReasonAudit:lastV952RejectedAuditView, deferredEntryQueue:lastV10115DeferredEntryQueueView, featureGateDiagnostics:lastV10115FeatureGateDiagnosticsView, symbolStatus:lastV10115SymbolStatusView, layerLog:lastV10115LayerLogView });
+        return send(res, 200, { schema:'alps.runner.dashboardTruth.v10122', version:FINAL_V930_VERSION, generatedAt:new Date().toISOString(), reportAuthority:v10118ReportAuthorityView(truth, 'dashboard-json'), currentHealth:truth, operationalTruth:truth.v10115OperationalTruth, compactReport:v10116CompactReport(truth, lastChartView || null, 'dashboard-json'), chatgptCompact:v10116CompactRow(truth, lastChartView || null, 'dashboard-json-row'), chartTruth:lastChartView || null, tradeExport:lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, rejectedReasonAudit:lastV952RejectedAuditView, deferredEntryQueue:lastV10115DeferredEntryQueueView, featureGateDiagnostics:lastV10115FeatureGateDiagnosticsView, symbolStatus:lastV10115SymbolStatusView, layerLog:lastV10115LayerLogView });
       }
       if (url.pathname === '/runner/trades.json') {
         if (!isAuthed(req)) return send(res, 401, { error: 'Unauthorized' });
