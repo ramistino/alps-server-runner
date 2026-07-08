@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.6 Integrated System: Health Paper Entry Rescan + Feature Snapshot Entry Context
+ * ALPS Server Runner — v10.1.9 Integrated System: Server Paper Ledger Persistence + Bootstrap Authority
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -40,15 +40,15 @@ const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const TELEGRAM_CHAT_ID = String(process.env.TELEGRAM_CHAT_ID || '').trim();
 
 // ALPS Recovery Patch v1.2.1: paper-forward continuity, stale-forward detection, snapshot history.
-const RECOVERY_PATCH_VERSION = 'v10.1.8-server-paper-open-lifecycle';
+const RECOVERY_PATCH_VERSION = 'v10.1.9-server-paper-ledger-persistence';
 const RECOVERY_STATE_FILE = path.join(DATA_DIR, 'recovery-state.json');
 const RECOVERY_SEED_FILE = path.join(__dirname, 'recovery', 'previous-ledger-seed.json');
 const TRADE_VAULT_FILE = path.join(DATA_DIR, 'trade-vault.json');
 const TRADE_VAULT_SEED_FILE = path.join(__dirname, 'recovery', 'previous-trade-vault-seed.json');
-const COGNITION_PATCH_VERSION = 'v10.1.8-server-paper-open-lifecycle';
+const COGNITION_PATCH_VERSION = 'v10.1.9-server-paper-ledger-persistence';
 const COGNITION_STATE_FILE = path.join(DATA_DIR, 'cognition-state.json');
 const COGNITION_LEDGER_FILE = path.join(DATA_DIR, 'cognition-decision-ledger.jsonl');
-const AUTONOMY_PATCH_VERSION = 'v10.1.8-server-paper-open-lifecycle';
+const AUTONOMY_PATCH_VERSION = 'v10.1.9-server-paper-ledger-persistence';
 const AUTONOMY_STATE_FILE = path.join(DATA_DIR, 'autonomous-bridge-state.json');
 const AUTONOMY_MEMORY_FILE = path.join(DATA_DIR, 'autonomous-evidence-memory.json');
 const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl');
@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.8-server-paper-open-lifecycle';
+const FINAL_V930_VERSION = 'v10.1.9-server-paper-ledger-persistence';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -432,6 +432,39 @@ let lastV950PaperEntryVisibilityView = null;
 let lastV950CandleStoreResolverView = null;
 let lastV950ReportTruthSyncView = null;
 let lastV1017cPaperEntryAuthorityBridgeView = null;
+
+// v10.1.9 Server Paper Ledger Persistence helpers:
+// Keep paper trades opened by the server-authority path alive across health/report/page scans.
+// The previous v10.1.8 path could open a server paper trade, then overwrite openedTrades with []
+// when rebuilding the zonePersistenceEntry view. These helpers dedupe by candidate/market identity
+// instead of the generated trade id so repeated scans do not reopen the same setup.
+function v1019OpenTradeDedupeKey(t = {}) {
+  const candidateKey = textValue(t.key || t.__alpsV948Key || t.__alpsV1019Key || '').toUpperCase();
+  if (candidateKey) return candidateKey;
+  const pair = textValue(t.pair || t.baseSymbol || t.symbol || t.sym || '').toUpperCase().split('_')[0].replace(/[^A-Z0-9]/g, '');
+  const tf = textValue(t.timeframe || t.tf || t.frame || '').toLowerCase().replace(/\s+/g, '');
+  const dirRaw = textValue(t.direction || t.dir || t.side || '').toUpperCase();
+  const direction = dirRaw === 'BUY' ? 'LONG' : (dirRaw === 'SELL' ? 'SHORT' : dirRaw);
+  const strategy = textValue(t.strategy || t.stratName || t.name || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').slice(0, 80);
+  const entry = textValue(t.entry ?? t.entryPrice ?? t.openPrice ?? t.price ?? '').replace(/[,%$≈]/g, '').slice(0, 32);
+  const fallback = textValue(t.tradeId || t.id || '').toUpperCase();
+  return [pair, tf, direction, strategy, entry].filter(Boolean).join('|') || fallback;
+}
+function v1019MergeOpenTradeRows(...groups) {
+  const out = [];
+  const seen = new Set();
+  for (const group of groups) {
+    for (const row of safeArray(group)) {
+      if (!row || typeof row !== 'object') continue;
+      if (/CLOSED|WIN|LOSS|STOP|TARGET/i.test(textValue(row.status || 'OPEN'))) continue;
+      const key = v1019OpenTradeDedupeKey(row);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+    }
+  }
+  return out;
+}
 
 
 function safeArray(value) { return Array.isArray(value) ? value : []; }
@@ -5948,13 +5981,18 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
       view.rejectedReasonCounts[reasonKey] = (view.rejectedReasonCounts[reasonKey] || 0) + 1;
       if (view.rejections.length < 80) view.rejections.push({ key: keyOf(c), pair: pairOf(c), timeframe: tfOf(c), strategy: textValue(c.strategy || c.stratName || c.name), primaryReason: reasonKey, ...extra });
     }
-    const openedKeys = new Set(safeArray(lastV948EntryEngineView?.openedTrades).map(x => keyOf(x)).filter(Boolean));
+    function looseOpenKey(c = {}) {
+      return [pairOf(c), tfOf(c), textValue(c.strategy || c.stratName || c.name || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').slice(0, 80)].filter(Boolean).join('||');
+    }
+    const existingOpenTradesBeforeScan = v1019MergeOpenTradeRows(lastV948EntryEngineView?.openedTrades, lastTradeExport?.openTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
+    const openedKeys = new Set(existingOpenTradesBeforeScan.flatMap(x => [keyOf(x), looseOpenKey(x), v1019OpenTradeDedupeKey(x)]).filter(Boolean));
+    let finalOpenTrades = existingOpenTradesBeforeScan.slice();
     const scanRows = rows.slice(0, Math.max(0, Math.min(rows.length, Number(process.env.ALPS_PAPER_ENTRY_AUTHORITY_SCAN_LIMIT || rows.length))));
     for (const c of scanRows) {
       const pair = pairOf(c), tf = tfOf(c), key = keyOf(c);
       view.scanned += 1;
       if (!pair || !tf || !key) { addReject('INVALID_CANDIDATE_IDENTITY', c); continue; }
-      if (openedKeys.has(key)) { addReject('DUPLICATE', c); continue; }
+      if (openedKeys.has(key) || openedKeys.has(looseOpenKey(c))) { addReject('DUPLICATE', c); continue; }
       const current = currentPrice(c);
       const entry = setupPrice(c);
       if (!Number.isFinite(entry)) { addReject('ENTRY_UNDEFINED', c, { currentPrice: current }); continue; }
@@ -5975,7 +6013,7 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
       const target = direction === 'SHORT' ? entry - stopDistance * rr : entry + stopDistance * rr;
       if (![stop, target].every(Number.isFinite) || stop === target) { addReject('STOP_TARGET_UNDEFINED', c, { entry, currentPrice: current, direction }); continue; }
       if ((direction === 'SHORT' && current >= stop) || (direction === 'LONG' && current <= stop)) { addReject('INVALIDATION_HIT', c, { currentPrice: current, stop, entry, direction }); continue; }
-      // v10.1.8 server-authority paper open: the server State Authority proved a valid fresh entry zone with a
+      // v10.1.9 server-authority paper open: the server State Authority proved a valid fresh entry zone with a
       // complete finite plan (entry/stop/target/direction). Deferring the open to the Browser Paper Entry engine
       // created a dead handoff (the browser is exactly the blind side this bridge exists to bypass), so the server
       // ledger now opens the paper trade directly and syncs DOWN to the page. Paper-only; real candidates only.
@@ -5985,9 +6023,11 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
         addReject('VALID_ZONE_THROTTLED_MAX_ENTRIES_PER_TICK', c, { currentPrice: current, entry, stop, target, direction, note: 'Valid zone; opening throttled by maxEntriesPerTick, will be re-evaluated next scan.' });
         continue;
       }
+      const paperTradeId = `SRV-${Date.now()}-${view.opened + 1}`;
       const paperTrade = {
-        id: `SRV-${Date.now()}-${view.opened + 1}`,
-        key, pair, timeframe: tf,
+        id: paperTradeId,
+        tradeId: paperTradeId,
+        key, __alpsV1019Key: key, pair, timeframe: tf,
         strategy: textValue(c.strategy || c.stratName || c.name),
         exit: textValue(c.exit || c.exitName || ''),
         direction, entry, stop, target,
@@ -5998,7 +6038,11 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
         status: 'OPEN',
         paperOnly: true,
         liveCapitalExecution: false,
-        source: 'SERVER_AUTHORITY_PAPER_LEDGER_V1018',
+        source: 'SERVER_AUTHORITY_PAPER_LEDGER_V1019',
+        __alpsSource: 'SERVER_AUTHORITY_PAPER_LEDGER_V1019',
+        breakEvenTriggerPct: 50,
+        lockProfitTriggerPct: 75,
+        stopLogic: 'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75',
         zoneLow, zoneHigh,
         atrAtOpen: Number.isFinite(atr) ? atr : null
       };
@@ -6006,11 +6050,18 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
       if (!Array.isArray(lastV948EntryEngineView.openedTrades)) lastV948EntryEngineView.openedTrades = [];
       lastV948EntryEngineView.openedTrades.push(paperTrade);
       openedKeys.add(key);
+      openedKeys.add(looseOpenKey(c));
+      openedKeys.add(v1019OpenTradeDedupeKey(paperTrade));
       view.opened += 1;
       view.openedTrades = safeArray(view.openedTrades); view.openedTrades.push(paperTrade);
       try { lastTradeExport = buildTradeExport({ openTrades: safeArray(lastV948EntryEngineView.openedTrades), closedTrades: safeArray(lastTradeExport?.closedTrades) }); } catch (_) {}
-      log(`v10.1.8 SERVER PAPER OPEN: ${pair} ${tf} ${direction} entry=${entry} stop=${stop} target=${target} rr=${rr} (paper-only)`);
+      log(`v10.1.9 SERVER PAPER OPEN: ${pair} ${tf} ${direction} entry=${entry} stop=${stop} target=${target} rr=${rr} (paper-only)`);
     }
+    finalOpenTrades = v1019MergeOpenTradeRows(existingOpenTradesBeforeScan, view.openedTrades);
+    view.openedTrades = finalOpenTrades;
+    view.openedNewTrades = view.opened;
+    view.openTradesTotal = finalOpenTrades.length;
+    try { lastTradeExport = buildTradeExport({ openTrades: finalOpenTrades, closedTrades: safeArray(lastTradeExport?.closedTrades) }); } catch (_) {}
     view.rejected = Math.max(0, view.scanned - view.opened);
     view.candidatesSeen = rows.length;
     view.serverCandidatesSeen = rows.length;
@@ -6040,18 +6091,36 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
         promotionTier: c.promotionTier || c.tier || c.candidateTier || 'EXPERIMENTAL_FORWARD', candidateTier: c.candidateTier || c.tier || c.promotionTier || 'EXPERIMENTAL_FORWARD',
         paperOnly: true, liveCapitalExecution: false, __v1017cPaperEntryAuthorityBridge: true
       }));
-      view.pageInjection = await v1016WithTimeout(pageEval(({ rows, version, reasonText }) => {
+      const compactOpenTrades = finalOpenTrades.slice(0, 500).map(t => ({ ...t, paperOnly:true, liveCapitalExecution:false, __alpsSource:t.__alpsSource || t.source || 'SERVER_AUTHORITY_PAPER_LEDGER_V1019' }));
+      view.pageInjection = await v1016WithTimeout(pageEval(({ rows, openTrades, version, reasonText }) => {
         function arr(v){ return Array.isArray(v) ? v : []; }
         function text(v){ return String(v == null ? '' : v); }
-        function k(c){ return text(c.key || [c.pair || c.baseSymbol || c.symbol || '', c.timeframe || c.tf || '', c.strategy || c.stratName || '', c.exit || ''].join('||')).toUpperCase(); }
+        function k(c){ return text(c.key || c.__alpsV948Key || c.__alpsV1019Key || [c.pair || c.baseSymbol || c.symbol || '', c.timeframe || c.tf || '', c.strategy || c.stratName || '', c.exit || ''].join('||')).toUpperCase(); }
+        function mergeRows(name, incoming){
+          try {
+            if (!Array.isArray(globalThis[name])) globalThis[name] = [];
+            const store = globalThis[name];
+            const seen = new Set(arr(store).map(k));
+            for (const row of arr(incoming)) { const key = k(row); if (key && !seen.has(key)) { store.push(row); seen.add(key); } }
+            return store.length;
+          } catch (_) { return 0; }
+        }
         const state = globalThis.__ALPS_V1017C_PAPER_ENTRY_AUTHORITY__ || { schema:'alps.v1017cPaperEntryAuthority.state.v1', version, installedAt: Date.now(), runs: 0 };
-        state.runs += 1; state.lastAppliedAt = Date.now(); state.reason = reasonText; state.rows = rows; state.rowCount = arr(rows).length;
+        state.runs += 1; state.lastAppliedAt = Date.now(); state.reason = reasonText; state.rows = rows; state.rowCount = arr(rows).length; state.openTrades = openTrades; state.openTradeCount = arr(openTrades).length;
         globalThis.__ALPS_V1017C_PAPER_ENTRY_AUTHORITY__ = state;
+        globalThis.__ALPS_V1018_SERVER_OPEN_TRADES__ = openTrades;
         globalThis.__ALPS_V950_SERVER_CANDIDATES__ = rows;
         globalThis.__ALPS_V956_CURRENT_NATIVE_CANDIDATES__ = rows;
         globalThis.__ALPS_V944_FORWARD_LATCH__ = { schema:'alps.forwardLatch.view.v1', version, installed:true, active: rows.length > 0, size: rows.length, candidates: rows, source:'v10.1.7c-paper-entry-authority-bridge' };
         globalThis.__ALPS_V930_NATIVE_FORWARD_POOL__ = { schema:'alps.nativeForwardPool.view.v1', version, installed:true, totalCandidates: rows.length, candidates: rows, source:'v10.1.7c-paper-entry-authority-bridge' };
+        globalThis.__ALPS_V948_ENTRY_ENGINE__ = globalThis.__ALPS_V948_ENTRY_ENGINE__ || { schema:'alps.zonePersistenceEntry.state.v1', version, installedAt:Date.now(), openedTrades:[] };
+        globalThis.__ALPS_V948_ENTRY_ENGINE__.openedTrades = arr(openTrades).concat(arr(globalThis.__ALPS_V948_ENTRY_ENGINE__.openedTrades || [])).slice(0,500);
+        globalThis.__ALPS_V948_ENTRY_ENGINE__.view = { ...(globalThis.__ALPS_V948_ENTRY_ENGINE__.view || {}), openedTrades: globalThis.__ALPS_V948_ENTRY_ENGINE__.openedTrades, openTradesTotal: arr(openTrades).length, serverAuthorityBridge:true };
         globalThis.nativeForwardPool = globalThis.__ALPS_V930_NATIVE_FORWARD_POOL__;
+        const openPositionsCount = mergeRows('openPositions', openTrades);
+        const openTradesCount = mergeRows('openTrades', openTrades);
+        const openedTradesCount = mergeRows('openedTrades', openTrades);
+        mergeRows('paperSignals', openTrades);
         for (const name of ['results','allResults','discoveryResults']) {
           try {
             if (!Array.isArray(globalThis[name])) globalThis[name] = [];
@@ -6061,8 +6130,8 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
           } catch (_) {}
         }
         try { if (typeof saveRuntimeSnapshotThrottled === 'function') saveRuntimeSnapshotThrottled(false); } catch (_) {}
-        return { status:'PAGE_AUTHORITY_ROWS_INJECTED', rowsReceived: rows.length, stateRows: state.rowCount, results: arr(globalThis.results).length, allResults: arr(globalThis.allResults).length, discoveryResults: arr(globalThis.discoveryResults).length };
-      }, { rows: compactRows, version: FINAL_V930_VERSION, reasonText: reason }), 7000, 'V1017C_PAGE_AUTHORITY_INJECTION_TIMEOUT').catch(e => ({ status:'PAGE_AUTHORITY_INJECTION_FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,200), rowsReceived: 0 }));
+        return { status:'PAGE_AUTHORITY_ROWS_AND_OPEN_TRADES_INJECTED', rowsReceived: rows.length, openTradesReceived: arr(openTrades).length, stateRows: state.rowCount, results: arr(globalThis.results).length, allResults: arr(globalThis.allResults).length, discoveryResults: arr(globalThis.discoveryResults).length, openPositions: openPositionsCount, openTrades: openTradesCount, openedTrades: openedTradesCount };
+      }, { rows: compactRows, openTrades: compactOpenTrades, version: FINAL_V930_VERSION, reasonText: reason }), 7000, 'V1017C_PAGE_AUTHORITY_INJECTION_TIMEOUT').catch(e => ({ status:'PAGE_AUTHORITY_INJECTION_FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,200), rowsReceived: 0, openTradesReceived: 0 }));
       view.pageRowsReceived = v952Num(view.pageInjection?.rowsReceived);
       view.visibilityBridge.pageRowsReceived = view.pageRowsReceived;
     } else {
@@ -6101,7 +6170,9 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
       opened: view.opened,
       rejected: view.rejected,
       acceptedButDeferred: view.acceptedButDeferred,
-      openedTrades: [],
+      openedTrades: finalOpenTrades,
+      openedNewTrades: view.openedNewTrades || view.opened,
+      openTradesTotal: finalOpenTrades.length,
       rejectedReasonCounts: view.rejectedReasonCounts,
       topRejectedReason: view.topRejectedReason,
       rejections: view.rejections,
@@ -6113,7 +6184,7 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
       lookbackClosedCandles: V948_ENTRY_LOOKBACK_CANDLES,
       entryZoneBps: V948_ENTRY_ZONE_BPS,
       v1017cPaperEntryAuthorityBridge: view,
-      rule: 'v10.1.7c scanned real State Authority/nativeForwardPool/ForwardLatch candidates without waiting for page-local pools. Browser ledger opening remains separate to avoid unsynced trades.'
+      rule: 'v10.1.7c scanned real State Authority/nativeForwardPool/ForwardLatch candidates without waiting for page-local pools. Server paper ledger is preserved and synced down to the page when available.'
     };
     lastV950PaperEntryVisibilityView = view.visibilityBridge;
     lastV950CandleStoreResolverView = view.candleResolver;
@@ -7400,6 +7471,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
     }
   }
   const v957ProofBefore = { authorityRows: authorityRows.length, freshPagePoolRows: freshPagePoolRows.length, latchRows: latchRows.length, nativePoolRows: nativePoolRows.length, healthPoolRows: healthPoolRows.length, rowsOverride: safeArray(rowsOverride).length, runnerCandidateRows: runnerCandidateRows.length };
+  const preservedOpenTradesBeforePageScan = v1019MergeOpenTradeRows(lastV948EntryEngineView?.openedTrades, lastTradeExport?.openTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
   try {
     const view = await pageEval(async ({ rows, runnerRows, cfg, reasonText }) => {
       const startedAt = Date.now();
@@ -7835,6 +7907,14 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
     }, { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES, v1011PrimeProof } });
     lastV948EntryEngineView = view || v948EmptyEntryView('empty-page-view');
     if (lastV948EntryEngineView && typeof lastV948EntryEngineView === 'object') {
+      const mergedOpenTrades = v1019MergeOpenTradeRows(preservedOpenTradesBeforePageScan, lastV948EntryEngineView.openedTrades);
+      if (mergedOpenTrades.length) {
+        lastV948EntryEngineView.openedTrades = mergedOpenTrades;
+        lastV948EntryEngineView.openTradesTotal = mergedOpenTrades.length;
+        lastV948EntryEngineView.openPositions = Math.max(v952Num(lastV948EntryEngineView.openPositions), mergedOpenTrades.length);
+        lastV948EntryEngineView.paperSignals = Math.max(v952Num(lastV948EntryEngineView.paperSignals), mergedOpenTrades.length);
+        try { lastTradeExport = buildTradeExport({ openTrades: mergedOpenTrades, closedTrades: safeArray(lastTradeExport?.closedTrades) }); } catch (_) {}
+      }
       lastV948EntryEngineView.v957ActivationProof = {
         schema: 'alps.v957ActivationProof.view.v1',
         version: FINAL_V930_VERSION,
@@ -7861,8 +7941,16 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
     else log(`v9.5.0 Paper Entry Visibility scanned=${lastV948EntryEngineView.scanned || 0} opened=0 topReject=${lastV948EntryEngineView.topRejectedReason || '—'} reason=${reason}`);
     return lastV948EntryEngineView;
   } catch (e) {
+    const preservedOpenTrades = v1019MergeOpenTradeRows(lastV948EntryEngineView?.openedTrades, lastTradeExport?.openTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
     lastV948EntryEngineView = v948EmptyEntryView('engine-exception');
     lastV948EntryEngineView.error = e.message;
+    if (preservedOpenTrades.length) {
+      lastV948EntryEngineView.openedTrades = preservedOpenTrades;
+      lastV948EntryEngineView.openTradesTotal = preservedOpenTrades.length;
+      lastV948EntryEngineView.openPositions = preservedOpenTrades.length;
+      lastV948EntryEngineView.paperSignals = preservedOpenTrades.length;
+      try { lastTradeExport = buildTradeExport({ openTrades: preservedOpenTrades, closedTrades: safeArray(lastTradeExport?.closedTrades) }); } catch (_) {}
+    }
     log(`v9.5.0 Paper Entry Visibility failed (${reason}):`, e.message);
     return lastV948EntryEngineView;
   }
@@ -7977,6 +8065,8 @@ function v1001MergeReportEntryRowsIntoLedgers(rawTradeLedgers, report = {}) {
     ['report.zonePersistenceEntry.openedTrades', report?.zonePersistenceEntry?.openedTrades],
     ['report.paperEntryActivation.openedTrades', report?.paperEntryActivation?.openedTrades],
     ['lastV948EntryEngineView.openedTrades', lastV948EntryEngineView?.openedTrades],
+    ['lastV1017cPaperEntryAuthorityBridge.openedTrades', lastV1017cPaperEntryAuthorityBridgeView?.openedTrades],
+    ['lastTradeExport.openTrades', lastTradeExport?.openTrades],
     ['lastTradeLifecycleTruth.examples', lastV949LifecycleTruthView?.examples]
   ];
 
@@ -8449,6 +8539,19 @@ async function collectReport() {
   await syncOosEvidenceBridgeFromPage('collect-report-pre-enrich').catch(() => null);
   await applyOosEvidenceBridgeToPage('collect-report-pre-enrich').catch(() => null);
   report = v1000ApplyStateAuthorityToView(report, 'collect-report-before-paper-entry');
+  try {
+    const authorityRowsForEntry = safeArray(v1000ActiveRows());
+    const materializedRowsForEntry = safeArray(lastDiscoveryOutputView?.rows);
+    const reportBridgeRows = authorityRowsForEntry.length ? authorityRowsForEntry : materializedRowsForEntry;
+    const bridge = await v1016WithTimeout(v1017cPaperEntryAuthorityBridge(report, 'collect-report-v1017c-paper-entry-authority-bridge', reportBridgeRows), 35000, 'COLLECT_REPORT_V1017C_PAPER_ENTRY_TIMEOUT').catch(e => ({ schema:'alps.v1017cPaperEntryAuthorityBridge.view.v1', version: FINAL_V930_VERSION, installed:true, status:'FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,240), rowsCollected: reportBridgeRows.length, paperOnly:true, liveCapitalExecution:false }));
+    report.v1017cPaperEntryAuthorityBridge = bridge;
+    if (lastV948EntryEngineView) {
+      report.zonePersistenceEntry = lastV948EntryEngineView;
+      report.paperEntryActivation = lastV948EntryEngineView;
+    }
+  } catch (e) {
+    log('v10.1.9 collect-report paper authority bridge skipped:', e.message);
+  }
   await applyForwardLatchToPage('collect-report-pre-entry').catch(() => null);
   await applyV948ZonePersistenceEntryEngine('collect-report-zone-persistence-entry').catch(() => null);
   await applyV949TradeLifecycleGuards('collect-report-trade-lifecycle').catch(() => null);

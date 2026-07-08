@@ -1,7 +1,7 @@
 /**
- * ALPS Runner Trade Export v1.2.1
+ * ALPS Runner Trade Export v1.2.2
  *
- * Exposes real ALPS paper-forward open/closed trades for ALPS reports, including Paper Entry openedTrades export sync.
+ * Exposes real ALPS paper-forward open/closed trades for ALPS reports, including Paper Entry openedTrades export sync and server-authority paper ledger source preservation.
  * This module does not change strategy logic and does not open live execution.
  */
 
@@ -100,7 +100,7 @@ function normalizeOpenTrade(trade, index = 0) {
     ariConfidence: safeNumber(firstValue(trade, ['ariConfidence']) || firstValue(trade?.ariDecision || {}, ['confidence'])),
     regime: firstValue(trade, ['marketRegime', 'regimeSummary']) || firstValue(trade?.regime || {}, ['regime']),
     freshness: firstValue(trade, ['freshnessStatus']),
-    source: trade.__alpsSource || 'ALPS_OPEN_LEDGER'
+    source: firstValue(trade, ['__alpsSource', 'source', 'paperSource']) || 'ALPS_OPEN_LEDGER'
   };
 }
 
@@ -144,7 +144,7 @@ function normalizeClosedTrade(trade, index = 0) {
     ariConfidence: safeNumber(firstValue(trade, ['ariConfidence']) || firstValue(trade?.ariDecision || {}, ['confidence'])),
     regime: firstValue(trade, ['marketRegime', 'regimeSummary']) || firstValue(trade?.regime || {}, ['regime']),
     freshness: firstValue(trade, ['freshnessStatus']),
-    source: trade.__alpsSource || 'ALPS_CLOSED_LEDGER'
+    source: firstValue(trade, ['__alpsSource', 'source', 'paperSource']) || 'ALPS_CLOSED_LEDGER'
   };
 }
 
