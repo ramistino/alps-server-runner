@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.33-chart-truth-close-observation-proof';
+const FINAL_V930_VERSION = 'v10.1.34-canonical-open-scope-hotfix';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -965,8 +965,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     skippedLifecycleChecksJson: lastV1018LifecycleView?.skippedLifecycleChecksJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.skippedLifecycleChecks).slice(0,20)),
     lifecycleClosedThisTick: n(lastV1018LifecycleView?.closedThisTick, 0),
     lifecycleClosedTotal: n(lastV1018LifecycleView?.closedTotal, serverClosedCount),
-    observedPaperSignals: Math.max(n(base.paperSignals, 0), canonicalOpen),
-    observedOpenPositions: Math.max(n(base.openPositions, 0), canonicalOpen),
+    observedPaperSignals: Math.max(n(base.paperSignals, 0), canonicalOpenCount),
+    observedOpenPositions: Math.max(n(base.openPositions, 0), canonicalOpenCount),
     duplicateOpenDelta: Math.max(0, Math.max(n(base.paperSignals,0), n(base.openPositions,0)) - canonicalOpenCount),
     canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
     rejected: Math.max(n(base.rejectedSignals,0), n(base.rejected,0), n(pe.rejected,0), n(bridge.rejected,0)),
@@ -7383,7 +7383,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   );
   const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen });
   const healthLite = {
-    schema: 'alps.healthLite.v10133',
+    schema: 'alps.healthLite.v10134',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -7463,7 +7463,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
       continuityStatus: chartTruth?.chartTruthContinuityStatus || ''
     },
     finalHealthGate: {
-      schema: 'alps.finalHealthGate.v10133.liveLiteOverride',
+      schema: 'alps.finalHealthGate.v10134.liveLiteOverride',
       version: FINAL_V930_VERSION,
       installed: true,
       status: forwardRunnerSync.effectiveFwRunning && canonicalOpen > 0 ? 'PASS' : 'WARN',
@@ -7476,7 +7476,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10133',
+    schema: 'alps.currentHealthLite.snapshot.v10134',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
