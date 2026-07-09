@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.22-authority-ledger-chart-flush';
+const FINAL_V930_VERSION = 'v10.1.24-lifecycle-close-dedupe-prune';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -9166,7 +9166,15 @@ async function ensureRuntimeStarted() {
 // evidence/learning layers see real outcomes. Paper-only; never places or closes live orders.
 let lastV1018LifecycleView = null;
 async function v1018ServerPaperLifecycleTick() {
-  const open = safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && t.status === 'OPEN');
+  // v10.1.23 lifecycle reconnection fix: read from the SAME unified merged ledger the rest of v10.1.19-22
+  // uses (v948 entry view + v1017c bridge + disk-restored lastTradeExport.openTrades). The engine previously
+  // read only the legacy v948 view, so trades restored from persistent memory after a restart were invisible
+  // to monitoring (openMonitored=0 while serverPaperLedger.openTrades=15) and could never close.
+  const open = v1019MergeOpenTradeRows(
+    lastV948EntryEngineView?.openedTrades,
+    lastTradeExport?.openTrades,
+    lastV1017cPaperEntryAuthorityBridgeView?.openedTrades
+  ).filter(t => t && textValue(t.status || 'OPEN').toUpperCase() === 'OPEN');
   const view = {
     schema: 'alps.v1018ServerPaperLifecycle.view.v1',
     version: FINAL_V930_VERSION,
@@ -9232,11 +9240,49 @@ async function v1018ServerPaperLifecycleTick() {
   }
   if (view.closedThisTick > 0) {
     try {
-      const stillOpen = safeArray(lastV948EntryEngineView.openedTrades).filter(t => t && t.status === 'OPEN');
-      const nowClosed = safeArray(lastV948EntryEngineView.openedTrades).filter(t => t && t.status === 'CLOSED');
-      lastTradeExport = buildTradeExport({ openTrades: stillOpen, closedTrades: [...safeArray(lastTradeExport?.closedTrades), ...nowClosed] });
+      // v10.1.24: operate on the UNIFIED merged ledger AND prune by canonical trade key.
+      // v10.1.23 correctly monitored the merged ledger, but a closed trade could still survive as an OPEN
+      // duplicate in the v1017c bridge if the merged object that closed came from v948 or lastTradeExport.
+      // That would let the same closed setup reappear on the next lifecycle tick. Key-based pruning prevents it.
+      const nowClosed = open.filter(t => t && textValue(t.status || '').toUpperCase() === 'CLOSED');
+      const closedKeys = new Set(nowClosed.map(t => v1019OpenTradeDedupeKey(t)).filter(Boolean));
+      const isStillOpenAfterClosePrune = t => {
+        if (!t || typeof t !== 'object') return false;
+        const st = textValue(t.status || 'OPEN').toUpperCase();
+        if (/CLOSED|WIN|LOSS|STOP|TARGET/.test(st)) return false;
+        const key = v1019OpenTradeDedupeKey(t);
+        if (key && closedKeys.has(key)) return false;
+        return true;
+      };
+      const stillOpen = open.filter(isStillOpenAfterClosePrune);
+      const closedSeen = new Set();
+      const mergedClosed = [];
+      for (const row of [...safeArray(lastTradeExport?.closedTrades), ...nowClosed]) {
+        if (!row || typeof row !== 'object') continue;
+        const key = v1019OpenTradeDedupeKey(row) || textValue(row.tradeId || row.id || row.key || JSON.stringify(row).slice(0, 180));
+        if (key && closedSeen.has(key)) continue;
+        if (key) closedSeen.add(key);
+        mergedClosed.push(row);
+      }
+      lastTradeExport = buildTradeExport({ openTrades: stillOpen, closedTrades: mergedClosed });
+      if (!lastV948EntryEngineView || typeof lastV948EntryEngineView !== 'object') lastV948EntryEngineView = { openedTrades: [] };
       lastV948EntryEngineView.openedTrades = stillOpen;
+      if (lastV1017cPaperEntryAuthorityBridgeView && Array.isArray(lastV1017cPaperEntryAuthorityBridgeView.openedTrades)) {
+        lastV1017cPaperEntryAuthorityBridgeView.openedTrades = lastV1017cPaperEntryAuthorityBridgeView.openedTrades.filter(isStillOpenAfterClosePrune);
+        lastV1017cPaperEntryAuthorityBridgeView.closePrune = {
+          version: FINAL_V930_VERSION,
+          closedKeysPruned: closedKeys.size,
+          rule: 'Closed trades are removed from bridge/open ledgers by v1019 canonical trade key, not only by object status.'
+        };
+      }
       view.closedTotal = safeArray(lastTradeExport?.closedTrades).length;
+      view.closeWriteBack = { version: FINAL_V930_VERSION, closedKeysPruned: closedKeys.size, openAfterPrune: stillOpen.length, closedAfterMerge: mergedClosed.length };
+      // v10.1.23: persist immediately after every close — waiting for the next report cycle left closed
+      // results memory-only and vulnerable to the exact restart-wipe this system already suffered once.
+      try {
+        await fsp.mkdir(REPORT_DIR, { recursive: true });
+        await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2));
+      } catch (persistErr) { view.lastError = ('PERSIST_AFTER_CLOSE_FAILED: ' + textValue(persistErr.message)).slice(0, 160); }
     } catch (e) { view.lastError = textValue(e && e.message || e).slice(0, 160); }
   }
   lastV1018LifecycleView = view;
