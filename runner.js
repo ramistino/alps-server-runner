@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.34-canonical-open-scope-hotfix';
+const FINAL_V930_VERSION = 'v10.1.37-close-result-risk-ledger-sync';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -559,6 +559,41 @@ function v10131MergeClosedTradeRows(...groups) {
     }
   }
   return out;
+}
+
+
+// v10.1.37 — initial risk guard + closed result normalization.
+// Active stop is allowed to equal entry only AFTER a breakeven/profit-lock move. Opening plans must
+// always carry a positive initial risk and closed rows must carry result/pnl proof for evaluation.
+function v10137FiniteNumber(value, fallback = null) {
+  const x = Number(value);
+  return Number.isFinite(x) ? x : fallback;
+}
+function v10137ValidInitialRiskPlan(direction, entry, stop, target) {
+  const d = normalizeDirection(direction || '');
+  const e = v10137FiniteNumber(entry, null);
+  const s = v10137FiniteNumber(stop, null);
+  const tg = v10137FiniteNumber(target, null);
+  const minAbs = Number.isFinite(e) ? Math.max(Math.abs(e) * 1e-10, 1e-12) : 1e-12;
+  const risk = Math.abs(e - s);
+  const reward = Math.abs(tg - e);
+  const sideOk = d === 'LONG' ? (s < e && tg > e) : d === 'SHORT' ? (s > e && tg < e) : false;
+  return {
+    ok: !!(sideOk && Number.isFinite(risk) && Number.isFinite(reward) && risk > minAbs && reward > minAbs),
+    direction: d, entry: e, stop: s, target: tg, initialRisk: risk, reward, minAbs,
+    reason: sideOk ? 'OK' : 'INVALID_STOP_TARGET_SIDE_OR_DIRECTION'
+  };
+}
+function v10137CloseResultFields({ direction, entry, exitPrice, initialRisk, closeReason }) {
+  const d = normalizeDirection(direction || '');
+  const e = v10137FiniteNumber(entry, null);
+  const x = v10137FiniteNumber(exitPrice, null);
+  const r = v10137FiniteNumber(initialRisk, null);
+  const signedMove = d === 'SHORT' ? (e - x) : (x - e);
+  const pnlBps = Number.isFinite(e) && e !== 0 && Number.isFinite(signedMove) ? Number((signedMove / Math.abs(e) * 10000).toFixed(4)) : null;
+  const resultR = Number.isFinite(r) && r > 0 && Number.isFinite(signedMove) ? Number((signedMove / r).toFixed(4)) : null;
+  const result = Number.isFinite(signedMove) ? (signedMove > 0 ? 'WIN' : signedMove < 0 ? 'LOSS' : 'BREAKEVEN') : '';
+  return { result, pnlBps, resultR, signedMove, exitReason: closeReason || '' };
 }
 
 // v10.1.32 — distinguish raw browser fwRunning from effective server-forward activity.
@@ -912,8 +947,16 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const serverOpenCount = v10116CountOpenTrades();
   const serverClosedCount = v10116CountClosedTrades();
   const currentHealthOpenCount = v10122CurrentHealthPaperOpen(base, pe, bridge);
-  const canonicalOpenCount = Math.max(serverOpenCount, currentHealthOpenCount);
-  const paperLedgerStatus = v10122PaperLedgerStatus(serverOpenCount, currentHealthOpenCount, serverClosedCount);
+  const serverLedgerAuthority = !!(lastTradeExport && (safeArray(lastTradeExport.openTrades).length > 0 || safeArray(lastTradeExport.closedTrades).length > 0));
+  const canonicalOpenCount = serverLedgerAuthority ? serverOpenCount : Math.max(serverOpenCount, currentHealthOpenCount);
+  const staleCurrentHealthOpenDelta = Math.max(0, currentHealthOpenCount - serverOpenCount);
+  // v10.1.35 compatibility guard: older v10.1.33 report-authority code referenced `canonicalOpen`
+  // while the corrected canonical count is `canonicalOpenCount`. Keeping this local alias prevents
+  // any legacy compact/report path from crashing /runner/health-lite with ReferenceError.
+  const canonicalOpen = canonicalOpenCount;
+  const paperLedgerStatus = serverLedgerAuthority
+    ? (staleCurrentHealthOpenDelta > 0 ? 'SERVER_LEDGER_AUTHORITY_CURRENTHEALTH_OPEN_STALE_AUDIT_ONLY' : 'SERVER_LEDGER_SYNCED')
+    : v10122PaperLedgerStatus(serverOpenCount, currentHealthOpenCount, serverClosedCount);
   const chartRowsCount = safeArray(chartView.candles).length;
   const chartTradesCount = safeArray(chartView.trades).length;
   const compactForwardSync = truthSeed.forwardRunnerSync || v10132ForwardActivityView({ base, nativeRows:n(pool.totalCandidates,0), latchRows:Math.max(n(latch.size,0), safeArray(forwardLatchState?.candidates).length), paperEntrySeen:Math.max(n(pe.candidatesSeen,0), n(bridge.candidatesSeen,0)), canonicalOpen:canonicalOpenCount });
@@ -955,7 +998,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     currentHealthPaperOpen: currentHealthOpenCount,
     canonicalPaperOpen: canonicalOpenCount,
     paperLedgerStatus,
-    paperLedgerMismatch: canonicalOpenCount !== serverOpenCount,
+    paperLedgerMismatch: serverLedgerAuthority ? false : (canonicalOpenCount !== serverOpenCount),
     serverPaperLedgerClosed: serverClosedCount,
     lifecycleOpenMonitored: n(lastV1018LifecycleView?.openMonitored, 0),
     lifecyclePriceChecks: n(lastV1018LifecycleView?.priceChecks, 0),
@@ -963,11 +1006,15 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     lifecyclePriceCheckSkips: n(lastV1018LifecycleView?.priceCheckSkips, 0),
     lifecyclePriceCheckCoverageStatus: lastV1018LifecycleView?.priceCheckCoverageStatus || '',
     skippedLifecycleChecksJson: lastV1018LifecycleView?.skippedLifecycleChecksJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.skippedLifecycleChecks).slice(0,20)),
+    closeExecutionProofJson: lastV1018LifecycleView?.closeExecutionProofJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.closeExecutionProof).slice(0,20)),
+    stopTargetTouchProofJson: lastV1018LifecycleView?.stopTargetTouchProofJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.stopTargetTouchProof).slice(0,20)),
+    closeWritebackStatus: lastV1018LifecycleView?.closeWritebackStatus || '',
     lifecycleClosedThisTick: n(lastV1018LifecycleView?.closedThisTick, 0),
     lifecycleClosedTotal: n(lastV1018LifecycleView?.closedTotal, serverClosedCount),
-    observedPaperSignals: Math.max(n(base.paperSignals, 0), canonicalOpenCount),
-    observedOpenPositions: Math.max(n(base.openPositions, 0), canonicalOpenCount),
-    duplicateOpenDelta: Math.max(0, Math.max(n(base.paperSignals,0), n(base.openPositions,0)) - canonicalOpenCount),
+    observedPaperSignals: serverLedgerAuthority ? canonicalOpenCount : Math.max(n(base.paperSignals, 0), canonicalOpenCount),
+    observedOpenPositions: serverLedgerAuthority ? canonicalOpenCount : Math.max(n(base.openPositions, 0), canonicalOpenCount),
+    staleCurrentHealthOpenDelta,
+    duplicateOpenDelta: serverLedgerAuthority ? 0 : Math.max(0, Math.max(n(base.paperSignals,0), n(base.openPositions,0)) - canonicalOpenCount),
     canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
     rejected: Math.max(n(base.rejectedSignals,0), n(base.rejected,0), n(pe.rejected,0), n(bridge.rejected,0)),
     maxEntriesPerTick: v10116First(pe.maxEntriesPerTick, bridge.maxEntriesPerTick, V948_ENTRY_MAX_PER_TICK),
@@ -1002,8 +1049,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     reportRefreshStatus: base.v10122ReportRefreshStatus || '',
     reportRefreshError: /FAST_REFRESHED/i.test(textValue(base.v10122ReportRefreshStatus || '')) ? '' : (base.v10122ReportRefreshError || ''),
     lastError: base.lastError && !/V10116_COMPACT_COLLECT_REPORT_TIMEOUT/.test(String(base.lastError)) ? base.lastError : '',
-    openTradeSummaryJson: v10116FlatJson(openTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction:normalizeDirection(t.direction||t.side||''), entry:t.entry||t.entryPrice, stop:t.stop||t.stopPrice, target:t.target||t.targetPrice, status:t.status||'OPEN', source:t.source||t.__alpsSource||'' }))),
-    closedTradeSummaryJson: v10116FlatJson(closedTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', result:t.result||'', pnlBps:t.pnlBps, status:t.status||'CLOSED' })))
+    openTradeSummaryJson: v10116FlatJson(openTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction:normalizeDirection(t.direction||t.side||''), entry:t.entry||t.entryPrice, initialStop:t.initialStop||t.openedStop||'', stop:t.stop||t.stopPrice, target:t.target||t.targetPrice, initialRisk:t.initialRisk||'', riskGuardStatus:t.riskGuardStatus||'', breakevenApplied:!!(t.breakevenApplied||t.breakEvenMoved), profitLockApplied:!!(t.profitLockApplied||t.profitLocked), status:t.status||'OPEN', source:t.source||t.__alpsSource||'' }))),
+    closedTradeSummaryJson: v10116FlatJson(closedTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction:normalizeDirection(t.direction||t.side||''), entry:t.entry||t.entryPrice, exit:t.exit||t.exitPrice, closeReason:t.closeReason||t.exitReason||'', result:t.result||'', resultR:t.resultR, pnlBps:t.pnlBps, status:t.status||'CLOSED' })))
   };
 }
 function v10116CompactReport(seed = {}, chart = null, source = 'chatgpt-compact') {
@@ -7362,7 +7409,9 @@ function v10128BuildHealthLite(source = 'health-lite') {
   const exportCounts = tradeExportCounts(lastTradeExport || {});
   const canonicalOpenRows = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
   const observedOpenSnapshot = Math.max(n(base.openPositions,0), n(base.paperSignals,0));
-  const canonicalOpen = Math.max(exportCounts.open, canonicalOpenRows.length);
+  const serverLedgerAuthorityLite = !!(lastTradeExport && (exportCounts.open > 0 || exportCounts.closed > 0));
+  const canonicalOpenCountLite = serverLedgerAuthorityLite ? exportCounts.open : Math.max(exportCounts.open, canonicalOpenRows.length);
+  const staleCurrentHealthOpenDeltaLite = serverLedgerAuthorityLite ? Math.max(0, observedOpenSnapshot - exportCounts.open) : 0;
   const nativeRows = n(lastNativeForwardPoolView?.totalCandidates || lastNativeForwardPoolView?.rows || lastNativeForwardPoolView?.candidates?.length || base?.nativeForwardPool?.totalCandidates || base.candidates, 0);
   const latchRows = n(lastForwardLatchView?.size || lastForwardLatchView?.rows || lastForwardLatchView?.candidates?.length || base?.forwardLatch?.size || nativeRows, 0);
   const chartTruth = lastChartView ? {
@@ -7381,9 +7430,9 @@ function v10128BuildHealthLite(source = 'health-lite') {
     n(lastV1017cPaperEntryAuthorityBridgeView?.candidatesSeen || lastV1017cPaperEntryAuthorityBridgeView?.scanned, 0),
     n(base?.paperEntryVisibility?.candidatesSeen || base?.paperEntryVisibilityCandidatesSeen, 0)
   );
-  const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen });
+  const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen: canonicalOpenCountLite });
   const healthLite = {
-    schema: 'alps.healthLite.v10134',
+    schema: 'alps.healthLite.v10137',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -7398,12 +7447,13 @@ function v10128BuildHealthLite(source = 'health-lite') {
     forwardLatchSize: latchRows,
     paperEntryVisibilityCandidatesSeen: paperEntrySeen,
     forwardRunnerSync,
-    paperSignals: canonicalOpen,
-    openPositions: canonicalOpen,
+    paperSignals: canonicalOpenCountLite,
+    openPositions: canonicalOpenCountLite,
     closedTrades: Math.max(n(base.closedTrades,0), exportCounts.closed),
-    observedPaperSignals: Math.max(n(base.paperSignals, 0), canonicalOpen),
-    observedOpenPositions: Math.max(n(base.openPositions, 0), canonicalOpen),
-    duplicateOpenDelta: Math.max(0, observedOpenSnapshot - canonicalOpen),
+    observedPaperSignals: serverLedgerAuthorityLite ? canonicalOpenCountLite : Math.max(n(base.paperSignals, 0), canonicalOpenCountLite),
+    observedOpenPositions: serverLedgerAuthorityLite ? canonicalOpenCountLite : Math.max(n(base.openPositions, 0), canonicalOpenCountLite),
+    staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite,
+    duplicateOpenDelta: serverLedgerAuthorityLite ? 0 : Math.max(0, observedOpenSnapshot - canonicalOpenCountLite),
     canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
     rejected: n(base.rejected,0),
     rejectedSignals: n(base.rejectedSignals,0),
@@ -7424,18 +7474,19 @@ function v10128BuildHealthLite(source = 'health-lite') {
     reportAuthority: null,
     currentHealth: null,
     serverPaperLedger: {
-      openTrades: canonicalOpen,
+      openTrades: canonicalOpenCountLite,
       closedTrades: exportCounts.closed,
-      canonicalOpen,
-      status: canonicalOpen > 0 ? 'SERVER_LEDGER_SYNCED' : 'WAITING_FOR_OPEN_TRADES'
+      canonicalOpen: canonicalOpenCountLite,
+      status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? (staleCurrentHealthOpenDeltaLite > 0 ? 'SERVER_LEDGER_AUTHORITY_CURRENTHEALTH_OPEN_STALE_AUDIT_ONLY' : 'SERVER_LEDGER_SYNCED') : 'WAITING_FOR_OPEN_TRADES'
     },
     paperLedger: {
-      open: canonicalOpen,
-      currentHealthOpen: canonicalOpen,
-      canonicalOpen,
+      open: canonicalOpenCountLite,
+      currentHealthOpen: canonicalOpenCountLite,
+      canonicalOpen: canonicalOpenCountLite,
       closed: exportCounts.closed,
-      status: canonicalOpen > 0 ? 'SERVER_LEDGER_SYNCED' : 'WAITING_FOR_OPEN_TRADES',
-      mismatch: false
+      status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? (staleCurrentHealthOpenDeltaLite > 0 ? 'SERVER_LEDGER_AUTHORITY_CURRENTHEALTH_OPEN_STALE_AUDIT_ONLY' : 'SERVER_LEDGER_SYNCED') : 'WAITING_FOR_OPEN_TRADES',
+      mismatch: false,
+      staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite
     },
     chartTruth,
     chartTruthContinuityStatus: chartTruth?.chartTruthContinuityStatus || '',
@@ -7462,12 +7513,33 @@ function v10128BuildHealthLite(source = 'health-lite') {
       lastNonZeroChartCandles: safeArray(lastNonZeroChartView?.candles).length,
       continuityStatus: chartTruth?.chartTruthContinuityStatus || ''
     },
+    v10135CanonicalOpenCompatGuard: {
+      installed: true,
+      purpose: 'Compatibility guard preventing ReferenceError canonicalOpen is not defined in reportAuthority/health-lite paths.',
+      canonicalOpenCount: canonicalOpenCountLite,
+      legacyAliasGuarded: true
+    },
+    v10136CloseExecutionProof: {
+      installed: true,
+      purpose: 'Expose per-open-trade close observation proof using last closed candle high/low, stop/target hit flags, and close writeback status.',
+      openMonitored: n(lastV1018LifecycleView?.openMonitored, 0),
+      closeWritebackStatus: lastV1018LifecycleView?.closeWritebackStatus || '',
+      closeProofRows: safeArray(lastV1018LifecycleView?.closeExecutionProof).length,
+      stopTargetTouches: safeArray(lastV1018LifecycleView?.stopTargetTouchProof).length
+    },
+    v10137CloseResultRiskLedgerSync: {
+      installed: true,
+      purpose: 'Block zero-initial-risk entries, preserve initial risk after breakeven stop moves, attach result/pnlBps to every closed trade, and prefer server ledger counts over stale currentHealth open snapshots.',
+      staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite,
+      serverLedgerAuthority: serverLedgerAuthorityLite,
+      closedTrades: exportCounts.closed
+    },
     finalHealthGate: {
-      schema: 'alps.finalHealthGate.v10134.liveLiteOverride',
+      schema: 'alps.finalHealthGate.v10137.liveLiteOverride',
       version: FINAL_V930_VERSION,
       installed: true,
-      status: forwardRunnerSync.effectiveFwRunning && canonicalOpen > 0 ? 'PASS' : 'WARN',
-      nextRequiredAction: forwardRunnerSync.effectiveFwRunning && canonicalOpen > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction,
+      status: forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'PASS' : 'WARN',
+      nextRequiredAction: forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction,
       rule: 'Health-lite final gate trusts currentHealth authority: native pool/latch + paper entry/ledger proof means effective forward is active even if the raw browser flag is false.'
     }
   };
@@ -7476,7 +7548,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10134',
+    schema: 'alps.currentHealthLite.snapshot.v10137',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -7496,6 +7568,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     observedPaperSignals: healthLite.observedPaperSignals,
     observedOpenPositions: healthLite.observedOpenPositions,
     duplicateOpenDelta: healthLite.duplicateOpenDelta,
+    staleCurrentHealthOpenDelta: healthLite.staleCurrentHealthOpenDelta || 0,
     canonicalOpenSource: healthLite.canonicalOpenSource,
     rejected: healthLite.rejected,
     serverPaperLedgerOpen: healthLite.serverPaperLedger.openTrades,
@@ -7511,6 +7584,9 @@ function v10128BuildHealthLite(source = 'health-lite') {
     lifecyclePriceCheckSkips: n(healthLite.v1018ServerPaperLifecycle?.priceCheckSkips, 0),
     lifecyclePriceCheckCoverageStatus: healthLite.v1018ServerPaperLifecycle?.priceCheckCoverageStatus || '',
     skippedLifecycleChecks: safeArray(healthLite.v1018ServerPaperLifecycle?.skippedLifecycleChecks).slice(0, 8),
+    closeExecutionProof: safeArray(healthLite.v1018ServerPaperLifecycle?.closeExecutionProof).slice(0, 8),
+    stopTargetTouchProof: safeArray(healthLite.v1018ServerPaperLifecycle?.stopTargetTouchProof).slice(0, 8),
+    closeWritebackStatus: healthLite.v1018ServerPaperLifecycle?.closeWritebackStatus || '',
     sourceOfTruth: 'currentHealth',
     authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY'
   };
@@ -8655,6 +8731,14 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
         return Number.isFinite(x) ? x : fallback;
       }
       function finite(v){ return Number.isFinite(Number(v)); }
+      function v10137ValidInitialRiskPlan(direction, entry, stop, target) {
+        const d = text(direction).toUpperCase() === 'BUY' ? 'LONG' : (text(direction).toUpperCase() === 'SELL' ? 'SHORT' : text(direction).toUpperCase());
+        const e = num(entry, null), s = num(stop, null), tg = num(target, null);
+        const minAbs = finite(e) ? Math.max(Math.abs(e) * 1e-10, 1e-12) : 1e-12;
+        const risk = Math.abs(e - s), reward = Math.abs(tg - e);
+        const sideOk = d === 'LONG' ? (s < e && tg > e) : d === 'SHORT' ? (s > e && tg < e) : false;
+        return { ok: !!(sideOk && finite(risk) && finite(reward) && risk > minAbs && reward > minAbs), direction:d, entry:e, stop:s, target:tg, initialRisk:risk, reward, minAbs, reason: sideOk ? 'OK' : 'INVALID_STOP_TARGET_SIDE_OR_DIRECTION' };
+      }
       function recordGuard(err, where){
         const msg = text(err && err.message || err);
         state.numericGuard.guardedToFixedErrors = Number(state.numericGuard.guardedToFixedErrors || 0) + 1;
@@ -9043,7 +9127,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       function hasDuplicate(k, pair, tf){ const open = arr(globalThis.openPositions).concat(arr(globalThis.openTrades)).concat(arr(globalThis.paperSignals)); return open.some(x => text(x.__alpsV948Key || x.tradeId || x.key || '').toUpperCase() === k || (pairOf(x)===pair && tfOf(x)===tf && /OPEN|ACTIVE|PAPER/i.test(text(x.status || 'OPEN')))); }
       function makeTrade(c, d, srcPath){
         const k=keyOf(c); const pair=pairOf(c), tf=tfOf(c); const now=Date.now(); const id=`V948_${now}_${pair}_${tf}_${rootOf(c)}_${text(c.exit || c.exitName || 'GENERIC').replace(/[^A-Z0-9]+/gi,'_').slice(0,24)}`;
-        return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, stop:d.stop, stopPrice:d.stop, target:d.target, targetPrice:d.target, rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v10.1.6-health-paper-entry-through-state-authority', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened after v10 State Authority candidate propagation, fresh candidate dedupe, featureSnapshot/IndexedDB-priority entry construction, finite stop/target validation, and valid recent zone persistence checks.' };
+        const riskPlan = v10137ValidInitialRiskPlan(d.direction, d.entry, d.stop, d.target); return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, initialStop:d.stop, openedStop:d.stop, stop:d.stop, stopPrice:d.stop, initialTarget:d.target, openedTarget:d.target, target:d.target, targetPrice:d.target, initialRisk:riskPlan.initialRisk, riskGuardStatus:riskPlan.ok?'VALID_INITIAL_RISK':'INVALID_INITIAL_RISK_BLOCKED', rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v10.1.6-health-paper-entry-through-state-authority', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened after v10 State Authority candidate propagation, fresh candidate dedupe, featureSnapshot/IndexedDB-priority entry construction, finite stop/target validation, positive initial-risk guard, and valid recent zone persistence checks.' };
       }
       const candidates = []; const seenCandidates = new Set(); const candidateSources = {}; const staleSkipped = { latch:0, page:0, duplicate:0, invalid:0 };
       function pushCandidate(c, source){ if(!c || typeof c!=='object') return; const p=pairOf(c), tf=tfOf(c); if(!p || !tf) { staleSkipped.invalid++; return; } const k=keyOf(c); if(seenCandidates.has(k)) { staleSkipped.duplicate++; return; } seenCandidates.add(k); candidates.push({...c,__candidateSource:source}); candidateSources[source]=(candidateSources[source]||0)+1; }
@@ -9067,7 +9151,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       function reject(c, reason, extra={}){ const r=reason || 'UNKNOWN_REJECT'; rejectedReasonCounts[r]=(rejectedReasonCounts[r]||0)+1; if(rejections.length<50) rejections.push({ key:keyOf(c), pair:pairOf(c), timeframe:tfOf(c), strategy:text(c.strategy || c.stratName || c.name), reason:r, ...extra }); }
       const maxOpen = Math.max(0, Number(cfg.maxEntriesPerTick || 0));
       const deferredQueue = [];
-      for (const c of candidates) { scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll, c); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } if (maxOpen > 0 && opened.length >= maxOpen) { if (deferredQueue.length < 250) deferredQueue.push({ key:k, pair, timeframe:tf, direction:d.direction, entry:d.entry, stop:d.stop, target:d.target, currentPrice:d.price, reason:'THROTTLED_TO_DEFERRED_QUEUE', maxEntriesPerTick:maxOpen }); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
+      for (const c of candidates) { scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll, c); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } if (maxOpen > 0 && opened.length >= maxOpen) { if (deferredQueue.length < 250) deferredQueue.push({ key:k, pair, timeframe:tf, direction:d.direction, entry:d.entry, stop:d.stop, target:d.target, currentPrice:d.price, reason:'THROTTLED_TO_DEFERRED_QUEUE', maxEntriesPerTick:maxOpen }); continue; } const riskPlan=v10137ValidInitialRiskPlan(d.direction,d.entry,d.stop,d.target); if(!riskPlan.ok){ reject(c,'INVALID_INITIAL_RISK',{...d, riskGuardStatus:riskPlan.reason, initialRisk:riskPlan.initialRisk}); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
       state.lastRunAt=Date.now(); state.scanned=scanned; state.openedTrades=opened.concat(arr(state.openedTrades)).slice(0,50); state.rejections=rejections; state.rejectedReasonCounts=rejectedReasonCounts; state.candlesStoresFound=candlesAll.length; state.candidatesSeen=candidates.length;
       const topRejectedReason = Object.entries(rejectedReasonCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
       const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, staleSkipped, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Object.values(rejectedReasonCounts).reduce((acc,v)=>acc+Number(v||0),0), acceptedButDeferred:deferredQueue.length, throttleQueue:{ schema:'alps.v10115ThrottleDeferredQueue.view.v1', version:cfg.version, installed:true, queued:deferredQueue.length, rows:deferredQueue.slice(0,80), status:deferredQueue.length?'VALID_SIGNALS_DEFERRED_NOT_REJECTED':'EMPTY', rule:'maxEntriesPerTick is throttle-only; valid entries are deferred, not rejected.' }, openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, freshCandidateDedupe:{currentNativeRows:currentRows.length, candidatesAfterDedupe:candidates.length, staleSkipped, policy: currentRows.length>0?'SCAN_CURRENT_NATIVE_POOL_ONLY_LATCH_HISTORY_FALLBACK_DISABLED':'NO_CURRENT_NATIVE_POOL_USED_FALLBACK_SOURCES'}, v954EntryConstructionAudit:{installed:true, entryBuilderPriority:['candidate.featureSnapshot','candidate.setupPrice/currentPrice','indexedDB candles','runtime candles','localStorage fallback'], preciseRejectReasons:['ENTRY_UNDEFINED','STOP_TARGET_UNDEFINED','ZONE_MID_UNDEFINED','DIRECTION_UNDEFINED','DIRECTION_MISMATCH','OUTSIDE_ZONE','STALE_CANDIDATE','DUPLICATE','CANDLES_NOT_FOUND','INVALIDATION_HIT'], invalidationOnlyAfterNumericPlan:true}, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery', v1011PaperEntryAuthorityRouter:v1011PrimeProof };
@@ -9502,6 +9586,7 @@ async function v1018ServerPaperLifecycleTick() {
     openMonitored: open.length,
     priceCheckAttempts: open.length,
     priceChecks: 0, priceCheckSkips: 0, skippedLifecycleChecks: [],
+    closeExecutionProof: [], stopTargetTouchProof: [], closeWritebackStatus: 'NO_CLOSE_TRIGGER_DETECTED',
     breakevenApplied: 0, profitLockApplied: 0,
     closedThisTick: 0, closedTotal: safeArray(lastTradeExport?.closedTrades).length,
     lastError: '',
@@ -9509,16 +9594,22 @@ async function v1018ServerPaperLifecycleTick() {
   };
   if (!open.length) { lastV1018LifecycleView = view; return view; }
   const priceCache = new Map();
+  const priceProofCache = new Map();
   for (const t of open) {
     try {
       const cacheKey = `${t.pair}_${t.timeframe}`;
-      let lastPrice = priceCache.get(cacheKey);
+      let priceProof = priceProofCache.get(cacheKey) || null;
+      let lastPrice = priceProof ? v931Num(priceProof.close, null) : priceCache.get(cacheKey);
       if (!Number.isFinite(lastPrice)) {
         const fetched = await v1012FetchBinanceKlines(t.pair, t.timeframe, 2).catch(() => null);
         const rows = safeArray(fetched?.rows);
         const lastRow = rows[rows.length - 1];
-        lastPrice = v931Num(lastRow?.close, null);
-        if (Number.isFinite(lastPrice)) priceCache.set(cacheKey, lastPrice);
+        lastPrice = v931Num(lastRow?.close ?? lastRow?.c, null);
+        const high = v931Num(lastRow?.high ?? lastRow?.h, lastPrice);
+        const low = v931Num(lastRow?.low ?? lastRow?.l, lastPrice);
+        const openPrice = v931Num(lastRow?.open ?? lastRow?.o, lastPrice);
+        priceProof = { source:'v1012FetchBinanceKlines', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', open:openPrice, high, low, close:lastPrice, candleTime:lastRow?.time || lastRow?.openTime || lastRow?.t || lastRow?.timestamp || null, rows: rows.length };
+        if (Number.isFinite(lastPrice)) { priceCache.set(cacheKey, lastPrice); priceProofCache.set(cacheKey, priceProof); }
       }
       if (!Number.isFinite(lastPrice) || lastPrice <= 0) {
         // v10.1.32 fallback: if the selected chart truth is for the same pair/timeframe, use its latest
@@ -9532,7 +9623,8 @@ async function v1018ServerPaperLifecycleTick() {
         const chartPrice = (lp && chartPair === lp && ltf && chartTf === ltf) ? v931Num(chartLast?.close, null) : null;
         if (Number.isFinite(chartPrice) && chartPrice > 0) {
           lastPrice = chartPrice;
-          priceCache.set(cacheKey, lastPrice);
+          priceProof = { source:'chartTruthFallback', pair:lp, timeframe:ltf, open:v931Num(chartLast?.open ?? chartLast?.o, chartPrice), high:v931Num(chartLast?.high ?? chartLast?.h, chartPrice), low:v931Num(chartLast?.low ?? chartLast?.l, chartPrice), close:chartPrice, candleTime:chartLast?.time || chartLast?.openTime || chartLast?.t || chartLast?.timestamp || null, rows: chartRows.length };
+          priceCache.set(cacheKey, lastPrice); priceProofCache.set(cacheKey, priceProof);
         } else {
           view.priceCheckSkips += 1;
           if (view.skippedLifecycleChecks.length < 20) view.skippedLifecycleChecks.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', reason:'PRICE_UNAVAILABLE', source:'v1012FetchBinanceKlines+chartTruthFallback' });
@@ -9540,15 +9632,43 @@ async function v1018ServerPaperLifecycleTick() {
         }
       }
       view.priceChecks += 1;
-      const isShort = t.direction === 'SHORT';
-      const stopDist = Math.abs(t.entry - t.stop);
-      const targetDist = Math.abs(t.target - t.entry);
-      if (!(stopDist > 0) || !(targetDist > 0)) {
+      const direction = normalizeDirection(t.direction || t.side || '');
+      const isShort = direction === 'SHORT';
+      const entry = v931Num(t.entry ?? t.entryPrice, null);
+      const stop = v931Num(t.stop ?? t.stopPrice, null);
+      const target = v931Num(t.target ?? t.targetPrice, null);
+      if (Number.isFinite(entry)) t.entry = entry;
+      if (Number.isFinite(stop)) t.stop = stop;
+      if (Number.isFinite(target)) t.target = target;
+      const activeStop = stop;
+      const initialStop = v931Num(t.initialStop ?? t.openedStop ?? t.originalStop, null);
+      const initialStopDist = Number.isFinite(initialStop) ? Math.abs(entry - initialStop) : null;
+      const activeStopDist = Math.abs(entry - activeStop);
+      const targetDist = Math.abs(target - entry);
+      const inferredRiskFromTarget = Number.isFinite(targetDist) && targetDist > 0 && Number.isFinite(v931Num(t.rMultiple, null)) && v931Num(t.rMultiple, null) > 0 ? targetDist / v931Num(t.rMultiple, null) : null;
+      const stopDist = (Number.isFinite(initialStopDist) && initialStopDist > 0) ? initialStopDist : ((Number.isFinite(activeStopDist) && activeStopDist > 0) ? activeStopDist : inferredRiskFromTarget);
+      if (!(Number.isFinite(stopDist) && stopDist > 0) || !(targetDist > 0) || !(direction === 'LONG' || direction === 'SHORT')) {
         view.priceCheckSkips += 1;
-        if (view.skippedLifecycleChecks.length < 20) view.skippedLifecycleChecks.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', reason:'INVALID_STOP_TARGET_DISTANCE', entry:t.entry, stop:t.stop, target:t.target });
+        if (view.skippedLifecycleChecks.length < 20) view.skippedLifecycleChecks.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', reason:'INVALID_DIRECTION_OR_STOP_TARGET_DISTANCE', direction, entry, initialStop, activeStop, target, inferredRiskFromTarget });
         continue;
       }
-      const progress = isShort ? (t.entry - lastPrice) / targetDist : (lastPrice - t.entry) / targetDist;
+      t.direction = direction;
+      if (!Number.isFinite(v931Num(t.initialRisk, null)) || v931Num(t.initialRisk, null) <= 0) t.initialRisk = stopDist;
+      const candleHigh = v931Num(priceProof?.high, lastPrice);
+      const candleLow = v931Num(priceProof?.low, lastPrice);
+      const progress = isShort ? (entry - lastPrice) / targetDist : (lastPrice - entry) / targetDist;
+      const proofRow = {
+        tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction,
+        entry, initialStop, activeStopBefore:t.stop, initialRisk:stopDist, target, lastPrice, candleHigh, candleLow, priceSource: priceProof?.source || 'lastPriceOnly', candleTime: priceProof?.candleTime || null,
+        closeStopHit: isShort ? lastPrice >= t.stop : lastPrice <= t.stop,
+        closeTargetHit: isShort ? lastPrice <= target : lastPrice >= target,
+        rangeStopHit: isShort ? candleHigh >= t.stop : candleLow <= t.stop,
+        rangeTargetHit: isShort ? candleLow <= target : candleHigh >= target,
+        progress: Number.isFinite(progress) ? Number(progress.toFixed(4)) : null,
+        distanceToStop: Number.isFinite(lastPrice) ? Number(Math.abs(lastPrice - t.stop).toFixed(8)) : null,
+        distanceToTarget: Number.isFinite(lastPrice) ? Number(Math.abs(target - lastPrice).toFixed(8)) : null,
+        closeReasonPreview: '', closeWritebackStatus: 'NOT_CLOSED_THIS_TICK'
+      };
       // Break-even at 50% progress (only tightens the stop, never loosens):
       if (progress >= 0.5 && !t.breakevenApplied) {
         const newStop = t.entry;
@@ -9561,22 +9681,41 @@ async function v1018ServerPaperLifecycleTick() {
         if ((isShort && lock < t.stop) || (!isShort && lock > t.stop)) { t.stop = lock; }
         t.profitLockApplied = true; view.profitLockApplied += 1;
       }
-      // Close checks (stop first — conservative; then target):
+      // Close checks use the last CLOSED candle high/low, not only close price. Stop-first is conservative when both stop and target touched inside the same closed candle.
       let closeReason = '';
-      if ((isShort && lastPrice >= t.stop) || (!isShort && lastPrice <= t.stop)) closeReason = t.breakevenApplied || t.profitLockApplied ? 'TRAILED_STOP_HIT' : 'STOP_HIT';
-      else if ((isShort && lastPrice <= t.target) || (!isShort && lastPrice >= t.target)) closeReason = 'TARGET_HIT';
+      proofRow.stopAfterTrail = t.stop;
+      proofRow.rangeStopHitAfterTrail = isShort ? candleHigh >= t.stop : candleLow <= t.stop;
+      proofRow.rangeTargetHitAfterTrail = isShort ? candleLow <= t.target : candleHigh >= t.target;
+      proofRow.closeStopHitAfterTrail = isShort ? lastPrice >= t.stop : lastPrice <= t.stop;
+      proofRow.closeTargetHitAfterTrail = isShort ? lastPrice <= t.target : lastPrice >= t.target;
+      if (proofRow.rangeStopHitAfterTrail) closeReason = t.breakevenApplied || t.profitLockApplied ? 'TRAILED_STOP_HIT' : 'STOP_HIT';
+      else if (proofRow.rangeTargetHitAfterTrail) closeReason = 'TARGET_HIT';
+      proofRow.closeReasonPreview = closeReason || 'NO_STOP_TARGET_TOUCH_ON_CLOSED_CANDLE';
+      if (view.closeExecutionProof.length < 20) view.closeExecutionProof.push(proofRow);
+      if ((proofRow.rangeStopHitAfterTrail || proofRow.rangeTargetHitAfterTrail) && view.stopTargetTouchProof.length < 20) view.stopTargetTouchProof.push(proofRow);
       if (closeReason) {
         const exitPrice = closeReason === 'TARGET_HIT' ? t.target : t.stop;
-        const signedMove = isShort ? (t.entry - exitPrice) : (exitPrice - t.entry);
+        const resultFields = v10137CloseResultFields({ direction:t.direction, entry:t.entry, exitPrice, initialRisk:stopDist, closeReason });
+        proofRow.closeWritebackStatus = 'CLOSE_MARKED_PENDING_WRITEBACK';
+        proofRow.exitPrice = exitPrice;
+        proofRow.result = resultFields.result;
+        proofRow.pnlBps = resultFields.pnlBps;
+        proofRow.resultR = resultFields.resultR;
         t.status = 'CLOSED';
         t.closedAt = Date.now();
         t.closedAtIso = new Date().toISOString();
+        t.exit = exitPrice;
         t.exitPrice = exitPrice;
         t.closeReason = closeReason;
-        t.resultR = Number((signedMove / stopDist).toFixed(4));
+        t.exitReason = closeReason;
+        t.result = resultFields.result;
+        t.pnlBps = resultFields.pnlBps;
+        t.pnlPct = resultFields.pnlBps == null ? null : Number((resultFields.pnlBps / 100).toFixed(6));
+        t.resultR = resultFields.resultR;
         t.win = t.resultR > 0;
+        t.closeWritebackStatus = 'CLOSE_MARKED_PENDING_WRITEBACK';
         view.closedThisTick += 1;
-        log(`v10.1.8 SERVER PAPER CLOSE: ${t.pair} ${t.timeframe} ${t.direction} ${closeReason} R=${t.resultR} (paper-only)`);
+        log(`v10.1.37 SERVER PAPER CLOSE: ${t.pair} ${t.timeframe} ${t.direction} ${closeReason} ${resultFields.result} R=${t.resultR} pnlBps=${t.pnlBps} (paper-only)`);
       }
     } catch (e) { view.lastError = textValue(e && e.message || e).slice(0, 160); }
   }
@@ -9624,11 +9763,18 @@ async function v1018ServerPaperLifecycleTick() {
       try {
         await fsp.mkdir(REPORT_DIR, { recursive: true });
         await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2));
-      } catch (persistErr) { view.lastError = ('PERSIST_AFTER_CLOSE_FAILED: ' + textValue(persistErr.message)).slice(0, 160); }
+        for (const row of safeArray(lastTradeExport.closedTrades)) {
+          if (!row.closeWritebackStatus) row.closeWritebackStatus = 'CLOSE_WRITEBACK_PERSISTED';
+        }
+        view.closeWritebackStatus = 'CLOSE_WRITEBACK_PERSISTED';
+      } catch (persistErr) { view.closeWritebackStatus = 'CLOSE_WRITEBACK_PERSIST_FAILED'; view.lastError = ('PERSIST_AFTER_CLOSE_FAILED: ' + textValue(persistErr.message)).slice(0, 160); }
     } catch (e) { view.lastError = textValue(e && e.message || e).slice(0, 160); }
   }
   view.priceCheckCoverageStatus = view.priceChecks === view.openMonitored ? 'FULL_PRICE_CHECK_COVERAGE' : 'PARTIAL_PRICE_CHECK_COVERAGE_WITH_REASONS';
+  if (view.closedThisTick > 0 && view.closeWritebackStatus === 'NO_CLOSE_TRIGGER_DETECTED') view.closeWritebackStatus = 'CLOSE_DETECTED_WRITEBACK_STATUS_UNKNOWN';
   view.skippedLifecycleChecksJson = JSON.stringify(safeArray(view.skippedLifecycleChecks).slice(0, 20));
+  view.closeExecutionProofJson = JSON.stringify(safeArray(view.closeExecutionProof).slice(0, 20));
+  view.stopTargetTouchProofJson = JSON.stringify(safeArray(view.stopTargetTouchProof).slice(0, 20));
   lastV1018LifecycleView = view;
   return view;
 }

@@ -100,6 +100,11 @@ function normalizeOpenTrade(trade, index = 0) {
     ariConfidence: safeNumber(firstValue(trade, ['ariConfidence']) || firstValue(trade?.ariDecision || {}, ['confidence'])),
     regime: firstValue(trade, ['marketRegime', 'regimeSummary']) || firstValue(trade?.regime || {}, ['regime']),
     freshness: firstValue(trade, ['freshnessStatus']),
+    initialStop: safeNumber(firstValue(trade, ['initialStop','openedStop','originalStop'])),
+    initialRisk: safeNumber(firstValue(trade, ['initialRisk','openedRisk','risk'])),
+    riskGuardStatus: firstValue(trade, ['riskGuardStatus']) || '',
+    breakevenApplied: !!firstValue(trade, ['breakevenApplied','breakEvenMoved']),
+    profitLockApplied: !!firstValue(trade, ['profitLockApplied','profitLocked']),
     source: firstValue(trade, ['__alpsSource', 'source', 'paperSource']) || 'ALPS_OPEN_LEDGER'
   };
 }
@@ -139,7 +144,10 @@ function normalizeClosedTrade(trade, index = 0) {
     closedAt,
     mfeBps: safeNumber(firstValue(trade, ['mfeBps'])),
     maeBps: safeNumber(firstValue(trade, ['maeBps'])),
-    exitReason: firstValue(trade, ['exitReason']),
+    exitReason: firstValue(trade, ['exitReason','closeReason','closedBy']),
+    closeReason: firstValue(trade, ['closeReason','exitReason','closedBy']),
+    resultR: safeNumber(firstValue(trade, ['resultR','rMultipleResult','realizedR'])),
+    closeWritebackStatus: firstValue(trade, ['closeWritebackStatus']) || '',
     ariAction: firstValue(trade, ['ariAction']) || firstValue(trade?.ariDecision || {}, ['action']),
     ariConfidence: safeNumber(firstValue(trade, ['ariConfidence']) || firstValue(trade?.ariDecision || {}, ['confidence'])),
     regime: firstValue(trade, ['marketRegime', 'regimeSummary']) || firstValue(trade?.regime || {}, ['regime']),
