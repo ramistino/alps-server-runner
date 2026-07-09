@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.29-health-lite-circular-safe';
+const FINAL_V930_VERSION = 'v10.1.30-canonical-ledger-report-sync';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -446,16 +446,21 @@ let lastV1017cPaperEntryAuthorityBridgeView = null;
 // when rebuilding the zonePersistenceEntry view. These helpers dedupe by candidate/market identity
 // instead of the generated trade id so repeated scans do not reopen the same setup.
 function v1019OpenTradeDedupeKey(t = {}) {
+  // v10.1.30: tradeId is the strongest canonical identity. v10.1.29 could see the SAME tradeId
+  // through lastTradeExport and bridge/open views, but if one copy also had a candidate key, the
+  // old key-first rule treated the duplicate as a different OPEN trade. That inflated health-lite
+  // paperSignals/openPositions/lifecycle monitored counts (10) while the compact server ledger stayed 5.
+  const tradeId = textValue(t.tradeId || t.id || t.orderId || '').toUpperCase().trim();
+  if (tradeId) return `TRADEID|${tradeId}`;
   const candidateKey = textValue(t.key || t.__alpsV948Key || t.__alpsV1019Key || '').toUpperCase();
-  if (candidateKey) return candidateKey;
+  if (candidateKey) return `CANDIDATE|${candidateKey}`;
   const pair = textValue(t.pair || t.baseSymbol || t.symbol || t.sym || '').toUpperCase().split('_')[0].replace(/[^A-Z0-9]/g, '');
   const tf = textValue(t.timeframe || t.tf || t.frame || '').toLowerCase().replace(/\s+/g, '');
   const dirRaw = textValue(t.direction || t.dir || t.side || '').toUpperCase();
   const direction = dirRaw === 'BUY' ? 'LONG' : (dirRaw === 'SELL' ? 'SHORT' : dirRaw);
   const strategy = textValue(t.strategy || t.stratName || t.name || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').slice(0, 80);
   const entry = textValue(t.entry ?? t.entryPrice ?? t.openPrice ?? t.price ?? '').replace(/[,%$≈]/g, '').slice(0, 32);
-  const fallback = textValue(t.tradeId || t.id || '').toUpperCase();
-  return [pair, tf, direction, strategy, entry].filter(Boolean).join('|') || fallback;
+  return [pair, tf, direction, strategy, entry].filter(Boolean).join('|');
 }
 function v1019MergeOpenTradeRows(...groups) {
   const out = [];
@@ -699,12 +704,13 @@ function v10116First(...values) {
   return '';
 }
 function v10116CountOpenTrades() {
-  return Math.max(
-    safeArray(lastTradeExport?.openTrades).length,
-    safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && (!t.status || String(t.status).toUpperCase() === 'OPEN')).length,
-    n(lastV948EntryEngineView?.openTradesTotal, 0),
-    n(lastV1018LifecycleView?.openTrades, 0)
-  );
+  // v10.1.30: count canonical UNIQUE open trades from the merged authority ledger. Do not add
+  // old paperSignals/openPositions snapshots here; they can be cumulative or duplicated across views.
+  return v1019MergeOpenTradeRows(
+    lastTradeExport?.openTrades,
+    lastV948EntryEngineView?.openedTrades,
+    lastV1017cPaperEntryAuthorityBridgeView?.openedTrades
+  ).length;
 }
 function v10116CountClosedTrades() {
   return Math.max(
@@ -837,7 +843,15 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     paperLedgerStatus,
     paperLedgerMismatch: canonicalOpenCount !== serverOpenCount,
     serverPaperLedgerClosed: serverClosedCount,
-    rejected: Math.max(n(base.rejectedSignals,0), n(pe.rejected,0), n(bridge.rejected,0)),
+    lifecycleOpenMonitored: n(lastV1018LifecycleView?.openMonitored, 0),
+    lifecyclePriceChecks: n(lastV1018LifecycleView?.priceChecks, 0),
+    lifecycleClosedThisTick: n(lastV1018LifecycleView?.closedThisTick, 0),
+    lifecycleClosedTotal: n(lastV1018LifecycleView?.closedTotal, serverClosedCount),
+    observedPaperSignals: n(base.paperSignals, 0),
+    observedOpenPositions: n(base.openPositions, 0),
+    duplicateOpenDelta: Math.max(0, Math.max(n(base.paperSignals,0), n(base.openPositions,0)) - canonicalOpenCount),
+    canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
+    rejected: Math.max(n(base.rejectedSignals,0), n(base.rejected,0), n(pe.rejected,0), n(bridge.rejected,0)),
     maxEntriesPerTick: v10116First(pe.maxEntriesPerTick, bridge.maxEntriesPerTick, V948_ENTRY_MAX_PER_TICK),
     deferredQueue: Math.max(n(lastV10115DeferredEntryQueueView?.queued,0), n(pe?.throttleQueue?.queued,0), n(bridge?.throttleQueue?.queued,0)),
     topRejectedReason: topRejected ? `${topRejected[0]}:${topRejected[1]}` : '',
@@ -913,7 +927,10 @@ function v10119HasObjectValue(value) {
 }
 function v10119CurrentHealthSeed(report = {}, source = 'currentHealth-seed') {
   const reportCurrent = v10119HasObjectValue(report.currentHealth) ? report.currentHealth : {};
-  const base = v10119HasObjectValue(lastHealth) ? { ...lastHealth } : { ...reportCurrent };
+  const isLiveLiteAuthority = /healthLite|currentHealthLite/i.test(textValue(report.schema || reportCurrent.schema || report.source || ''));
+  const base = isLiveLiteAuthority
+    ? { ...(v10119HasObjectValue(lastHealth) ? lastHealth : {}), ...(v10119HasObjectValue(report) ? report : {}), ...(v10119HasObjectValue(reportCurrent) ? reportCurrent : {}) }
+    : (v10119HasObjectValue(lastHealth) ? { ...lastHealth } : { ...reportCurrent });
   const seed = {
     ...base,
     effectivePatchVersion: FINAL_V930_VERSION,
@@ -1138,7 +1155,8 @@ function v10118NormalizeReportMarkdown(report = {}, md = '') {
 
 async function v10118BuildCompactMarkdownForEndpoint(url, reason = 'endpoint-md') {
   const compact = await v10116BuildCompactReportForEndpoint(url, reason);
-  return v10118CompactMarkdown({ ...(lastReport || {}), ...(lastHealth || {}), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, v10118ReportAuthority: v10118ReportAuthorityView(lastReport || lastHealth || {}, reason) }, reason);
+  const lite = v10128BuildHealthLite(reason + '-compact-md-authority');
+  return v10118CompactMarkdown({ ...(lastReport || {}), ...(lastHealth || {}), ...lite, nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, v10118ReportAuthority: v10118ReportAuthorityView(lite, reason) }, reason);
 }
 
 async function v10116BuildCompactReportForEndpoint(url, reason = 'endpoint') {
@@ -1163,7 +1181,8 @@ async function v10116BuildCompactReportForEndpoint(url, reason = 'endpoint') {
   if (!chart || !safeArray(chart.candles).length || chartPairMismatch || chartTfMismatch) {
     chart = await v1016WithTimeout(v1010FetchChartTruth(pair, timeframe, limit), 10000, 'V10122_COMPACT_CHART_FLUSH_TIMEOUT').catch(e => ({ schema:'alps.chartTruth.view.v1', version: FINAL_V930_VERSION, ready:false, pair, timeframe, candles:[], trades:[], levels:[], error:textValue(e && e.message || e).slice(0,240), status:'CHART_TRUTH_FLUSH_FAILED' }));
   }
-  return v10116CompactReport({ ...(lastHealth || {}), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, chart, reason);
+  const lite = v10128BuildHealthLite(reason + '-compact-report-authority');
+  return v10116CompactReport({ ...(lastHealth || {}), ...lite, nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, chart, reason);
 }
 function uniqueKeyFromCandidate(c = {}) {
   return [c.sym || c.pair || c.baseSymbol || '', c.timeframe || c.tf || '', c.strategy || c.stratName || c.name || '', c.exit || c.exitName || ''].map(textValue).join('||').toUpperCase();
@@ -7223,7 +7242,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
   const base = v953HealthTruthFromCurrentHealth(lastHealth || {}, source) || {};
   const exportCounts = tradeExportCounts(lastTradeExport || {});
   const canonicalOpenRows = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
-  const canonicalOpen = Math.max(exportCounts.open, canonicalOpenRows.length, n(base.openPositions,0), n(base.paperSignals,0));
+  const observedOpenSnapshot = Math.max(n(base.openPositions,0), n(base.paperSignals,0));
+  const canonicalOpen = Math.max(exportCounts.open, canonicalOpenRows.length);
   const nativeRows = n(lastNativeForwardPoolView?.totalCandidates || lastNativeForwardPoolView?.rows || lastNativeForwardPoolView?.candidates?.length || base?.nativeForwardPool?.totalCandidates || base.candidates, 0);
   const latchRows = n(lastForwardLatchView?.size || lastForwardLatchView?.rows || lastForwardLatchView?.candidates?.length || base?.forwardLatch?.size || nativeRows, 0);
   const chartTruth = lastChartView ? {
@@ -7237,7 +7257,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     error: textValue(lastChartView.error || '')
   } : null;
   const healthLite = {
-    schema: 'alps.healthLite.v10129',
+    schema: 'alps.healthLite.v10130',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -7252,6 +7272,10 @@ function v10128BuildHealthLite(source = 'health-lite') {
     paperSignals: canonicalOpen,
     openPositions: canonicalOpen,
     closedTrades: Math.max(n(base.closedTrades,0), exportCounts.closed),
+    observedPaperSignals: n(base.paperSignals, 0),
+    observedOpenPositions: n(base.openPositions, 0),
+    duplicateOpenDelta: Math.max(0, observedOpenSnapshot - canonicalOpen),
+    canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
     rejected: n(base.rejected,0),
     rejectedSignals: n(base.rejectedSignals,0),
     appUrl: lastHealth?.appUrl || base.appUrl || '',
@@ -7260,7 +7284,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     serverRunner: base.serverRunner || lastHealth?.serverRunner || 'ON',
     pageReady: !!(base.pageReady ?? lastHealth?.pageReady),
     nativeForwardPool: {
-      schema: 'alps.nativeForwardPool.lite.v10129',
+      schema: 'alps.nativeForwardPool.lite.v10130',
       version: FINAL_V930_VERSION,
       totalCandidates: nativeRows,
       watchForward: n(lastNativeForwardPoolView?.watchForward || base?.nativeForwardPool?.watchForward, 0),
@@ -7287,7 +7311,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     chartTruth,
     v1018ServerPaperLifecycle: lastV1018LifecycleView || null,
     effectivePatchVersion: FINAL_V930_VERSION,
-    v10129HealthLiteCircularSafe: {
+    v10130CanonicalLedgerReportSync: {
       installed: true,
       purpose: 'Small circular-safe CORS live health payload for Netlify dashboards. Avoids large /runner/health payload timeouts on Android Chrome and never includes self-references.',
       fullHealthEndpoint: '/runner/health',
@@ -7299,7 +7323,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10129',
+    schema: 'alps.currentHealthLite.snapshot.v10130',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -7313,6 +7337,10 @@ function v10128BuildHealthLite(source = 'health-lite') {
     paperSignals: healthLite.paperSignals,
     openPositions: healthLite.openPositions,
     closedTrades: healthLite.closedTrades,
+    observedPaperSignals: healthLite.observedPaperSignals,
+    observedOpenPositions: healthLite.observedOpenPositions,
+    duplicateOpenDelta: healthLite.duplicateOpenDelta,
+    canonicalOpenSource: healthLite.canonicalOpenSource,
     rejected: healthLite.rejected,
     serverPaperLedgerOpen: healthLite.serverPaperLedger.openTrades,
     serverPaperLedgerClosed: healthLite.serverPaperLedger.closedTrades,
@@ -7402,7 +7430,7 @@ async function createServer() {
         healthTruth.v10118ReportAuthority = v10118ReportAuthorityView(healthTruth, 'health-endpoint-before-send');
         healthTruth.v10119ReportAuthority = healthTruth.v10118ReportAuthority;
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, serverPaperLedger: { openTrades: Math.max(tradeExportCounts(lastTradeExport).open, v1019MergeOpenTradeRows(lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades).length), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null } });
+        return send(res, 200, { ...healthTruth, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
