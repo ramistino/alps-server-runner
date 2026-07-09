@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.32-forward-runner-lifecycle-check-proof';
+const FINAL_V930_VERSION = 'v10.1.33-chart-truth-close-observation-proof';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -359,6 +359,60 @@ let lastEngineHookView = null;
 let lastCircuitBreakerView = null;
 let lastCounterfactualView = null;
 let lastChartView = null;
+let lastNonZeroChartView = null;
+function v10133RememberChartView(view, context = 'chart-truth') {
+  if (!view || typeof view !== 'object') return view;
+  const candles = safeArray(view.candles);
+  if (candles.length > 0) {
+    view.ready = true;
+    view.status = view.status || 'CHART_TRUTH_READY';
+    view.chartTruthContinuityStatus = 'LIVE_CHART_CANDLES_READY';
+    view.chartTruthContext = context;
+    lastChartView = view;
+    lastNonZeroChartView = view;
+    return view;
+  }
+  view.ready = false;
+  view.status = view.status || 'CHART_TRUTH_EMPTY_OR_NOT_FETCHED';
+  view.chartTruthContinuityStatus = lastNonZeroChartView && safeArray(lastNonZeroChartView.candles).length ? 'EMPTY_FETCH_RETAINED_LAST_NONZERO_AVAILABLE' : 'EMPTY_FETCH_NO_NONZERO_FALLBACK';
+  view.chartTruthContext = context;
+  lastChartView = view;
+  return view;
+}
+function v10133OpenTradeChartCandidates(primaryPair='', primaryTf='') {
+  const out = [];
+  const seen = new Set();
+  const add = (pair, timeframe, reason) => {
+    const p = textValue(pair || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    const tf = textValue(timeframe || '').toLowerCase();
+    if (!p || !tf) return;
+    const key = `${p}_${tf}`;
+    if (seen.has(key)) return; seen.add(key); out.push({ pair:p, timeframe:tf, reason });
+  };
+  add(primaryPair, primaryTf, 'primary-request');
+  for (const t of v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades).slice(0, 12)) {
+    add(t.pair || t.symbol, t.timeframe || t.tf, 'open-trade');
+  }
+  add(lastNonZeroChartView?.pair, lastNonZeroChartView?.timeframe, 'last-nonzero');
+  add('BTCUSDT', '5m', 'safe-default');
+  return out.slice(0, 8);
+}
+async function v10133FetchChartTruthWithFallback(pair='BTCUSDT', timeframe='1h', limit=120, reason='chart-truth-fallback') {
+  let firstEmpty = null;
+  for (const item of v10133OpenTradeChartCandidates(pair, timeframe)) {
+    const view = await v1010FetchChartTruth(item.pair, item.timeframe, limit).catch(e => ({ schema:'alps.chartTruth.view.v1', version: FINAL_V930_VERSION, pair:item.pair, timeframe:item.timeframe, status:'FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,180), candles:[], trades:v1010TradeRowsForChart(item.pair), chartTruthFallbackReason:item.reason }));
+    view.chartTruthFallbackReason = item.reason;
+    if (safeArray(view.candles).length > 0) return v10133RememberChartView(view, `${reason}:${item.reason}`);
+    if (!firstEmpty) firstEmpty = view;
+  }
+  if (lastNonZeroChartView && safeArray(lastNonZeroChartView.candles).length) {
+    const fallback = { ...lastNonZeroChartView, ready:true, status:'CHART_TRUTH_READY_LAST_NONZERO_FALLBACK', chartTruthContinuityStatus:'LAST_NONZERO_CHART_REUSED_AFTER_EMPTY_FETCHES', requestedPair:pair, requestedTimeframe:timeframe, fallbackFrom:'lastNonZeroChartView', emptyFetchCount:v10133OpenTradeChartCandidates(pair,timeframe).length };
+    lastChartView = fallback;
+    return fallback;
+  }
+  return v10133RememberChartView(firstEmpty || { schema:'alps.chartTruth.view.v1', version:FINAL_V930_VERSION, pair, timeframe, candles:[], trades:[], levels:[], status:'CHART_TRUTH_EMPTY_OR_NOT_FETCHED' }, `${reason}:empty-final`);
+}
+
 let lastV10115OperationalTruthView = null;
 let lastV10115LayerLogView = null;
 let lastV10115SymbolStatusView = null;
@@ -911,8 +965,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     skippedLifecycleChecksJson: lastV1018LifecycleView?.skippedLifecycleChecksJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.skippedLifecycleChecks).slice(0,20)),
     lifecycleClosedThisTick: n(lastV1018LifecycleView?.closedThisTick, 0),
     lifecycleClosedTotal: n(lastV1018LifecycleView?.closedTotal, serverClosedCount),
-    observedPaperSignals: n(base.paperSignals, 0),
-    observedOpenPositions: n(base.openPositions, 0),
+    observedPaperSignals: Math.max(n(base.paperSignals, 0), canonicalOpen),
+    observedOpenPositions: Math.max(n(base.openPositions, 0), canonicalOpen),
     duplicateOpenDelta: Math.max(0, Math.max(n(base.paperSignals,0), n(base.openPositions,0)) - canonicalOpenCount),
     canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
     rejected: Math.max(n(base.rejectedSignals,0), n(base.rejected,0), n(pe.rejected,0), n(bridge.rejected,0)),
@@ -941,6 +995,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     chartTrades: chartTradesCount,
     chartLevels: safeArray(chartView.levels).length,
     chartError: chartView.error || chartView.lastError || '',
+    chartTruthContinuityStatus: chartView.chartTruthContinuityStatus || '',
+    lastNonZeroChartCandles: safeArray(lastNonZeroChartView?.candles).length,
     finalHealthStatus: truthSeed.finalHealthGate?.status || (compactForwardSync.effectiveFwRunning && canonicalOpenCount > 0 ? 'PASS' : (lastV949FinalHealthGateView?.status || '')),
     finalHealthNextAction: truthSeed.finalHealthGate?.nextRequiredAction || (compactForwardSync.effectiveFwRunning && canonicalOpenCount > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : (lastV949FinalHealthGateView?.nextRequiredAction || '')),
     reportRefreshStatus: base.v10122ReportRefreshStatus || '',
@@ -1243,7 +1299,7 @@ async function v10116BuildCompactReportForEndpoint(url, reason = 'endpoint') {
   const chartPairMismatch = pair && chart && chart.pair && v10115CanonicalSymbol(chart.pair) !== v10115CanonicalSymbol(pair);
   const chartTfMismatch = timeframe && chart && chart.timeframe && textValue(chart.timeframe).toLowerCase() !== textValue(timeframe).toLowerCase();
   if (!chart || !safeArray(chart.candles).length || chartPairMismatch || chartTfMismatch) {
-    chart = await v1016WithTimeout(v1010FetchChartTruth(pair, timeframe, limit), 10000, 'V10122_COMPACT_CHART_FLUSH_TIMEOUT').catch(e => ({ schema:'alps.chartTruth.view.v1', version: FINAL_V930_VERSION, ready:false, pair, timeframe, candles:[], trades:[], levels:[], error:textValue(e && e.message || e).slice(0,240), status:'CHART_TRUTH_FLUSH_FAILED' }));
+    chart = await v1016WithTimeout(v10133FetchChartTruthWithFallback(pair, timeframe, limit, 'compact-chart-flush'), 12000, 'V10133_COMPACT_CHART_FALLBACK_TIMEOUT').catch(e => v10133RememberChartView({ schema:'alps.chartTruth.view.v1', version: FINAL_V930_VERSION, ready:false, pair, timeframe, candles:[], trades:v1010TradeRowsForChart(pair), levels:[], error:textValue(e && e.message || e).slice(0,240), status:'CHART_TRUTH_FLUSH_FAILED' }, 'compact-chart-flush-error'));
   }
   const lite = v10128BuildHealthLite(reason + '-compact-report-authority');
   return v10116CompactReport({ ...(lastHealth || {}), ...lite, nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, chart, reason);
@@ -6207,8 +6263,7 @@ async function v1010FetchChartTruth(pair='BTCUSDT', timeframe='1h', limit=120) {
     executionInfluenceAllowedForUnvalidatedIndicators: false,
     rule: 'Chart displays real candles, real candidate levels, real paper trades, and governed indicator research overlays. It does not create trades or promote indicators.'
   };
-  lastChartView = view;
-  return view;
+  return v10133RememberChartView(view, 'v1010FetchChartTruth');
 }
 
 
@@ -7328,7 +7383,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   );
   const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen });
   const healthLite = {
-    schema: 'alps.healthLite.v10132',
+    schema: 'alps.healthLite.v10133',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -7346,8 +7401,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
     paperSignals: canonicalOpen,
     openPositions: canonicalOpen,
     closedTrades: Math.max(n(base.closedTrades,0), exportCounts.closed),
-    observedPaperSignals: n(base.paperSignals, 0),
-    observedOpenPositions: n(base.openPositions, 0),
+    observedPaperSignals: Math.max(n(base.paperSignals, 0), canonicalOpen),
+    observedOpenPositions: Math.max(n(base.openPositions, 0), canonicalOpen),
     duplicateOpenDelta: Math.max(0, observedOpenSnapshot - canonicalOpen),
     canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
     rejected: n(base.rejected,0),
@@ -7383,6 +7438,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
       mismatch: false
     },
     chartTruth,
+    chartTruthContinuityStatus: chartTruth?.chartTruthContinuityStatus || '',
+    lastNonZeroChartCandles: safeArray(lastNonZeroChartView?.candles).length,
     v1018ServerPaperLifecycle: lastV1018LifecycleView || null,
     effectivePatchVersion: FINAL_V930_VERSION,
     v10131ReportArtifactCurrentHealthPrune: {
@@ -7397,8 +7454,16 @@ function v10128BuildHealthLite(source = 'health-lite') {
       rawFwRunning: forwardRunnerSync.rawFwRunning,
       effectiveFwRunning: forwardRunnerSync.effectiveFwRunning
     },
+    v10133ChartTruthCloseObservationProof: {
+      installed: true,
+      purpose: 'Do not allow an empty chart fetch to erase live operational truth; reuse a last non-zero chart or another open-trade chart and expose continuity proof while closed-trade observation remains active.',
+      chartTruthReady: !!(chartTruth && (chartTruth.ready || chartTruth.candles > 0)),
+      chartCandles: chartTruth ? chartTruth.candles : 0,
+      lastNonZeroChartCandles: safeArray(lastNonZeroChartView?.candles).length,
+      continuityStatus: chartTruth?.chartTruthContinuityStatus || ''
+    },
     finalHealthGate: {
-      schema: 'alps.finalHealthGate.v10132.liveLiteOverride',
+      schema: 'alps.finalHealthGate.v10133.liveLiteOverride',
       version: FINAL_V930_VERSION,
       installed: true,
       status: forwardRunnerSync.effectiveFwRunning && canonicalOpen > 0 ? 'PASS' : 'WARN',
@@ -7411,7 +7476,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10132',
+    schema: 'alps.currentHealthLite.snapshot.v10133',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -7436,8 +7501,10 @@ function v10128BuildHealthLite(source = 'health-lite') {
     serverPaperLedgerOpen: healthLite.serverPaperLedger.openTrades,
     serverPaperLedgerClosed: healthLite.serverPaperLedger.closedTrades,
     paperLedgerStatus: healthLite.paperLedger.status,
-    chartTruthReady: !!(healthLite.chartTruth && healthLite.chartTruth.ready),
+    chartTruthReady: !!(healthLite.chartTruth && (healthLite.chartTruth.ready || healthLite.chartTruth.candles > 0)),
     chartCandles: healthLite.chartTruth ? healthLite.chartTruth.candles : 0,
+    chartTruthContinuityStatus: healthLite.chartTruth?.chartTruthContinuityStatus || healthLite.chartTruthContinuityStatus || '',
+    lastNonZeroChartCandles: healthLite.lastNonZeroChartCandles || 0,
     lifecycleOpenMonitored: n(healthLite.v1018ServerPaperLifecycle?.openMonitored, 0),
     lifecyclePriceChecks: n(healthLite.v1018ServerPaperLifecycle?.priceChecks, 0),
     lifecyclePriceCheckAttempts: n(healthLite.v1018ServerPaperLifecycle?.priceCheckAttempts, healthLite.v1018ServerPaperLifecycle?.openMonitored || 0),
@@ -7473,7 +7540,7 @@ async function createServer() {
         const pair = url.searchParams.get('pair') || url.searchParams.get('symbol') || 'BTCUSDT';
         const timeframe = url.searchParams.get('timeframe') || url.searchParams.get('interval') || '1h';
         const limit = Number(url.searchParams.get('limit') || 120);
-        return send(res, 200, await v1010FetchChartTruth(pair, timeframe, limit));
+        return send(res, 200, await v10133FetchChartTruthWithFallback(pair, timeframe, limit, 'chart-endpoint'));
       }
       if (url.pathname === '/runner/health-lite' || url.pathname === '/runner/live-health.json' || url.pathname === '/runner/current-health-lite.json') {
         await loadForwardLatchState();
@@ -7518,7 +7585,7 @@ async function createServer() {
         try {
           if (!lastChartView || !safeArray(lastChartView.candles).length) {
             const sel = v10115PreferredChartSelection(healthTruth);
-            await v1016WithTimeout(v1010FetchChartTruth(sel.pair, sel.timeframe, 120), 3500, 'V10115_HEALTH_CHART_TRUTH_TIMEOUT').catch(e => { lastChartView = { schema:'alps.chartTruth.view.v1', version:FINAL_V930_VERSION, pair:sel.pair, timeframe:sel.timeframe, status:'FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,160), candles:[], trades:v1010TradeRowsForChart(sel.pair) }; });
+            await v1016WithTimeout(v10133FetchChartTruthWithFallback(sel.pair, sel.timeframe, 120, 'health-endpoint-chart'), 9000, 'V10133_HEALTH_CHART_FALLBACK_TIMEOUT').catch(e => { v10133RememberChartView({ schema:'alps.chartTruth.view.v1', version:FINAL_V930_VERSION, pair:sel.pair, timeframe:sel.timeframe, status:'FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,160), candles:[], trades:v1010TradeRowsForChart(sel.pair) }, 'health-endpoint-chart-error'); });
           }
         } catch (_) {}
         healthTruth = v10115AttachOperationalTruth(healthTruth, 'health-endpoint-currentHealth-final');
@@ -7557,7 +7624,7 @@ async function createServer() {
       if (url.pathname === '/runner/dashboard.json') {
         await collectReport().catch(() => null);
         const sel = v10115PreferredChartSelection(lastHealth || {});
-        if (!lastChartView || !safeArray(lastChartView.candles).length) await v1016WithTimeout(v1010FetchChartTruth(sel.pair, sel.timeframe, 120), 3500, 'V10115_DASHBOARD_CHART_TRUTH_TIMEOUT').catch(() => null);
+        if (!lastChartView || !safeArray(lastChartView.candles).length) await v1016WithTimeout(v10133FetchChartTruthWithFallback(sel.pair, sel.timeframe, 120, 'dashboard-json-chart'), 9000, 'V10133_DASHBOARD_CHART_FALLBACK_TIMEOUT').catch(() => null);
         const truth = v10115AttachOperationalTruth({ ...(lastHealth || {}), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, 'dashboard-json-currentHealth-final');
         return send(res, 200, { schema:'alps.runner.dashboardTruth.v10122', version:FINAL_V930_VERSION, generatedAt:new Date().toISOString(), reportAuthority:v10118ReportAuthorityView(truth, 'dashboard-json'), currentHealth:truth, operationalTruth:truth.v10115OperationalTruth, compactReport:v10116CompactReport(truth, lastChartView || null, 'dashboard-json'), chatgptCompact:v10116CompactRow(truth, lastChartView || null, 'dashboard-json-row'), chartTruth:lastChartView || null, tradeExport:lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }), nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, rejectedReasonAudit:lastV952RejectedAuditView, deferredEntryQueue:lastV10115DeferredEntryQueueView, featureGateDiagnostics:lastV10115FeatureGateDiagnosticsView, symbolStatus:lastV10115SymbolStatusView, layerLog:lastV10115LayerLogView });
       }
@@ -9792,7 +9859,7 @@ async function collectReport() {
   try { report = v952AttachTruth(report, currentHealthForV952 || lastHealth || {}); } catch (e) { log('v9.5.2 final attach truth skipped:', e.message); }
   try {
     const sel = v10115PreferredChartSelection(report || {});
-    report.chartTruth = await v1016WithTimeout(v1010FetchChartTruth(sel.pair, sel.timeframe, 120), 4500, 'V10115_REPORT_CHART_TRUTH_TIMEOUT').catch(e => ({ schema:'alps.chartTruth.view.v1', version:FINAL_V930_VERSION, pair:sel.pair, timeframe:sel.timeframe, status:'FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,160), candles:[], trades:v1010TradeRowsForChart(sel.pair) }));
+    report.chartTruth = await v1016WithTimeout(v10133FetchChartTruthWithFallback(sel.pair, sel.timeframe, 120, 'report-artifact-chart'), 12000, 'V10133_REPORT_CHART_FALLBACK_TIMEOUT').catch(e => v10133RememberChartView({ schema:'alps.chartTruth.view.v1', version:FINAL_V930_VERSION, pair:sel.pair, timeframe:sel.timeframe, status:'FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e).slice(0,160), candles:[], trades:v1010TradeRowsForChart(sel.pair) }, 'report-artifact-chart-error')); 
     report.v10115ChartTruthSync = { schema:'alps.v10115ChartTruthSync.view.v1', version:FINAL_V930_VERSION, installed:true, status:safeArray(report.chartTruth?.candles).length ? 'CHART_TRUTH_SYNCED' : 'CHART_TRUTH_NO_CANDLES_YET', pair:report.chartTruth?.pair || sel.pair, timeframe:report.chartTruth?.timeframe || sel.timeframe, candles:safeArray(report.chartTruth?.candles).length, usedIndexedDb:!!report.chartTruth?.usedIndexedDb, source:report.chartTruth?.source || '', rule:'Report/health/dashboard expose chartTruth directly, not only the standalone endpoint.' };
   } catch (e) { report.v10115ChartTruthSync = { schema:'alps.v10115ChartTruthSync.view.v1', version:FINAL_V930_VERSION, status:'FAILED', error:textValue(e && e.message || e).slice(0,160) }; }
   try {
