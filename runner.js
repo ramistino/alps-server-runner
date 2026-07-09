@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.27-lifecycle-post-ledger-monitor-sync';
+const FINAL_V930_VERSION = 'v10.1.28-health-lite-dashboard-sync';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -7217,6 +7217,88 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
   return { queued: true, reason, state: v1016HealthBackgroundRecoveryState };
 }
 
+
+
+function v10128BuildHealthLite(source = 'health-lite') {
+  const base = v953HealthTruthFromCurrentHealth(lastHealth || {}, source) || {};
+  const exportCounts = tradeExportCounts(lastTradeExport || {});
+  const canonicalOpenRows = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
+  const canonicalOpen = Math.max(exportCounts.open, canonicalOpenRows.length, n(base.openPositions,0), n(base.paperSignals,0));
+  const nativeRows = n(lastNativeForwardPoolView?.totalCandidates || lastNativeForwardPoolView?.rows || lastNativeForwardPoolView?.candidates?.length || base?.nativeForwardPool?.totalCandidates || base.candidates, 0);
+  const latchRows = n(lastForwardLatchView?.size || lastForwardLatchView?.rows || lastForwardLatchView?.candidates?.length || base?.forwardLatch?.size || nativeRows, 0);
+  const chartTruth = lastChartView ? {
+    ready: !!(lastChartView.ready ?? lastChartView.candles?.length),
+    status: lastChartView.status || (safeArray(lastChartView.candles).length ? 'CHART_TRUTH_READY' : 'CHART_TRUTH_EMPTY'),
+    pair: lastChartView.pair || '',
+    timeframe: lastChartView.timeframe || '',
+    candles: safeArray(lastChartView.candles).length,
+    trades: safeArray(lastChartView.trades).length,
+    levels: safeArray(lastChartView.levels).length,
+    error: textValue(lastChartView.error || '')
+  } : null;
+  const healthLite = {
+    schema: 'alps.healthLite.v10128',
+    version: FINAL_V930_VERSION,
+    generatedAt: new Date().toISOString(),
+    source,
+    status: base.status || lastHealth?.status || 'LAB_RUNNING',
+    engineReady: !!(base.engineReady ?? lastHealth?.engineReady),
+    labRunning: !!(base.labRunning ?? lastHealth?.labRunning),
+    fwRunning: !!(base.fwRunning ?? lastHealth?.fwRunning),
+    candidates: Math.max(n(base.candidates,0), nativeRows),
+    officialCandidates: Math.max(n(base.officialCandidates,0), nativeRows),
+    nativePoolCandidates: nativeRows,
+    forwardLatchSize: latchRows,
+    paperSignals: canonicalOpen,
+    openPositions: canonicalOpen,
+    closedTrades: Math.max(n(base.closedTrades,0), exportCounts.closed),
+    rejected: n(base.rejected,0),
+    rejectedSignals: n(base.rejectedSignals,0),
+    appUrl: lastHealth?.appUrl || base.appUrl || '',
+    appVersion: base.appVersion || lastHealth?.appVersion || FINAL_V930_VERSION,
+    preflight: base.preflight || lastHealth?.preflight || '',
+    serverRunner: base.serverRunner || lastHealth?.serverRunner || 'ON',
+    pageReady: !!(base.pageReady ?? lastHealth?.pageReady),
+    nativeForwardPool: {
+      schema: 'alps.nativeForwardPool.lite.v10128',
+      version: FINAL_V930_VERSION,
+      totalCandidates: nativeRows,
+      watchForward: n(lastNativeForwardPoolView?.watchForward || base?.nativeForwardPool?.watchForward, 0),
+      experimentalForward: n(lastNativeForwardPoolView?.experimentalForward || base?.nativeForwardPool?.experimentalForward, 0),
+      fullAutonomyForward: n(lastNativeForwardPoolView?.fullAutonomyForward || base?.nativeForwardPool?.fullAutonomyForward, 0),
+      compressedRows: n(lastNativeForwardPoolView?.duplicateCompression?.compressedRows || base?.nativeForwardPool?.duplicateCompression?.compressedRows, 0)
+    },
+    reportAuthority: null,
+    currentHealth: null,
+    serverPaperLedger: {
+      openTrades: canonicalOpen,
+      closedTrades: exportCounts.closed,
+      canonicalOpen,
+      status: canonicalOpen > 0 ? 'SERVER_LEDGER_SYNCED' : 'WAITING_FOR_OPEN_TRADES'
+    },
+    paperLedger: {
+      open: canonicalOpen,
+      currentHealthOpen: canonicalOpen,
+      canonicalOpen,
+      closed: exportCounts.closed,
+      status: canonicalOpen > 0 ? 'SERVER_LEDGER_SYNCED' : 'WAITING_FOR_OPEN_TRADES',
+      mismatch: false
+    },
+    chartTruth,
+    v1018ServerPaperLifecycle: lastV1018LifecycleView || null,
+    effectivePatchVersion: FINAL_V930_VERSION,
+    v10128HealthLite: {
+      installed: true,
+      purpose: 'Small CORS-safe live health payload for Netlify dashboards. Avoids large /runner/health payload timeouts on Android Chrome.',
+      fullHealthEndpoint: '/runner/health',
+      liteEndpoint: '/runner/health-lite'
+    }
+  };
+  healthLite.reportAuthority = v10118ReportAuthorityView(healthLite, source);
+  healthLite.currentHealth = healthLite;
+  return healthLite;
+}
+
 async function createServer() {
   const server = http.createServer(async (req, res) => {
     try {
@@ -7241,6 +7323,12 @@ async function createServer() {
         const timeframe = url.searchParams.get('timeframe') || url.searchParams.get('interval') || '1h';
         const limit = Number(url.searchParams.get('limit') || 120);
         return send(res, 200, await v1010FetchChartTruth(pair, timeframe, limit));
+      }
+      if (url.pathname === '/runner/health-lite' || url.pathname === '/runner/live-health.json' || url.pathname === '/runner/current-health-lite.json') {
+        await loadForwardLatchState();
+        await loadRecoveryState();
+        await loadTradeVaultState();
+        return send(res, 200, v10128BuildHealthLite('health-lite-endpoint-before-send'));
       }
       if (url.pathname === '/runner/health') {
         await loadForwardLatchState();
