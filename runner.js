@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.31-report-artifact-currenthealth-prune';
+const FINAL_V930_VERSION = 'v10.1.32-forward-runner-lifecycle-check-proof';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -505,6 +505,33 @@ function v10131MergeClosedTradeRows(...groups) {
     }
   }
   return out;
+}
+
+// v10.1.32 — distinguish raw browser fwRunning from effective server-forward activity.
+// The browser flag may be false on Android/Render while the native pool, forward latch, paper entry,
+// and server lifecycle are demonstrably active. We keep rawFwRunning for honesty, but expose an
+// effective forward state so dashboards do not show a false STOP while rows/trades are flowing.
+function v10132ForwardActivityView({ base = {}, nativeRows = 0, latchRows = 0, paperEntrySeen = 0, canonicalOpen = 0 } = {}) {
+  const rawFwRunning = !!(base.fwRunning ?? lastHealth?.fwRunning);
+  const nativeReady = Number(nativeRows) > 0;
+  const latchReady = Number(latchRows) > 0;
+  const entryReady = Number(paperEntrySeen) > 0;
+  const ledgerReady = Number(canonicalOpen) > 0;
+  const effectiveFwRunning = rawFwRunning || ((nativeReady || latchReady) && (entryReady || ledgerReady));
+  return {
+    schema: 'alps.v10132ForwardRunnerSync.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    rawFwRunning,
+    effectiveFwRunning,
+    nativePoolCandidates: Number(nativeRows) || 0,
+    forwardLatchSize: Number(latchRows) || 0,
+    paperEntryVisibilityCandidatesSeen: Number(paperEntrySeen) || 0,
+    canonicalPaperOpen: Number(canonicalOpen) || 0,
+    status: effectiveFwRunning ? (rawFwRunning ? 'BROWSER_FORWARD_RUNNING' : 'EFFECTIVE_FORWARD_ACTIVE_SERVER_LATCH') : 'FORWARD_NOT_ACTIVE',
+    nextRequiredAction: effectiveFwRunning ? 'OBSERVE_TRADE_LIFECYCLE' : 'RESTART_FORWARD_WATCH_OR_REBUILD_LATCH',
+    rule: 'rawFwRunning is preserved, but currentHealth fwRunning uses the effective forward state when nativeForwardPool/forwardLatch + paper entry or ledger prove active paper-forward flow.'
+  };
 }
 
 
@@ -835,6 +862,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const paperLedgerStatus = v10122PaperLedgerStatus(serverOpenCount, currentHealthOpenCount, serverClosedCount);
   const chartRowsCount = safeArray(chartView.candles).length;
   const chartTradesCount = safeArray(chartView.trades).length;
+  const compactForwardSync = truthSeed.forwardRunnerSync || v10132ForwardActivityView({ base, nativeRows:n(pool.totalCandidates,0), latchRows:Math.max(n(latch.size,0), safeArray(forwardLatchState?.candidates).length), paperEntrySeen:Math.max(n(pe.candidatesSeen,0), n(bridge.candidatesSeen,0)), canonicalOpen:canonicalOpenCount });
   return {
     generatedAt: new Date().toISOString(),
     schema: 'alps.chatgptCompactReport.v10122',
@@ -853,7 +881,10 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     forwardStatus: base.forwardStatus || mat.status || op.status || '',
     engineReady: v10116First(base.engineReady, op.engineReady),
     labRunning: v10116First(base.labRunning, op.labRunning),
-    fwRunning: v10116First(base.fwRunning, op.fwRunning),
+    fwRunning: compactForwardSync.effectiveFwRunning,
+    rawFwRunning: compactForwardSync.rawFwRunning,
+    effectiveFwRunning: compactForwardSync.effectiveFwRunning,
+    forwardRunnerSyncStatus: compactForwardSync.status,
     candidates: Math.max(n(base.candidates,0), n(base.officialCandidates,0), n(pool.totalCandidates,0), n(bridge.candidatesSeen,0), n(op.candidates,0)),
     nativePoolCandidates: n(pool.totalCandidates, 0),
     watchForward: n(pool.watchForward, 0),
@@ -874,6 +905,10 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     serverPaperLedgerClosed: serverClosedCount,
     lifecycleOpenMonitored: n(lastV1018LifecycleView?.openMonitored, 0),
     lifecyclePriceChecks: n(lastV1018LifecycleView?.priceChecks, 0),
+    lifecyclePriceCheckAttempts: n(lastV1018LifecycleView?.priceCheckAttempts, lastV1018LifecycleView?.openMonitored || 0),
+    lifecyclePriceCheckSkips: n(lastV1018LifecycleView?.priceCheckSkips, 0),
+    lifecyclePriceCheckCoverageStatus: lastV1018LifecycleView?.priceCheckCoverageStatus || '',
+    skippedLifecycleChecksJson: lastV1018LifecycleView?.skippedLifecycleChecksJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.skippedLifecycleChecks).slice(0,20)),
     lifecycleClosedThisTick: n(lastV1018LifecycleView?.closedThisTick, 0),
     lifecycleClosedTotal: n(lastV1018LifecycleView?.closedTotal, serverClosedCount),
     observedPaperSignals: n(base.paperSignals, 0),
@@ -906,8 +941,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     chartTrades: chartTradesCount,
     chartLevels: safeArray(chartView.levels).length,
     chartError: chartView.error || chartView.lastError || '',
-    finalHealthStatus: truthSeed.finalHealthGate?.status || lastV949FinalHealthGateView?.status || '',
-    finalHealthNextAction: truthSeed.finalHealthGate?.nextRequiredAction || lastV949FinalHealthGateView?.nextRequiredAction || '',
+    finalHealthStatus: truthSeed.finalHealthGate?.status || (compactForwardSync.effectiveFwRunning && canonicalOpenCount > 0 ? 'PASS' : (lastV949FinalHealthGateView?.status || '')),
+    finalHealthNextAction: truthSeed.finalHealthGate?.nextRequiredAction || (compactForwardSync.effectiveFwRunning && canonicalOpenCount > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : (lastV949FinalHealthGateView?.nextRequiredAction || '')),
     reportRefreshStatus: base.v10122ReportRefreshStatus || '',
     reportRefreshError: /FAST_REFRESHED/i.test(textValue(base.v10122ReportRefreshStatus || '')) ? '' : (base.v10122ReportRefreshError || ''),
     lastError: base.lastError && !/V10116_COMPACT_COLLECT_REPORT_TIMEOUT/.test(String(base.lastError)) ? base.lastError : '',
@@ -7285,19 +7320,29 @@ function v10128BuildHealthLite(source = 'health-lite') {
     levels: safeArray(lastChartView.levels).length,
     error: textValue(lastChartView.error || '')
   } : null;
+  const paperEntrySeen = Math.max(
+    n(lastV950PaperEntryVisibilityView?.candidatesSeen, 0),
+    n(lastV948EntryEngineView?.candidatesSeen || lastV948EntryEngineView?.scanned, 0),
+    n(lastV1017cPaperEntryAuthorityBridgeView?.candidatesSeen || lastV1017cPaperEntryAuthorityBridgeView?.scanned, 0),
+    n(base?.paperEntryVisibility?.candidatesSeen || base?.paperEntryVisibilityCandidatesSeen, 0)
+  );
+  const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen });
   const healthLite = {
-    schema: 'alps.healthLite.v10131',
+    schema: 'alps.healthLite.v10132',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
     status: base.status || lastHealth?.status || 'LAB_RUNNING',
     engineReady: !!(base.engineReady ?? lastHealth?.engineReady),
     labRunning: !!(base.labRunning ?? lastHealth?.labRunning),
-    fwRunning: !!(base.fwRunning ?? lastHealth?.fwRunning),
+    fwRunning: forwardRunnerSync.effectiveFwRunning,
+    rawFwRunning: forwardRunnerSync.rawFwRunning,
     candidates: Math.max(n(base.candidates,0), nativeRows),
     officialCandidates: Math.max(n(base.officialCandidates,0), nativeRows),
     nativePoolCandidates: nativeRows,
     forwardLatchSize: latchRows,
+    paperEntryVisibilityCandidatesSeen: paperEntrySeen,
+    forwardRunnerSync,
     paperSignals: canonicalOpen,
     openPositions: canonicalOpen,
     closedTrades: Math.max(n(base.closedTrades,0), exportCounts.closed),
@@ -7345,6 +7390,20 @@ function v10128BuildHealthLite(source = 'health-lite') {
       purpose: 'Small circular-safe CORS live health payload for Netlify dashboards. Also keeps report artifacts aligned with canonical currentHealth and prunes duplicate summary rows.',
       fullHealthEndpoint: '/runner/health',
       liteEndpoint: '/runner/health-lite'
+    },
+    v10132ForwardRunnerLifecycleProof: {
+      installed: true,
+      purpose: 'Expose effective forward runner sync and lifecycle price-check skip reasons without hiding raw browser fwRunning.',
+      rawFwRunning: forwardRunnerSync.rawFwRunning,
+      effectiveFwRunning: forwardRunnerSync.effectiveFwRunning
+    },
+    finalHealthGate: {
+      schema: 'alps.finalHealthGate.v10132.liveLiteOverride',
+      version: FINAL_V930_VERSION,
+      installed: true,
+      status: forwardRunnerSync.effectiveFwRunning && canonicalOpen > 0 ? 'PASS' : 'WARN',
+      nextRequiredAction: forwardRunnerSync.effectiveFwRunning && canonicalOpen > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction,
+      rule: 'Health-lite final gate trusts currentHealth authority: native pool/latch + paper entry/ledger proof means effective forward is active even if the raw browser flag is false.'
     }
   };
   healthLite.reportAuthority = v10118ReportAuthorityView(healthLite, source);
@@ -7352,13 +7411,16 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10131',
+    schema: 'alps.currentHealthLite.snapshot.v10132',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
     engineReady: healthLite.engineReady,
     labRunning: healthLite.labRunning,
     fwRunning: healthLite.fwRunning,
+    rawFwRunning: healthLite.rawFwRunning,
+    effectiveFwRunning: healthLite.fwRunning,
+    forwardRunnerSyncStatus: healthLite.forwardRunnerSync?.status || '',
     candidates: healthLite.candidates,
     officialCandidates: healthLite.officialCandidates,
     nativePoolCandidates: healthLite.nativePoolCandidates,
@@ -7378,6 +7440,10 @@ function v10128BuildHealthLite(source = 'health-lite') {
     chartCandles: healthLite.chartTruth ? healthLite.chartTruth.candles : 0,
     lifecycleOpenMonitored: n(healthLite.v1018ServerPaperLifecycle?.openMonitored, 0),
     lifecyclePriceChecks: n(healthLite.v1018ServerPaperLifecycle?.priceChecks, 0),
+    lifecyclePriceCheckAttempts: n(healthLite.v1018ServerPaperLifecycle?.priceCheckAttempts, healthLite.v1018ServerPaperLifecycle?.openMonitored || 0),
+    lifecyclePriceCheckSkips: n(healthLite.v1018ServerPaperLifecycle?.priceCheckSkips, 0),
+    lifecyclePriceCheckCoverageStatus: healthLite.v1018ServerPaperLifecycle?.priceCheckCoverageStatus || '',
+    skippedLifecycleChecks: safeArray(healthLite.v1018ServerPaperLifecycle?.skippedLifecycleChecks).slice(0, 8),
     sourceOfTruth: 'currentHealth',
     authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY'
   };
@@ -7438,7 +7504,7 @@ async function createServer() {
           const v10127CanonicalOpenBeforeHealth = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades).length;
           if (v10127CanonicalOpenBeforeHealth > 0 && (!lastV1018LifecycleView || n(lastV1018LifecycleView.openMonitored,0) < v10127CanonicalOpenBeforeHealth)) {
             await v1016WithTimeout(v1018ServerPaperLifecycleTick(), 9000, 'V10127_HEALTH_LIFECYCLE_REFRESH_TIMEOUT').catch(e => {
-              lastV1018LifecycleView = { ...(lastV1018LifecycleView || {}), schema:'alps.v1018ServerPaperLifecycle.view.v1', version:FINAL_V930_VERSION, installed:true, status:'HEALTH_LIFECYCLE_REFRESH_FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,180), openMonitored:n(lastV1018LifecycleView?.openMonitored,0), priceChecks:n(lastV1018LifecycleView?.priceChecks,0), paperOnly:true, liveCapitalExecution:false };
+              lastV1018LifecycleView = { ...(lastV1018LifecycleView || {}), schema:'alps.v1018ServerPaperLifecycle.view.v1', version:FINAL_V930_VERSION, installed:true, status:'HEALTH_LIFECYCLE_REFRESH_FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,180), openMonitored:n(lastV1018LifecycleView?.openMonitored,0), priceChecks:n(lastV1018LifecycleView?.priceChecks,0), priceCheckAttempts:n(lastV1018LifecycleView?.priceCheckAttempts,lastV1018LifecycleView?.openMonitored||0), priceCheckSkips:n(lastV1018LifecycleView?.priceCheckSkips,0), skippedLifecycleChecks:safeArray(lastV1018LifecycleView?.skippedLifecycleChecks).slice(0,20), priceCheckCoverageStatus:lastV1018LifecycleView?.priceCheckCoverageStatus||'', paperOnly:true, liveCapitalExecution:false };
             });
           }
         } catch (e) { log('v10.1.27 health lifecycle refresh skipped:', e && e.message || e); }
@@ -9367,7 +9433,9 @@ async function v1018ServerPaperLifecycleTick() {
     paperOnly: true,
     liveCapitalExecution: false,
     openMonitored: open.length,
-    priceChecks: 0, breakevenApplied: 0, profitLockApplied: 0,
+    priceCheckAttempts: open.length,
+    priceChecks: 0, priceCheckSkips: 0, skippedLifecycleChecks: [],
+    breakevenApplied: 0, profitLockApplied: 0,
     closedThisTick: 0, closedTotal: safeArray(lastTradeExport?.closedTrades).length,
     lastError: '',
     rule: 'Break-even at 50% progress, profit-lock at 75%, close at stop/target from real prices. Real outcomes only.'
@@ -9385,12 +9453,34 @@ async function v1018ServerPaperLifecycleTick() {
         lastPrice = v931Num(lastRow?.close, null);
         if (Number.isFinite(lastPrice)) priceCache.set(cacheKey, lastPrice);
       }
-      if (!Number.isFinite(lastPrice) || lastPrice <= 0) continue;
+      if (!Number.isFinite(lastPrice) || lastPrice <= 0) {
+        // v10.1.32 fallback: if the selected chart truth is for the same pair/timeframe, use its latest
+        // closed candle as a proof-only lifecycle price. Otherwise record a precise skip reason.
+        const lp = textValue(t.pair || t.symbol || '').toUpperCase();
+        const ltf = textValue(t.timeframe || t.tf || '').toLowerCase();
+        const chartPair = textValue(lastChartView?.pair || '').toUpperCase();
+        const chartTf = textValue(lastChartView?.timeframe || '').toLowerCase();
+        const chartRows = safeArray(lastChartView?.candles);
+        const chartLast = chartRows[chartRows.length - 1];
+        const chartPrice = (lp && chartPair === lp && ltf && chartTf === ltf) ? v931Num(chartLast?.close, null) : null;
+        if (Number.isFinite(chartPrice) && chartPrice > 0) {
+          lastPrice = chartPrice;
+          priceCache.set(cacheKey, lastPrice);
+        } else {
+          view.priceCheckSkips += 1;
+          if (view.skippedLifecycleChecks.length < 20) view.skippedLifecycleChecks.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', reason:'PRICE_UNAVAILABLE', source:'v1012FetchBinanceKlines+chartTruthFallback' });
+          continue;
+        }
+      }
       view.priceChecks += 1;
       const isShort = t.direction === 'SHORT';
       const stopDist = Math.abs(t.entry - t.stop);
       const targetDist = Math.abs(t.target - t.entry);
-      if (!(stopDist > 0) || !(targetDist > 0)) continue;
+      if (!(stopDist > 0) || !(targetDist > 0)) {
+        view.priceCheckSkips += 1;
+        if (view.skippedLifecycleChecks.length < 20) view.skippedLifecycleChecks.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', reason:'INVALID_STOP_TARGET_DISTANCE', entry:t.entry, stop:t.stop, target:t.target });
+        continue;
+      }
       const progress = isShort ? (t.entry - lastPrice) / targetDist : (lastPrice - t.entry) / targetDist;
       // Break-even at 50% progress (only tightens the stop, never loosens):
       if (progress >= 0.5 && !t.breakevenApplied) {
@@ -9470,6 +9560,8 @@ async function v1018ServerPaperLifecycleTick() {
       } catch (persistErr) { view.lastError = ('PERSIST_AFTER_CLOSE_FAILED: ' + textValue(persistErr.message)).slice(0, 160); }
     } catch (e) { view.lastError = textValue(e && e.message || e).slice(0, 160); }
   }
+  view.priceCheckCoverageStatus = view.priceChecks === view.openMonitored ? 'FULL_PRICE_CHECK_COVERAGE' : 'PARTIAL_PRICE_CHECK_COVERAGE_WITH_REASONS';
+  view.skippedLifecycleChecksJson = JSON.stringify(safeArray(view.skippedLifecycleChecks).slice(0, 20));
   lastV1018LifecycleView = view;
   return view;
 }
@@ -9504,7 +9596,8 @@ async function runnerTick(reason = 'server-runner tick') {
     await applyV949TradeLifecycleGuards('runner-tick-trade-lifecycle').catch(() => null);
     await startForwardIfEligible('runner-tick-eligible-forward').catch(() => null);
 
-    if (before.fwRunning && !before.fwRefreshRunning) {
+    const effectiveForwardActiveForCatchup = !!(before.fwRunning || v944ForwardLatchEligibleCount() > 0 || n(lastNativeForwardPoolView?.totalCandidates || lastNativeForwardPoolView?.rows, 0) > 0 || v10116CountOpenTrades() > 0);
+    if (effectiveForwardActiveForCatchup && !before.fwRefreshRunning) {
       await pageEval(async reasonText => {
         if (typeof catchUpForwardWatch === 'function') await catchUpForwardWatch(reasonText);
         if (typeof saveRuntimeSnapshotThrottled === 'function') await saveRuntimeSnapshotThrottled(false);
@@ -9679,7 +9772,7 @@ async function collectReport() {
   // This closes the timing hole where the lifecycle tick ran before the ledger existed and then reported
   // openMonitored=0 even though serverPaperLedger.openTrades was non-zero.
   try {
-    const postLedgerLifecycle = await v1016WithTimeout(v1018ServerPaperLifecycleTick(), 12000, 'V10127_POST_LEDGER_LIFECYCLE_TIMEOUT').catch(e => ({ schema:'alps.v1018ServerPaperLifecycle.view.v1', version:FINAL_V930_VERSION, installed:true, status:'POST_LEDGER_LIFECYCLE_FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,180), openMonitored:n(lastV1018LifecycleView?.openMonitored,0), priceChecks:n(lastV1018LifecycleView?.priceChecks,0), paperOnly:true, liveCapitalExecution:false }));
+    const postLedgerLifecycle = await v1016WithTimeout(v1018ServerPaperLifecycleTick(), 12000, 'V10127_POST_LEDGER_LIFECYCLE_TIMEOUT').catch(e => ({ schema:'alps.v1018ServerPaperLifecycle.view.v1', version:FINAL_V930_VERSION, installed:true, status:'POST_LEDGER_LIFECYCLE_FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,180), openMonitored:n(lastV1018LifecycleView?.openMonitored,0), priceChecks:n(lastV1018LifecycleView?.priceChecks,0), priceCheckAttempts:n(lastV1018LifecycleView?.priceCheckAttempts,lastV1018LifecycleView?.openMonitored||0), priceCheckSkips:n(lastV1018LifecycleView?.priceCheckSkips,0), skippedLifecycleChecks:safeArray(lastV1018LifecycleView?.skippedLifecycleChecks).slice(0,20), priceCheckCoverageStatus:lastV1018LifecycleView?.priceCheckCoverageStatus||'', paperOnly:true, liveCapitalExecution:false }));
     if (postLedgerLifecycle) {
       lastV1018LifecycleView = postLedgerLifecycle;
       report.v1018ServerPaperLifecycle = postLedgerLifecycle;
