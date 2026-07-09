@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.24-lifecycle-close-dedupe-prune';
+const FINAL_V930_VERSION = 'v10.1.27-lifecycle-post-ledger-monitor-sync';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -7257,6 +7257,18 @@ async function createServer() {
         if (!healthTruth.v1017FeatureMaterializer) healthTruth.v1017FeatureMaterializer = lastV1017FeatureMaterializerView || { schema:'alps.v1017FeatureMaterializer.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), queuedAt: healthBackgroundQueue?.state?.queuedAt || null, startedAt: healthBackgroundQueue?.state?.startedAt || null, finishedAt: healthBackgroundQueue?.state?.finishedAt || null, attempts:[], sourcesUsed:[], paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1015HealthMarketDataBootstrap) healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1016HealthPaperEntryRescan) healthTruth.v1016HealthPaperEntryRescan = { schema:'alps.v1016HealthPaperEntryRescan.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
+        // v10.1.27: health/report proof must not expose a stale lifecycle view.
+        // v10.1.24 monitored before the page/report refreshed lastTradeExport, so health could show
+        // serverPaperLedger.openTrades > 0 while v1018ServerPaperLifecycle.openMonitored stayed 0.
+        // Run a bounded lifecycle refresh once the canonical ledger is visible.
+        try {
+          const v10127CanonicalOpenBeforeHealth = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades).length;
+          if (v10127CanonicalOpenBeforeHealth > 0 && (!lastV1018LifecycleView || n(lastV1018LifecycleView.openMonitored,0) < v10127CanonicalOpenBeforeHealth)) {
+            await v1016WithTimeout(v1018ServerPaperLifecycleTick(), 9000, 'V10127_HEALTH_LIFECYCLE_REFRESH_TIMEOUT').catch(e => {
+              lastV1018LifecycleView = { ...(lastV1018LifecycleView || {}), schema:'alps.v1018ServerPaperLifecycle.view.v1', version:FINAL_V930_VERSION, installed:true, status:'HEALTH_LIFECYCLE_REFRESH_FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,180), openMonitored:n(lastV1018LifecycleView?.openMonitored,0), priceChecks:n(lastV1018LifecycleView?.priceChecks,0), paperOnly:true, liveCapitalExecution:false };
+            });
+          }
+        } catch (e) { log('v10.1.27 health lifecycle refresh skipped:', e && e.message || e); }
         const v1001HealthTradeCounts = tradeExportCounts(lastTradeExport);
         if (v1001HealthTradeCounts.open > 0) {
           healthTruth.openPositions = Math.max(n(healthTruth.openPositions, 0), v1001HealthTradeCounts.open);
@@ -9490,6 +9502,16 @@ async function collectReport() {
   rawTradeLedgers = v1001MergeReportEntryRowsIntoLedgers(rawTradeLedgers, report);
 
   lastTradeExport = buildTradeExport(rawTradeLedgers);
+  // v10.1.27: after report/bridge/page ledgers are rebuilt, immediately reconnect lifecycle monitoring.
+  // This closes the timing hole where the lifecycle tick ran before the ledger existed and then reported
+  // openMonitored=0 even though serverPaperLedger.openTrades was non-zero.
+  try {
+    const postLedgerLifecycle = await v1016WithTimeout(v1018ServerPaperLifecycleTick(), 12000, 'V10127_POST_LEDGER_LIFECYCLE_TIMEOUT').catch(e => ({ schema:'alps.v1018ServerPaperLifecycle.view.v1', version:FINAL_V930_VERSION, installed:true, status:'POST_LEDGER_LIFECYCLE_FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,180), openMonitored:n(lastV1018LifecycleView?.openMonitored,0), priceChecks:n(lastV1018LifecycleView?.priceChecks,0), paperOnly:true, liveCapitalExecution:false }));
+    if (postLedgerLifecycle) {
+      lastV1018LifecycleView = postLedgerLifecycle;
+      report.v1018ServerPaperLifecycle = postLedgerLifecycle;
+    }
+  } catch (e) { log('v10.1.27 post-ledger lifecycle sync skipped:', e && e.message || e); }
   await updateTradeVault(lastTradeExport, 'report');
   report.alpsTradeExport = lastTradeExport;
   report = v1001SyncReportCountersFromTradeExport(report, lastTradeExport);
