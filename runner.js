@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.30-canonical-ledger-report-sync';
+const FINAL_V930_VERSION = 'v10.1.31-report-artifact-currenthealth-prune';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -470,6 +470,35 @@ function v1019MergeOpenTradeRows(...groups) {
       if (!row || typeof row !== 'object') continue;
       if (/CLOSED|WIN|LOSS|STOP|TARGET/i.test(textValue(row.status || 'OPEN'))) continue;
       const key = v1019OpenTradeDedupeKey(row);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+
+// v10.1.31 — closed-ledger/report summaries use the same canonical identity rule as OPEN trades.
+// This prevents audit summaries from showing duplicate trade rows even when multiple ledger views still
+// carry the same tradeId for compatibility with older paper-entry bridges.
+function v10131ClosedTradeDedupeKey(t = {}) {
+  const tradeId = textValue(t.tradeId || t.id || t.orderId || '').toUpperCase().trim();
+  if (tradeId) return `TRADEID|${tradeId}`;
+  const pair = textValue(t.pair || t.baseSymbol || t.symbol || t.sym || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const tf = textValue(t.timeframe || t.tf || t.frame || '').toLowerCase().replace(/\s+/g, '');
+  const entry = textValue(t.entry ?? t.entryPrice ?? t.openPrice ?? t.price ?? '').replace(/[,%$≈]/g, '').slice(0, 32);
+  const exit = textValue(t.exit ?? t.exitPrice ?? t.closePrice ?? '').replace(/[,%$≈]/g, '').slice(0, 32);
+  const result = textValue(t.result || t.outcome || t.status || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  return [pair, tf, entry, exit, result].filter(Boolean).join('|');
+}
+function v10131MergeClosedTradeRows(...groups) {
+  const out = [];
+  const seen = new Set();
+  for (const group of groups) {
+    for (const row of safeArray(group)) {
+      if (!row || typeof row !== 'object') continue;
+      const key = v10131ClosedTradeDedupeKey(row);
       if (!key || seen.has(key)) continue;
       seen.add(key);
       out.push(row);
@@ -796,8 +825,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const latch = truthSeed.forwardLatch || lastForwardLatchView || v944BuildForwardLatchView?.() || {};
   const reasons = bridge.rejectedReasonCounts || pe.rejectedReasonCounts || lastV952RejectedAuditView?.rejectedReasonCounts || {};
   const topRejected = Object.entries(reasons || {}).sort((a,b)=>n(b[1],0)-n(a[1],0))[0];
-  const openTrades = safeArray(lastTradeExport?.openTrades).concat(safeArray(lastV948EntryEngineView?.openedTrades)).filter(Boolean);
-  const closedTrades = safeArray(lastTradeExport?.closedTrades).filter(Boolean);
+  const openTrades = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
+  const closedTrades = v10131MergeClosedTradeRows(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const symbolStatusRows = safeArray(sym.statusBySymbol);
   const serverOpenCount = v10116CountOpenTrades();
   const serverClosedCount = v10116CountClosedTrades();
@@ -880,7 +909,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     finalHealthStatus: truthSeed.finalHealthGate?.status || lastV949FinalHealthGateView?.status || '',
     finalHealthNextAction: truthSeed.finalHealthGate?.nextRequiredAction || lastV949FinalHealthGateView?.nextRequiredAction || '',
     reportRefreshStatus: base.v10122ReportRefreshStatus || '',
-    reportRefreshError: base.v10122ReportRefreshError || '',
+    reportRefreshError: /FAST_REFRESHED/i.test(textValue(base.v10122ReportRefreshStatus || '')) ? '' : (base.v10122ReportRefreshError || ''),
     lastError: base.lastError && !/V10116_COMPACT_COLLECT_REPORT_TIMEOUT/.test(String(base.lastError)) ? base.lastError : '',
     openTradeSummaryJson: v10116FlatJson(openTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction:normalizeDirection(t.direction||t.side||''), entry:t.entry||t.entryPrice, stop:t.stop||t.stopPrice, target:t.target||t.targetPrice, status:t.status||'OPEN', source:t.source||t.__alpsSource||'' }))),
     closedTradeSummaryJson: v10116FlatJson(closedTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', result:t.result||'', pnlBps:t.pnlBps, status:t.status||'CLOSED' })))
@@ -7257,7 +7286,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     error: textValue(lastChartView.error || '')
   } : null;
   const healthLite = {
-    schema: 'alps.healthLite.v10130',
+    schema: 'alps.healthLite.v10131',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -7284,7 +7313,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     serverRunner: base.serverRunner || lastHealth?.serverRunner || 'ON',
     pageReady: !!(base.pageReady ?? lastHealth?.pageReady),
     nativeForwardPool: {
-      schema: 'alps.nativeForwardPool.lite.v10130',
+      schema: 'alps.nativeForwardPool.lite.v10131',
       version: FINAL_V930_VERSION,
       totalCandidates: nativeRows,
       watchForward: n(lastNativeForwardPoolView?.watchForward || base?.nativeForwardPool?.watchForward, 0),
@@ -7311,9 +7340,9 @@ function v10128BuildHealthLite(source = 'health-lite') {
     chartTruth,
     v1018ServerPaperLifecycle: lastV1018LifecycleView || null,
     effectivePatchVersion: FINAL_V930_VERSION,
-    v10130CanonicalLedgerReportSync: {
+    v10131ReportArtifactCurrentHealthPrune: {
       installed: true,
-      purpose: 'Small circular-safe CORS live health payload for Netlify dashboards. Avoids large /runner/health payload timeouts on Android Chrome and never includes self-references.',
+      purpose: 'Small circular-safe CORS live health payload for Netlify dashboards. Also keeps report artifacts aligned with canonical currentHealth and prunes duplicate summary rows.',
       fullHealthEndpoint: '/runner/health',
       liteEndpoint: '/runner/health-lite'
     }
@@ -7323,7 +7352,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10130',
+    schema: 'alps.currentHealthLite.snapshot.v10131',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
