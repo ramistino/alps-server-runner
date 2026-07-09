@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.28-health-lite-dashboard-sync';
+const FINAL_V930_VERSION = 'v10.1.29-health-lite-circular-safe';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -7237,7 +7237,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     error: textValue(lastChartView.error || '')
   } : null;
   const healthLite = {
-    schema: 'alps.healthLite.v10128',
+    schema: 'alps.healthLite.v10129',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -7260,7 +7260,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     serverRunner: base.serverRunner || lastHealth?.serverRunner || 'ON',
     pageReady: !!(base.pageReady ?? lastHealth?.pageReady),
     nativeForwardPool: {
-      schema: 'alps.nativeForwardPool.lite.v10128',
+      schema: 'alps.nativeForwardPool.lite.v10129',
       version: FINAL_V930_VERSION,
       totalCandidates: nativeRows,
       watchForward: n(lastNativeForwardPoolView?.watchForward || base?.nativeForwardPool?.watchForward, 0),
@@ -7287,15 +7287,43 @@ function v10128BuildHealthLite(source = 'health-lite') {
     chartTruth,
     v1018ServerPaperLifecycle: lastV1018LifecycleView || null,
     effectivePatchVersion: FINAL_V930_VERSION,
-    v10128HealthLite: {
+    v10129HealthLiteCircularSafe: {
       installed: true,
-      purpose: 'Small CORS-safe live health payload for Netlify dashboards. Avoids large /runner/health payload timeouts on Android Chrome.',
+      purpose: 'Small circular-safe CORS live health payload for Netlify dashboards. Avoids large /runner/health payload timeouts on Android Chrome and never includes self-references.',
       fullHealthEndpoint: '/runner/health',
       liteEndpoint: '/runner/health-lite'
     }
   };
   healthLite.reportAuthority = v10118ReportAuthorityView(healthLite, source);
-  healthLite.currentHealth = healthLite;
+  // v10.1.29: DO NOT assign currentHealth = healthLite. That creates a circular JSON object
+  // and breaks /runner/health-lite with "Converting circular structure to JSON".
+  // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
+  healthLite.currentHealth = {
+    schema: 'alps.currentHealthLite.snapshot.v10129',
+    version: FINAL_V930_VERSION,
+    source,
+    status: healthLite.status,
+    engineReady: healthLite.engineReady,
+    labRunning: healthLite.labRunning,
+    fwRunning: healthLite.fwRunning,
+    candidates: healthLite.candidates,
+    officialCandidates: healthLite.officialCandidates,
+    nativePoolCandidates: healthLite.nativePoolCandidates,
+    forwardLatchSize: healthLite.forwardLatchSize,
+    paperSignals: healthLite.paperSignals,
+    openPositions: healthLite.openPositions,
+    closedTrades: healthLite.closedTrades,
+    rejected: healthLite.rejected,
+    serverPaperLedgerOpen: healthLite.serverPaperLedger.openTrades,
+    serverPaperLedgerClosed: healthLite.serverPaperLedger.closedTrades,
+    paperLedgerStatus: healthLite.paperLedger.status,
+    chartTruthReady: !!(healthLite.chartTruth && healthLite.chartTruth.ready),
+    chartCandles: healthLite.chartTruth ? healthLite.chartTruth.candles : 0,
+    lifecycleOpenMonitored: n(healthLite.v1018ServerPaperLifecycle?.openMonitored, 0),
+    lifecyclePriceChecks: n(healthLite.v1018ServerPaperLifecycle?.priceChecks, 0),
+    sourceOfTruth: 'currentHealth',
+    authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY'
+  };
   return healthLite;
 }
 
