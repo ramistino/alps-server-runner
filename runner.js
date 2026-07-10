@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.39-sentinel-price-source-fix';
+const FINAL_V930_VERSION = 'v10.1.40-post-ledger-sentinel-watchdog';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -910,6 +910,47 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
   lastV10138LivePriceSentinelView = view; return view;
 }
 
+// v10.1.40 — watchdog for the Live Price Sentinel binding.
+// It is not enough for the sentinel to report RUNNING; it must actively watch the canonical open ledger.
+function v10140SentinelBindingGuardView() {
+  const canonicalOpen = v10116CountOpenTrades();
+  const v = lastV10138LivePriceSentinelView || {};
+  const watched = n(v.watchedOpenTrades, 0);
+  const priceChecks = n(v.priceChecks, 0);
+  const status = canonicalOpen > 0 && watched < canonicalOpen
+    ? 'SENTINEL_STALE_NOT_WATCHING_ALL_OPEN_TRADES'
+    : (canonicalOpen > 0 && priceChecks <= 0 ? 'SENTINEL_NO_PRICE_CHECKS_FOR_OPEN_TRADES' : 'SENTINEL_BOUND_TO_OPEN_LEDGER');
+  return {
+    schema: 'alps.v10140SentinelBindingGuard.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    canonicalOpen,
+    watchedOpenTrades: watched,
+    priceChecks,
+    priceCheckSkips: n(v.priceCheckSkips, 0),
+    sentinelStatus: textValue(v.status || ''),
+    sentinelReason: textValue(v.reason || ''),
+    status,
+    nextRequiredAction: status === 'SENTINEL_BOUND_TO_OPEN_LEDGER' ? 'OBSERVE_LIVE_PRICE_SENTINEL' : 'RUN_POST_LEDGER_SENTINEL_SYNC',
+    rule: 'If server ledger has open trades, Live Price Sentinel must watch the same canonical open count and perform live price checks before health can be considered fully operational.'
+  };
+}
+
+async function v10140RunPostLedgerSentinelSync(reason='v10140-post-ledger-sentinel-sync') {
+  const canonicalOpen = v10116CountOpenTrades();
+  const pending = safeArray(v10138PendingEntries).length;
+  if (!V10138_PRICE_SENTINEL_ENABLED) return lastV10138LivePriceSentinelView;
+  if (canonicalOpen > 0 || pending > 0) {
+    try {
+      return await v10138LivePriceSentinelTick(reason);
+    } catch (e) {
+      log('v10.1.40 post-ledger sentinel sync failed:', errorInfo(e));
+      return lastV10138LivePriceSentinelView;
+    }
+  }
+  return lastV10138LivePriceSentinelView;
+}
+
 // v10.1.32 — distinguish raw browser fwRunning from effective server-forward activity.
 // The browser flag may be false on Android/Render while the native pool, forward latch, paper entry,
 // and server lifecycle are demonstrably active. We keep rawFwRunning for honesty, but expose an
@@ -1335,6 +1376,10 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     noRefillReason: lastV10138LivePriceSentinelView?.noRefillReason || '',
     openCapacityMode: 'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP',
     noFixedOpenTradeLimit: true,
+    sentinelBindingStatus: v10140SentinelBindingGuardView().status,
+    sentinelBindingExpectedOpen: v10140SentinelBindingGuardView().canonicalOpen,
+    sentinelBindingWatchedOpen: v10140SentinelBindingGuardView().watchedOpenTrades,
+    sentinelBindingPriceChecks: v10140SentinelBindingGuardView().priceChecks,
     testnetExecutionStatus: lastV10138TestnetExecutionBridgeView?.status || v10138TestnetSafetyStatus().status,
     livePriceSentinelEntryProofJson: v10116FlatJson(safeArray(lastV10138LivePriceSentinelView?.entryProof).slice(0,20)),
     livePriceSentinelExitProofJson: v10116FlatJson(safeArray(lastV10138LivePriceSentinelView?.exitProof).slice(0,20)),
@@ -7876,13 +7921,14 @@ function v10128BuildHealthLite(source = 'health-lite') {
       closedTrades: exportCounts.closed
     },
     v10138LivePriceSentinel: lastV10138LivePriceSentinelView || { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, status:'WAITING_FOR_FIRST_SENTINEL_TICK', priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntries:v10138PendingEntries.length, paperOnly:true, liveCapitalExecution:false, testnetOnly:true },
+    v10140SentinelBindingGuard: v10140SentinelBindingGuardView(),
     v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView || { schema:'alps.testnetExecutionBridge.v10138', version:FINAL_V930_VERSION, installed:true, ...v10138TestnetSafetyStatus(), orders:[], paperOnly:false, liveCapitalExecution:false, testnetOnly:true },
     finalHealthGate: {
       schema: 'alps.finalHealthGate.v10138.liveLiteOverride',
       version: FINAL_V930_VERSION,
       installed: true,
-      status: forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'PASS' : 'WARN',
-      nextRequiredAction: forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction,
+      status: (v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0) ? 'WARN' : (forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'PASS' : 'WARN'),
+      nextRequiredAction: (v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0) ? 'RUN_POST_LEDGER_SENTINEL_SYNC' : (forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction),
       rule: 'Health-lite final gate trusts currentHealth authority: native pool/latch + paper entry/ledger proof means effective forward is active even if the raw browser flag is false.'
     }
   };
@@ -7940,6 +7986,10 @@ function v10128BuildHealthLite(source = 'health-lite') {
     noFixedOpenTradeLimit: true,
     openCapacityMode: 'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP',
     testnetExecutionStatus: healthLite.v10138TestnetExecutionBridge?.status || '',
+    sentinelBindingStatus: healthLite.v10140SentinelBindingGuard?.status || '',
+    sentinelBindingExpectedOpen: healthLite.v10140SentinelBindingGuard?.canonicalOpen || 0,
+    sentinelBindingWatchedOpen: healthLite.v10140SentinelBindingGuard?.watchedOpenTrades || 0,
+    sentinelBindingPriceChecks: healthLite.v10140SentinelBindingGuard?.priceChecks || 0,
     livePriceSentinelExitProof: safeArray(healthLite.v10138LivePriceSentinel?.exitProof).slice(0,8),
     pendingEntryProof: safeArray(healthLite.v10138LivePriceSentinel?.pendingProof).slice(0,8),
     testnetExecutionOrders: safeArray(healthLite.v10138TestnetExecutionBridge?.orders).slice(-8),
@@ -10163,6 +10213,9 @@ async function runnerTick(reason = 'server-runner tick') {
     await installV930StableAutonomyInPage().catch(e => log('v9.4 recovery forward core reinstall after bridge failed:', e.message));
     await applyForwardLatchToPage('runner-tick-apply-latch').catch(() => null);
     await applyV948ZonePersistenceEntryEngine('runner-tick-zone-persistence-entry').catch(() => null);
+    // v10.1.40: the v10.1.38 sentinel can run before the paper-entry engine creates new open trades.
+    // Re-run it immediately after the server ledger is populated, so RUNNING means actively watching open trades.
+    await v10140RunPostLedgerSentinelSync('runner-tick-post-paper-entry-ledger-sync').catch(() => null);
     await applyV949TradeLifecycleGuards('runner-tick-trade-lifecycle').catch(() => null);
     await startForwardIfEligible('runner-tick-eligible-forward').catch(() => null);
 
@@ -10348,6 +10401,15 @@ async function collectReport() {
       report.v1018ServerPaperLifecycle = postLedgerLifecycle;
     }
   } catch (e) { log('v10.1.27 post-ledger lifecycle sync skipped:', e && e.message || e); }
+  // v10.1.40: keep report/health snapshots from showing a stale sentinel view after ledger rebuild.
+  try {
+    const postLedgerSentinel = await v1016WithTimeout(v10140RunPostLedgerSentinelSync('report-post-ledger-sentinel-sync'), 12000, 'V10140_POST_LEDGER_SENTINEL_TIMEOUT').catch(e => ({ schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, status:'POST_LEDGER_SENTINEL_FAILED_OR_TIMED_OUT', lastError:textValue(e && e.message || e).slice(0,180), watchedOpenTrades:n(lastV10138LivePriceSentinelView?.watchedOpenTrades,0), priceChecks:n(lastV10138LivePriceSentinelView?.priceChecks,0), priceCheckSkips:n(lastV10138LivePriceSentinelView?.priceCheckSkips,0), paperOnly:true, liveCapitalExecution:false, testnetOnly:true }));
+    if (postLedgerSentinel) {
+      lastV10138LivePriceSentinelView = postLedgerSentinel;
+      report.v10138LivePriceSentinel = postLedgerSentinel;
+      report.v10140SentinelBindingGuard = v10140SentinelBindingGuardView();
+    }
+  } catch (e) { log('v10.1.40 post-ledger sentinel sync skipped:', e && e.message || e); }
   await updateTradeVault(lastTradeExport, 'report');
   report.alpsTradeExport = lastTradeExport;
   report = v1001SyncReportCountersFromTradeExport(report, lastTradeExport);
