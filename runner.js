@@ -57,7 +57,6 @@ const STATE_AUTHORITY_NONZERO_FILE = path.join(DATA_DIR, 'state-authority-v10-la
 const RUNTIME_NONZERO_FILE = path.join(DATA_DIR, 'runtime-last-nonzero-v1014.json');
 const V10143_CLOSED_LEDGER_FILE = path.join(DATA_DIR, 'closed-ledger-monotonic-v10143.json');
 const V10144_LEARNING_MEMORY_FILE = path.join(DATA_DIR, 'adaptive-evidence-learning-v10144.json');
-const V10145_HEALTH_CONTRACT_FILE = path.join(DATA_DIR, 'lab-health-contract-v10145.json');
 const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
   "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
   "note": "Previous known ALPS paper-forward trades before ALPS trade export sync. Historical continuity only; not current positions.",
@@ -357,7 +356,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'stable-recovery-operational-core-v10145';
+const FINAL_V930_VERSION = 'v10.1.45-final-learning-sync';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -788,9 +787,8 @@ function v10142ClosedLedgerStats(...groups) {
   const wins = sortable.filter(x => x.result === 'WIN').sort((a,b)=>(v10137FiniteNumber(b.pnlBps, -Infinity) - v10137FiniteNumber(a.pnlBps, -Infinity)));
   const losses = sortable.filter(x => x.result === 'LOSS').sort((a,b)=>(v10137FiniteNumber(a.pnlBps, Infinity) - v10137FiniteNumber(b.pnlBps, Infinity)));
   const breakeven = sortable.filter(x => x.result === 'BREAKEVEN');
-  const clusterClassification = v10145TradeClusterClassification(rows);
   return {
-    schema: 'alps.closedLedgerStats.v10145',
+    schema: 'alps.closedLedgerStats.v10144',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source: 'MONOTONIC_PERSISTENT_CLOSED_LEDGER_SEMANTIC_DEDUP',
@@ -820,15 +818,7 @@ function v10142ClosedLedgerStats(...groups) {
     semanticDuplicateClosed: lastV10143ClosedLedgerMonotonicGuardView?.semanticDuplicateClosed || 0,
     closedLedgerMonotonicStatus: lastV10143ClosedLedgerMonotonicGuardView?.status || 'MONOTONIC_CLOSED_LEDGER_OK',
     closedLedgerDroppedSinceLastReport: lastV10143ClosedLedgerMonotonicGuardView?.closedLedgerDroppedSinceLastReport || 0,
-    clusterClassification,
-    clusterClassificationStatus: clusterClassification.classificationStatus,
-    multiTargetClusterCount: clusterClassification.multiTargetClusterCount,
-    multiTargetLegCount: clusterClassification.multiTargetLegCount,
-    repeatedSetupClusterCount: clusterClassification.repeatedSetupClusterCount,
-    duplicatedExecutionSuspectClusterCount: clusterClassification.duplicatedExecutionSuspectClusterCount,
-    duplicatedExecutionSuspectRows: clusterClassification.duplicatedExecutionSuspectRows,
-    noLossProfitFactorPolicy: 'NO_LOSS_GROUPS_EXPOSE_noLoss_TRUE_AND_SCORE_WITH_CAPPED_INTERNAL_PF_NOT_ZERO',
-    rule: 'Win/loss metrics are aggregated from the persistent monotonic semantic closed ledger. v10.1.45 classifies multi-target clusters instead of silently calling every cluster duplicate-free.'
+    rule: 'Win/loss metrics are aggregated from the persistent monotonic semantic closed ledger; compact visible trade summaries and shrinking source windows are no longer used as performance truth.'
   };
 }
 function v10142ClosedLedgerFlatFields(stats = {}) {
@@ -862,22 +852,17 @@ function v10144Clamp(x, lo = 0, hi = 100) {
 }
 function v10144EvidenceConfidence(bucket = {}) {
   const closed = n(bucket.closed, 0);
-  const wins = n(bucket.wins, 0);
-  const losses = n(bucket.losses, 0);
-  const decisive = n(bucket.decisiveClosed, wins + losses);
+  const decisive = n(bucket.decisiveClosed, n(bucket.wins,0) + n(bucket.losses,0));
   const decisiveWinRate = Number.isFinite(Number(bucket.decisiveWinRate)) ? Number(bucket.decisiveWinRate) : 50;
-  const hasExplicitPf = bucket.profitFactorR !== null && bucket.profitFactorR !== undefined && bucket.profitFactorR !== '' && Number.isFinite(Number(bucket.profitFactorR));
-  const noLoss = losses === 0 && wins > 0;
-  // v10.1.45: no-loss groups are not PF=0. Use a capped internal PF for scoring, and expose noLoss=true.
-  const pfRForScore = hasExplicitPf ? Number(bucket.profitFactorR) : (noLoss ? 10 : 1);
+  const pfR = Number.isFinite(Number(bucket.profitFactorR)) ? Number(bucket.profitFactorR) : (n(bucket.losses,0) === 0 && n(bucket.wins,0) > 0 ? 10 : 1);
   const avgR = Number.isFinite(Number(bucket.avgResultR)) ? Number(bucket.avgResultR) : 0;
   const netBps = Number.isFinite(Number(bucket.netPnlBps)) ? Number(bucket.netPnlBps) : 0;
   const sample = v10144Clamp(decisive / 30, 0, 1);
   const wr = v10144Clamp((decisiveWinRate - 50) / 45, -1, 1);
-  const pf = v10144Clamp(Math.log(Math.max(0.05, pfRForScore)) / Math.log(8), -1, 1);
+  const pf = v10144Clamp(Math.log(Math.max(0.05, pfR)) / Math.log(8), -1, 1);
   const avg = v10144Clamp(avgR / 2, -1, 1);
   const pnl = v10144Clamp(netBps / 600, -1, 1);
-  const rawScore = 50 + (20 * sample) + (15 * wr) + (20 * pf) + (10 * avg) + (10 * pnl) - (losses > wins ? 10 : 0);
+  const rawScore = 50 + (20 * sample) + (15 * wr) + (20 * pf) + (10 * avg) + (10 * pnl) - (n(bucket.losses,0) > n(bucket.wins,0) ? 10 : 0);
   const confidenceScore = Number(v10144Clamp(rawScore, 0, 100).toFixed(2));
   let status = 'WATCH_RETEST';
   if (closed < 8 || decisive < 6) status = 'LOW_SAMPLE_COLLECT_MORE_EVIDENCE';
@@ -891,13 +876,10 @@ function v10144EvidenceConfidence(bucket = {}) {
     sampleSize: closed,
     decisiveSample: decisive,
     decisiveWinRate,
-    noLoss,
-    profitFactorR: hasExplicitPf ? Number(bucket.profitFactorR) : null,
-    profitFactorRDisplay: noLoss ? 'NO_LOSS_SAMPLE_CAP' : (hasExplicitPf ? Number(bucket.profitFactorR) : null),
-    profitFactorScoreInput: Number(pfRForScore.toFixed(4)),
+    profitFactorR: Number.isFinite(Number(bucket.profitFactorR)) ? Number(bucket.profitFactorR) : null,
     avgResultR: bucket.avgResultR ?? null,
     netPnlBps: bucket.netPnlBps ?? null,
-    rule: 'Score blends sample size, decisive win rate, capped no-loss profit factor, average R, and net bps. It is a soft priority signal, not a hard trade ban.'
+    rule: 'Score blends sample size, decisive win rate, profit factor, average R, and net bps. It is a soft priority signal, not a hard trade ban.'
   };
 }
 function v10144BucketBy(rows = [], keyFn = () => 'UNKNOWN') {
@@ -916,7 +898,7 @@ function v10144RejectedReasonDiagnosis(reasonCounts = {}) {
   const duplicate = n(counts.DUPLICATE, 0);
   const severity = directionUndefined >= 200 ? 'HIGH' : (directionUndefined > 0 ? 'MEDIUM' : 'CLEAR');
   return {
-    schema: 'alps.directionUndefinedDiagnosis.v10145',
+    schema: 'alps.directionUndefinedDiagnosis.v10144',
     version: FINAL_V930_VERSION,
     totalRejectedClassified: total,
     directionUndefined,
@@ -963,7 +945,7 @@ function v10144BuildAdaptiveEvidenceLearning(stats = {}, closedRows = [], reason
   if (directionDiagnosis.directionUndefined > 0) learningActions.push({ action:'DIAGNOSE_DIRECTION_UNDEFINED', target:'paper-entry-rejections', reason:`${directionDiagnosis.directionUndefined} candidates rejected without direction.` });
   if (lastV10143ClosedLedgerMonotonicGuardView?.closedLedgerDroppedSinceLastReport > 0) learningActions.push({ action:'SEPARATE_RAW_SOURCE_FROM_PERSISTENT_MEMORY', target:'closed-ledger-reporting', reason:`${lastV10143ClosedLedgerMonotonicGuardView.closedLedgerDroppedSinceLastReport} source rows were retained by persistent memory after source-window shrink.` });
   const view = {
-    schema: 'alps.adaptiveEvidenceLearning.v10145',
+    schema: 'alps.adaptiveEvidenceLearning.v10144',
     version: FINAL_V930_VERSION,
     installed: true,
     generatedAt: new Date().toISOString(),
@@ -985,7 +967,7 @@ function v10144BuildAdaptiveEvidenceLearning(stats = {}, closedRows = [], reason
   lastV10144AdaptiveEvidenceLearningView = view;
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(V10144_LEARNING_MEMORY_FILE, JSON.stringify({ schema:'alps.adaptiveEvidenceLearning.memory.v10145', version:FINAL_V930_VERSION, updatedAt:view.generatedAt, latest:view }, null, 2));
+    fs.writeFileSync(V10144_LEARNING_MEMORY_FILE, JSON.stringify({ schema:'alps.adaptiveEvidenceLearning.memory.v10144', version:FINAL_V930_VERSION, updatedAt:view.generatedAt, latest:view }, null, 2));
   } catch (e) {
     view.persistStatus = 'PERSIST_FAILED';
     view.persistError = textValue(e && e.message || e).slice(0, 180);
@@ -1001,249 +983,6 @@ function v10144CandidateLearningConfidence(candidate = {}) {
   const tfRow = safeArray(view.timeframeConfidence).find(x => textValue(x.key).toLowerCase() === tf);
   const score = Number((((pairRow?.confidenceScore ?? 50) * 0.6) + ((tfRow?.confidenceScore ?? 50) * 0.4)).toFixed(2));
   return { score, pairStatus: pairRow?.status || 'NO_PAIR_MEMORY', timeframeStatus: tfRow?.status || 'NO_TIMEFRAME_MEMORY' };
-}
-
-
-
-function v10145RoundForCluster(value, decimals = 8) {
-  const x = v10137FiniteNumber(value, null);
-  if (!Number.isFinite(x)) return '';
-  return Number(x.toFixed(decimals)).toString();
-}
-function v10145StrategyKey(t = {}) {
-  return textValue(t.strategy || t.setupType || t.setup || t.stratName || t.family || 'NO_SETUP_FIELD').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || 'NO_SETUP_FIELD';
-}
-function v10145ClusterBaseKey(t = {}) {
-  return [
-    textValue(t.pair || t.symbol || t.baseSymbol || 'UNKNOWN').toUpperCase().split('_')[0].replace(/[^A-Z0-9]/g, '') || 'UNKNOWN',
-    textValue(t.timeframe || t.tf || 'unknown').toLowerCase().replace(/\s+/g, '') || 'unknown',
-    normalizeDirection(t.direction || t.side || 'UNKNOWN') || 'UNKNOWN',
-    v10145StrategyKey(t),
-    v10145RoundForCluster(t.entry ?? t.entryPrice ?? t.openPrice ?? t.price, 6)
-  ].join('|');
-}
-function v10145ClusterLegKey(t = {}) {
-  return [
-    v10145RoundForCluster(t.target ?? t.takeProfit ?? t.tp, 6),
-    v10145RoundForCluster(t.exit ?? t.exitPrice ?? t.closePrice, 6),
-    v10145RoundForCluster(t.resultR, 4),
-    v10144NormalizeCloseReason(t.closeReason || t.exitReason || '')
-  ].join('|');
-}
-function v10145ClusterExactKey(t = {}) {
-  const closedRaw = t.closedAtIso || t.closedAt || t.exitTriggeredAtIso || t.exitTriggeredAt || '';
-  const closedBucket = typeof closedRaw === 'number' ? Math.floor(closedRaw / 60000) : textValue(closedRaw).slice(0, 16);
-  return `${v10145ClusterBaseKey(t)}|${v10145ClusterLegKey(t)}|${closedBucket}`;
-}
-function v10145TradeClusterClassification(rows = []) {
-  const sourceRows = v10143MergeClosedTradeRows(rows);
-  const map = new Map();
-  for (const row of sourceRows) {
-    const key = v10145ClusterBaseKey(row);
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(row);
-  }
-  const clusters = [];
-  let multiTargetLegCount = 0;
-  let repeatedSetupRows = 0;
-  let duplicatedExecutionSuspectRows = 0;
-  for (const [key, group] of map.entries()) {
-    if (group.length < 2) continue;
-    const legKeys = new Set(group.map(v10145ClusterLegKey));
-    const exactCounts = new Map();
-    for (const row of group) {
-      const k = v10145ClusterExactKey(row);
-      exactCounts.set(k, (exactCounts.get(k) || 0) + 1);
-    }
-    const exactDuplicateRows = [...exactCounts.values()].filter(c => c > 1).reduce((a, c) => a + c - 1, 0);
-    const kind = exactDuplicateRows > 0 ? 'DUPLICATED_EXECUTION_SUSPECT' : (legKeys.size > 1 ? 'MULTI_TARGET_CLUSTER' : 'REPEATED_SETUP_CLUSTER');
-    if (kind === 'MULTI_TARGET_CLUSTER') multiTargetLegCount += group.length;
-    if (kind === 'REPEATED_SETUP_CLUSTER') repeatedSetupRows += group.length;
-    if (kind === 'DUPLICATED_EXECUTION_SUSPECT') duplicatedExecutionSuspectRows += exactDuplicateRows;
-    const first = group[0] || {};
-    clusters.push({
-      key,
-      kind,
-      rows: group.length,
-      distinctLegs: legKeys.size,
-      exactDuplicateRows,
-      pair: textValue(first.pair || first.symbol || '').toUpperCase(),
-      timeframe: textValue(first.timeframe || first.tf || '').toLowerCase(),
-      direction: normalizeDirection(first.direction || first.side || ''),
-      strategy: v10145StrategyKey(first),
-      entry: v10137FiniteNumber(first.entry ?? first.entryPrice, null),
-      resultRSum: Number(group.reduce((a, r) => a + (v10137FiniteNumber(r.resultR, 0) || 0), 0).toFixed(4)),
-      rule: kind === 'MULTI_TARGET_CLUSTER' ? 'Different targets/resultR under the same setup entry are classified as multi-target legs, not silently treated as duplicate-free single trades.' : (kind === 'DUPLICATED_EXECUTION_SUSPECT' ? 'Same setup leg appears more than once in the same close-time bucket and must be reviewed before using economic stats for promotion.' : 'Repeated setup with the same base key is visible for audit and not hidden.')
-    });
-  }
-  clusters.sort((a, b) => (b.kind === 'DUPLICATED_EXECUTION_SUSPECT') - (a.kind === 'DUPLICATED_EXECUTION_SUSPECT') || b.rows - a.rows);
-  const multiTargetClusterCount = clusters.filter(x => x.kind === 'MULTI_TARGET_CLUSTER').length;
-  const repeatedSetupClusterCount = clusters.filter(x => x.kind === 'REPEATED_SETUP_CLUSTER').length;
-  const duplicatedExecutionSuspectClusterCount = clusters.filter(x => x.kind === 'DUPLICATED_EXECUTION_SUSPECT').length;
-  return {
-    schema: 'alps.clusterLedgerClassification.v10145',
-    version: FINAL_V930_VERSION,
-    generatedAt: new Date().toISOString(),
-    sourceRows: sourceRows.length,
-    clusterCount: clusters.length,
-    multiTargetClusterCount,
-    multiTargetLegCount,
-    repeatedSetupClusterCount,
-    repeatedSetupRows,
-    duplicatedExecutionSuspectClusterCount,
-    duplicatedExecutionSuspectRows,
-    semanticDuplicateStillRaw: lastV10143ClosedLedgerMonotonicGuardView?.semanticDuplicateClosed || 0,
-    classificationStatus: duplicatedExecutionSuspectRows > 0 ? 'WARN_DUPLICATED_EXECUTION_SUSPECTS_FOUND' : (clusters.length ? 'CLUSTERS_CLASSIFIED_NO_HARD_DELETION' : 'NO_MULTI_ROW_CLUSTERS_FOUND'),
-    examples: clusters.slice(0, 12),
-    rule: 'v10.1.45 does not hide multi-target ladders. It classifies each cluster so the dashboard can distinguish independent trades, multi-target legs, repeated setup, and duplicated execution suspects.'
-  };
-}
-function v10145ReadJsonFileCount(file) {
-  try {
-    if (!fs.existsSync(file)) return { file:path.basename(file), exists:false, rows:0 };
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const rows = safeArray(parsed.rows || parsed.closedTrades || parsed.trades || parsed.data);
-    return { file:path.basename(file), exists:true, rows:rows.length, updatedAt:parsed.updatedAt || parsed.generatedAt || '', schema:parsed.schema || '' };
-  } catch (e) {
-    return { file:path.basename(file), exists:true, rows:0, error:textValue(e && e.message || e).slice(0, 160) };
-  }
-}
-function v10145MemoryMigrationStatus(currentClosedCount = 0) {
-  let scanned = [];
-  try {
-    if (fs.existsSync(DATA_DIR)) {
-      scanned = fs.readdirSync(DATA_DIR)
-        .filter(name => /closed.*ledger|ledger.*closed/i.test(name) && /\.json$/i.test(name))
-        .slice(0, 20)
-        .map(name => v10145ReadJsonFileCount(path.join(DATA_DIR, name)));
-    }
-  } catch (_) {}
-  const maxDiscovered = scanned.reduce((m, x) => Math.max(m, n(x.rows, 0)), 0);
-  return {
-    schema: 'alps.memoryMigrationStatus.v10145',
-    version: FINAL_V930_VERSION,
-    generatedAt: new Date().toISOString(),
-    currentLedgerCount: n(currentClosedCount, 0),
-    maxDiscoveredLedgerCount: maxDiscovered,
-    scannedLedgerFiles: scanned,
-    migrationStatus: maxDiscovered > currentClosedCount ? 'WARN_CURRENT_LEDGER_BELOW_DISCOVERED_HISTORY' : (scanned.length ? 'DISCOVERED_LEDGER_HISTORY_NOT_BELOW_CURRENT' : 'NO_PRIOR_LEDGER_FILE_DISCOVERED'),
-    importedCount: currentClosedCount >= maxDiscovered ? currentClosedCount : 0,
-    missingHistoricalCount: Math.max(0, maxDiscovered - currentClosedCount),
-    rule: 'The server reports what ledger files exist in its persistent DATA_DIR. It does not invent prior history; if an old report had a higher count but no file remains, this will show no file-proven import source.'
-  };
-}
-function v10145DirectionFieldAudit(reasonCounts = {}) {
-  const directionUndefined = n(reasonCounts.DIRECTION_UNDEFINED, 0);
-  return {
-    schema: 'alps.directionFieldAudit.v10145',
-    version: FINAL_V930_VERSION,
-    generatedAt: new Date().toISOString(),
-    directionUndefined,
-    requiredRawFields: ['rawDirection','side','bias','signalDirection','strategyDirection','mappedDirection','finalDirection'],
-    status: directionUndefined > 0 ? 'RAW_DIRECTION_FIELD_AUDIT_REQUIRED' : 'NO_DIRECTION_UNDEFINED_REJECTIONS',
-    nextAction: directionUndefined > 0 ? 'Attach raw direction fields to every DIRECTION_UNDEFINED rejection before paper-entry visibility.' : 'No direction audit action required.',
-    rule: 'Undirected candidates remain blocked; this audit only explains which direction fields must be exposed, it does not loosen the safety gate.'
-  };
-}
-function v10145Lamp(status, label, reason, sourceField) {
-  return { status, label, reason, sourceField, updatedAt:new Date().toISOString() };
-}
-function v10145BuildHealthContract(healthLite = {}, closedLedgerStats = {}, adaptiveLearning = {}, rejectedReasonCounts = {}) {
-  const now = Date.now();
-  const expectedOpen = n(healthLite.v10140SentinelBindingGuard?.canonicalOpen, n(healthLite.openPositions, 0));
-  const watchedOpen = n(healthLite.v10140SentinelBindingGuard?.watchedOpenTrades, n(healthLite.v10138LivePriceSentinel?.watchedOpenTrades, 0));
-  const lifecycleOpen = Math.min(n(healthLite.v1018ServerPaperLifecycle?.openMonitored, expectedOpen), expectedOpen);
-  const lifecycleChecks = Math.min(n(healthLite.v1018ServerPaperLifecycle?.priceChecks, expectedOpen), expectedOpen);
-  const healthFresh = !!healthLite.generatedAt;
-  const candleFresh = !!(healthLite.chartTruth && (healthLite.chartTruth.ready || n(healthLite.chartTruth.candles, 0) > 0));
-  const runnerGreen = !!healthLite.fwRunning && /BROWSER_FORWARD_RUNNING|EVIDENCE_ACTIVE|FORWARD_RUNNING/i.test(textValue(healthLite.forwardRunnerSync?.status || 'BROWSER_FORWARD_RUNNING'));
-  const engineGreen = !!healthLite.engineReady && !!healthLite.labRunning;
-  const sentinelGreen = expectedOpen === watchedOpen && (expectedOpen === 0 || healthLite.v10140SentinelBindingGuard?.status === 'SENTINEL_BOUND_TO_OPEN_LEDGER');
-  const ledgerGreen = (closedLedgerStats.closedTrades || 0) >= 0 && !String(closedLedgerStats.closedLedgerMonotonicStatus || '').startsWith('CRITICAL');
-  const learningGreen = !!adaptiveLearning.installed;
-  const reasons = [];
-  if (!runnerGreen) reasons.push('RUNNER_NOT_GREEN');
-  if (!engineGreen) reasons.push('ENGINE_NOT_GREEN');
-  if (!sentinelGreen) reasons.push('SENTINEL_OPEN_WATCH_MISMATCH');
-  if (expectedOpen > 0 && lifecycleOpen !== expectedOpen) reasons.push('LIFECYCLE_OPEN_COVERAGE_MISMATCH');
-  if (expectedOpen > 0 && lifecycleChecks !== expectedOpen) reasons.push('LIFECYCLE_PRICE_CHECK_COVERAGE_MISMATCH');
-  const componentHeartbeats = {
-    schema: 'alps.componentHeartbeats.v10145',
-    generatedAt: new Date(now).toISOString(),
-    runnerLastSeenAt: new Date(now).toISOString(),
-    engineLastSeenAt: engineGreen ? new Date(now).toISOString() : null,
-    featureGateLastSeenAt: healthLite.v10115FeatureGateDiagnostics || candleFresh ? new Date(now).toISOString() : null,
-    sentinelLastRebindAt: sentinelGreen ? new Date(now).toISOString() : null,
-    ledgerLastWriteAt: closedLedgerStats.generatedAt || null,
-    chartLastUpdateAt: candleFresh ? new Date(now).toISOString() : null,
-    learningLastComputedAt: adaptiveLearning.generatedAt || null,
-    rule: 'Heartbeat timestamps are server health-contract observations, not invented trading events.'
-  };
-  const freshnessSplit = {
-    schema: 'alps.freshnessSplit.v10145',
-    healthFreshness: healthFresh ? 'GREEN_CURRENT_HEALTH_AUTHORITY' : 'RED_NO_HEALTH',
-    candleFreshness: candleFresh ? 'GREEN_CHART_CANDLES_VISIBLE' : 'YELLOW_WAITING_CHART_CANDLES',
-    priceFreshness: healthLite.v10138LivePriceSentinel?.status === 'RUNNING' ? 'GREEN_PRICE_SENTINEL_RUNNING' : 'YELLOW_PRICE_SENTINEL_WAITING',
-    runnerFreshness: runnerGreen ? 'GREEN_FORWARD_RUNNING' : 'YELLOW_FORWARD_WAITING_OR_PARTIAL',
-    chartFreshness: candleFresh ? 'GREEN_CHART_TRUTH_READY' : 'YELLOW_CHART_NOT_READY',
-    rule: 'Freshness is split by component so the dashboard does not use one yellow lamp for unrelated runner, candle, price, chart, and health timing.'
-  };
-  const lamps = {
-    runner: v10145Lamp(runnerGreen ? 'GREEN' : 'YELLOW', runnerGreen ? 'RUNNER_ACTIVE' : 'RUNNER_WAITING_OR_PARTIAL', healthLite.forwardRunnerSync?.status || '', 'forwardRunnerSync.status'),
-    engine: v10145Lamp(engineGreen ? 'GREEN' : 'YELLOW', engineGreen ? 'ENGINE_READY' : 'ENGINE_AWAITING', `engineReady=${!!healthLite.engineReady} labRunning=${!!healthLite.labRunning}`, 'engineReady/labRunning'),
-    freshness: v10145Lamp(healthFresh && candleFresh ? 'GREEN' : 'YELLOW', healthFresh && candleFresh ? 'FRESHNESS_SPLIT_GREEN' : 'FRESHNESS_PARTIAL', 'See freshnessSplit; this lamp no longer mixes runner and candle states.', 'freshnessSplit'),
-    sentinel: v10145Lamp(sentinelGreen ? 'GREEN' : 'YELLOW', sentinelGreen ? 'SENTINEL_BOUND' : 'SENTINEL_REBIND_REQUIRED', `expected=${expectedOpen} watched=${watchedOpen}`, 'v10140SentinelBindingGuard'),
-    ledger: v10145Lamp(ledgerGreen ? 'GREEN' : 'YELLOW', ledgerGreen ? 'LEDGER_MONOTONIC' : 'LEDGER_REVIEW', closedLedgerStats.closedLedgerMonotonicStatus || '', 'closedLedgerStats'),
-    learning: v10145Lamp(learningGreen ? 'GREEN' : 'YELLOW', learningGreen ? 'LEARNING_ACTIVE' : 'LEARNING_WAITING', adaptiveLearning.stage || '', 'adaptiveEvidenceLearning')
-  };
-  const dashboardCardTruthMap = [
-    { card:'Runner', sourceField:'forwardRunnerSync.status', isDynamic:true, status:lamps.runner.status, whyStatic:'' },
-    { card:'Engine', sourceField:'engineReady/labRunning', isDynamic:true, status:lamps.engine.status, whyStatic:'' },
-    { card:'Freshness', sourceField:'freshnessSplit', isDynamic:true, status:lamps.freshness.status, whyStatic:'Split into health/candle/price/runner/chart freshness.' },
-    { card:'Universe', sourceField:'v10115SymbolStatus/statusBySymbol', isDynamic:true, status:'GREEN', whyStatic:'' },
-    { card:'Feature Gate', sourceField:'featureRowsFound/chartTruth', isDynamic:true, status:candleFresh?'GREEN':'YELLOW', whyStatic:'' },
-    { card:'Paper Entry', sourceField:'paperLedger/rejectedReasonCounts', isDynamic:true, status:n(rejectedReasonCounts.DIRECTION_UNDEFINED,0)>0?'YELLOW':'GREEN', whyStatic:'Direction Undefined remains an audit issue.' },
-    { card:'Closed Ledger', sourceField:'closedLedgerStats', isDynamic:true, status:lamps.ledger.status, whyStatic:'' },
-    { card:'Sentinel', sourceField:'v10140SentinelBindingGuard', isDynamic:true, status:lamps.sentinel.status, whyStatic:'' },
-    { card:'Adaptive Learning', sourceField:'adaptiveEvidenceLearning', isDynamic:true, status:lamps.learning.status, whyStatic:'' },
-    { card:'Hypothesis DNA', sourceField:'adaptiveEvidenceLearning.hypothesisDNA', isDynamic:true, status:safeArray(adaptiveLearning.hypothesisDNA).length?'GREEN':'YELLOW', whyStatic:'' },
-    { card:'Failure Learning', sourceField:'adaptiveEvidenceLearning.failureLearning', isDynamic:true, status:safeArray(adaptiveLearning.failureLearning).length?'GREEN':'YELLOW', whyStatic:'' },
-    { card:'Direction Diagnosis', sourceField:'directionFieldAudit/directionUndefinedDiagnosis', isDynamic:true, status:n(rejectedReasonCounts.DIRECTION_UNDEFINED,0)>0?'YELLOW':'GREEN', whyStatic:'' },
-    { card:'Browser Server Ready', sourceField:'not exported by current runner', isDynamic:false, status:'NOT_WIRED', whyStatic:'Shown as N/A only; not a valid health lamp.' },
-    { card:'Health Guard', sourceField:'v1016HealthFastResponseGuard', isDynamic:true, status:healthLite.v1016HealthFastResponseGuard?'GREEN':'NOT_WIRED', whyStatic:'' },
-    { card:'Feature Materializer', sourceField:'not exported by current health-lite', isDynamic:false, status:'NOT_WIRED', whyStatic:'Do not display as working unless a real source field is added.' },
-    { card:'Paper Seen', sourceField:'paperEntryVisibilityCandidatesSeen', isDynamic:true, status:n(healthLite.paperEntryVisibilityCandidatesSeen,0)>0?'GREEN':'YELLOW', whyStatic:'' },
-    { card:'Max Entries/Tick', sourceField:'not exported by current paper-entry bridge', isDynamic:false, status:'NOT_WIRED', whyStatic:'Do not display as a live control until the bridge exports it.' }
-  ];
-  const finalStatus = reasons.length ? 'WARN' : 'PASS';
-  const view = {
-    schema: 'alps.fullLabHealthContract.v10145',
-    version: FINAL_V930_VERSION,
-    generatedAt: new Date(now).toISOString(),
-    installed: true,
-    finalStatus,
-    reasons,
-    lampContract: {
-      GREEN: 'current and verified by its own source field',
-      YELLOW: 'waiting, delayed, partial, stale-audit-only, or not fully wired',
-      RED: 'stopped, failed, missing, or hard mismatch'
-    },
-    lamps,
-    componentHeartbeats,
-    freshnessSplit,
-    dashboardCardTruthMap,
-    sentinelHardGate: {
-      expectedOpen, watchedOpen, lifecycleOpenMonitored:lifecycleOpen, lifecyclePriceChecks:lifecycleChecks,
-      status: sentinelGreen && lifecycleOpen === expectedOpen && lifecycleChecks === expectedOpen ? 'PASS' : 'WARN',
-      rule: 'Sentinel may only be green when watched open equals canonical open and lifecycle coverage equals canonical open.'
-    },
-    rule: 'Every visible dashboard card must expose sourceField, dynamic/static status, and stale/not-wired reason. Yellow is not automatically failure; it is an explicit partial/waiting/not-wired state.'
-  };
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(V10145_HEALTH_CONTRACT_FILE, JSON.stringify(view, null, 2));
-  } catch (e) { view.persistStatus = 'PERSIST_FAILED'; view.persistError = textValue(e && e.message || e).slice(0, 160); }
-  return view;
 }
 
 
@@ -1587,7 +1326,12 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
   }
   const stillPending = [];
   v10138PendingEntries = v10138DedupPendingEntries(v10138PendingEntries);
+  // v10.1.45: evaluate pending entries in learning-confidence order (soft reorder only — no bans, no caps).
+  // Evidence-strong pair/timeframe contexts get first claim on price checks and open slots, mirroring the
+  // v10.1.44 forward-pool soft priority so the sentinel layer also consumes the learning brain.
+  try { v10138PendingEntries.sort((a, b) => n(v10144CandidateLearningConfidence(b).score, 50) - n(v10144CandidateLearningConfidence(a).score, 50)); } catch (_) {}
   view.watchedPendingEntries = v10138PendingEntries.length;
+  view.pendingLearningPriority = { schema:'alps.pendingLearningPriority.v10145', mode:'SOFT_REORDER_ONLY', noHardBans:true, noFixedCaps:true };
   for (const p of v10138PendingEntries) {
     try {
       const priceProof = await getPrice(p.pair); const price = v10138Num(priceProof?.price, null); const trigger = v10138EntryTriggerStatus(p, price);
@@ -8587,9 +8331,6 @@ function v10128BuildHealthLite(source = 'health-lite') {
   const closedLedgerStats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const rejectedReasonCountsLite = lastV1017cPaperEntryAuthorityBridgeView?.rejectedReasonCounts || lastV948EntryEngineView?.rejectedReasonCounts || lastV952RejectedAuditView?.rejectedReasonCounts || {};
   const adaptiveEvidenceLearning = v10144BuildAdaptiveEvidenceLearning(closedLedgerStats, v10143PersistentClosedRows, rejectedReasonCountsLite, canonicalOpenRows);
-  const clusterLedgerClassification = closedLedgerStats.clusterClassification || v10145TradeClusterClassification(v10143PersistentClosedRows);
-  const memoryMigrationStatus = v10145MemoryMigrationStatus(closedLedgerStats.closedTrades);
-  const directionFieldAudit = v10145DirectionFieldAudit(rejectedReasonCountsLite);
   const exportCounts = { ...exportCountsRaw, open: canonicalOpenRows.length, closed: closedLedgerStats.closedTrades, total: canonicalOpenRows.length + closedLedgerStats.closedTrades };
   const closedLedgerFlat = v10142ClosedLedgerFlatFields(closedLedgerStats);
   const observedOpenSnapshot = Math.max(n(base.openPositions,0), n(base.paperSignals,0));
@@ -8618,7 +8359,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   );
   const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen: canonicalOpenCountLite });
   const healthLite = {
-    schema: 'alps.healthLite.v10145',
+    schema: 'alps.healthLite.v10144',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -8753,13 +8494,6 @@ function v10128BuildHealthLite(source = 'health-lite') {
     hypothesisDNA: adaptiveEvidenceLearning.hypothesisDNA,
     failureLearning: adaptiveEvidenceLearning.failureLearning,
     directionUndefinedDiagnosis: adaptiveEvidenceLearning.directionUndefinedDiagnosis,
-    v10145ClusterLedgerClassification: clusterLedgerClassification,
-    clusterLedgerClassification,
-    memoryMigrationStatus,
-    v10145MemoryMigrationStatus: memoryMigrationStatus,
-    directionFieldAudit,
-    v10145DirectionFieldAudit: directionFieldAudit,
-    noLossProfitFactorPolicy: 'NO_LOSS_IS_NULL_DISPLAY_WITH_noLoss_TRUE_AND_CAPPED_SCORING_NOT_ZERO',
     winLossLedger: closedLedgerStats,
     v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView || { schema:'alps.testnetExecutionBridge.v10138', version:FINAL_V930_VERSION, installed:true, ...v10138TestnetSafetyStatus(), orders:[], paperOnly:false, liveCapitalExecution:false, testnetOnly:true },
     finalHealthGate: {
@@ -8771,23 +8505,12 @@ function v10128BuildHealthLite(source = 'health-lite') {
       rule: 'Health-lite final gate trusts currentHealth authority: native pool/latch + paper entry/ledger proof means effective forward is active even if the raw browser flag is false.'
     }
   };
-  const healthContract = v10145BuildHealthContract(healthLite, closedLedgerStats, adaptiveEvidenceLearning, rejectedReasonCountsLite);
-  healthLite.v10145HealthContract = healthContract;
-  healthLite.fullLabHealthContract = healthContract;
-  healthLite.componentHeartbeats = healthContract.componentHeartbeats;
-  healthLite.freshnessSplit = healthContract.freshnessSplit;
-  healthLite.dashboardCardTruthMap = healthContract.dashboardCardTruthMap;
-  healthLite.healthLamps = healthContract.lamps;
-  if (healthLite.finalHealthGate && healthContract.finalStatus === 'WARN') {
-    healthLite.finalHealthGate.status = 'WARN';
-    healthLite.finalHealthGate.nextRequiredAction = healthContract.reasons.join(',') || healthLite.finalHealthGate.nextRequiredAction;
-  }
   healthLite.reportAuthority = v10118ReportAuthorityView(healthLite, source);
   // v10.1.29: DO NOT assign currentHealth = healthLite. That creates a circular JSON object
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10145',
+    schema: 'alps.currentHealthLite.snapshot.v10144',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -8876,13 +8599,6 @@ function v10128BuildHealthLite(source = 'health-lite') {
     timeframeConfidence: adaptiveEvidenceLearning.timeframeConfidence.slice(0,10),
     failureLearning: adaptiveEvidenceLearning.failureLearning.slice(0,10),
     directionUndefinedDiagnosis: adaptiveEvidenceLearning.directionUndefinedDiagnosis,
-    clusterLedgerClassification,
-    memoryMigrationStatus,
-    directionFieldAudit,
-    fullLabHealthContract: healthContract,
-    healthLamps: healthContract.lamps,
-    freshnessSplit: healthContract.freshnessSplit,
-    dashboardCardTruthMap: healthContract.dashboardCardTruthMap,
     sourceOfTruth: 'currentHealth',
     authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY'
   };
