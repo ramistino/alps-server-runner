@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.41-health-lite-sentinel-binding-fix';
+const FINAL_V930_VERSION = 'v10.1.42-full-closed-ledger-stats';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -559,6 +559,146 @@ function v10131MergeClosedTradeRows(...groups) {
     }
   }
   return out;
+}
+
+
+// v10.1.42 — Full Closed Ledger Stats + Win/Loss Dashboard Binding.
+// Counts are computed from the canonical server closed ledger, not from the 8-row UI summary.
+function v10142ClosedTradeResult(row = {}) {
+  const rawResult = textValue(row.result || row.outcome || '').toUpperCase();
+  const status = textValue(row.status || '').toUpperCase();
+  const closeReason = textValue(row.closeReason || row.exitReason || '').toUpperCase();
+  const r = v10137FiniteNumber(row.resultR, null);
+  const pnl = v10137FiniteNumber(row.pnlBps ?? row.pnl ?? row.pnlPct, null);
+  if (/BREAKEVEN|BREAK_EVEN|BE\b/.test(rawResult) || /BREAKEVEN|BREAK_EVEN/.test(status) || /BREAKEVEN|BREAK_EVEN/.test(closeReason)) return 'BREAKEVEN';
+  if (/WIN|PROFIT|TARGET/.test(rawResult) || /WIN/.test(status)) return 'WIN';
+  if (/LOSS|STOP/.test(rawResult) || /LOSS/.test(status)) return 'LOSS';
+  if (Number.isFinite(r)) return r > 0 ? 'WIN' : r < 0 ? 'LOSS' : 'BREAKEVEN';
+  if (Number.isFinite(pnl)) return pnl > 0 ? 'WIN' : pnl < 0 ? 'LOSS' : 'BREAKEVEN';
+  return 'UNKNOWN';
+}
+function v10142ClosedTradePnlBps(row = {}) {
+  const direct = v10137FiniteNumber(row.pnlBps, null);
+  if (Number.isFinite(direct)) return direct;
+  const pct = v10137FiniteNumber(row.pnlPct, null);
+  if (Number.isFinite(pct)) return Number((pct * 100).toFixed(4));
+  return null;
+}
+function v10142StatsBucket(rows = []) {
+  const b = { closed:0, wins:0, losses:0, breakeven:0, unknown:0, netPnlBps:0, totalResultR:0, positiveR:0, negativeR:0, positiveBps:0, negativeBps:0 };
+  for (const row of safeArray(rows)) {
+    if (!row || typeof row !== 'object') continue;
+    b.closed += 1;
+    const result = v10142ClosedTradeResult(row);
+    if (result === 'WIN') b.wins += 1;
+    else if (result === 'LOSS') b.losses += 1;
+    else if (result === 'BREAKEVEN') b.breakeven += 1;
+    else b.unknown += 1;
+    const r = v10137FiniteNumber(row.resultR, null);
+    if (Number.isFinite(r)) {
+      b.totalResultR += r;
+      if (r > 0) b.positiveR += r;
+      if (r < 0) b.negativeR += r;
+    }
+    const pnl = v10142ClosedTradePnlBps(row);
+    if (Number.isFinite(pnl)) {
+      b.netPnlBps += pnl;
+      if (pnl > 0) b.positiveBps += pnl;
+      if (pnl < 0) b.negativeBps += pnl;
+    }
+  }
+  b.winRate = b.closed ? Number((b.wins / b.closed * 100).toFixed(2)) : null;
+  b.decisiveClosed = b.wins + b.losses;
+  b.decisiveWinRate = b.decisiveClosed ? Number((b.wins / b.decisiveClosed * 100).toFixed(2)) : null;
+  b.netPnlBps = Number(b.netPnlBps.toFixed(4));
+  b.totalResultR = Number(b.totalResultR.toFixed(4));
+  b.avgResultR = b.closed ? Number((b.totalResultR / b.closed).toFixed(4)) : null;
+  b.avgPnlBps = b.closed ? Number((b.netPnlBps / b.closed).toFixed(4)) : null;
+  b.profitFactorR = Math.abs(b.negativeR) > 0 ? Number((b.positiveR / Math.abs(b.negativeR)).toFixed(4)) : (b.positiveR > 0 ? null : null);
+  b.profitFactorBps = Math.abs(b.negativeBps) > 0 ? Number((b.positiveBps / Math.abs(b.negativeBps)).toFixed(4)) : (b.positiveBps > 0 ? null : null);
+  b.positiveR = Number(b.positiveR.toFixed(4));
+  b.negativeR = Number(b.negativeR.toFixed(4));
+  b.positiveBps = Number(b.positiveBps.toFixed(4));
+  b.negativeBps = Number(b.negativeBps.toFixed(4));
+  return b;
+}
+function v10142ClosedLedgerStats(...groups) {
+  const rows = v10131MergeClosedTradeRows(...groups);
+  const stats = v10142StatsBucket(rows);
+  const sortable = rows.map(t => ({
+    tradeId: t.tradeId || t.id || '',
+    pair: t.pair || t.symbol || '',
+    timeframe: t.timeframe || t.tf || '',
+    direction: normalizeDirection(t.direction || t.side || ''),
+    entry: v10137FiniteNumber(t.entry ?? t.entryPrice, null),
+    exit: v10137FiniteNumber(t.exit ?? t.exitPrice, null),
+    closeReason: t.closeReason || t.exitReason || '',
+    result: v10142ClosedTradeResult(t),
+    resultR: v10137FiniteNumber(t.resultR, null),
+    pnlBps: v10142ClosedTradePnlBps(t),
+    status: t.status || 'CLOSED'
+  }));
+  const byPairMap = new Map();
+  const byTfMap = new Map();
+  for (const row of rows) {
+    const pair = textValue(row.pair || row.symbol || 'UNKNOWN').toUpperCase() || 'UNKNOWN';
+    const tf = textValue(row.timeframe || row.tf || 'unknown').toLowerCase() || 'unknown';
+    if (!byPairMap.has(pair)) byPairMap.set(pair, []);
+    if (!byTfMap.has(tf)) byTfMap.set(tf, []);
+    byPairMap.get(pair).push(row);
+    byTfMap.get(tf).push(row);
+  }
+  const bucketRow = (key, group) => ({ key, ...v10142StatsBucket(group) });
+  const byPair = [...byPairMap.entries()].map(([k,v]) => bucketRow(k, v)).sort((a,b)=>b.closed-a.closed || b.netPnlBps-a.netPnlBps);
+  const byTimeframe = [...byTfMap.entries()].map(([k,v]) => bucketRow(k, v)).sort((a,b)=>b.closed-a.closed || b.netPnlBps-a.netPnlBps);
+  const wins = sortable.filter(x => x.result === 'WIN').sort((a,b)=>(v10137FiniteNumber(b.pnlBps, -Infinity) - v10137FiniteNumber(a.pnlBps, -Infinity)));
+  const losses = sortable.filter(x => x.result === 'LOSS').sort((a,b)=>(v10137FiniteNumber(a.pnlBps, Infinity) - v10137FiniteNumber(b.pnlBps, Infinity)));
+  const breakeven = sortable.filter(x => x.result === 'BREAKEVEN');
+  return {
+    schema: 'alps.closedLedgerStats.v10142',
+    version: FINAL_V930_VERSION,
+    generatedAt: new Date().toISOString(),
+    source: 'UNIQUE_SERVER_LEDGER_CLOSED_TRADEID_FIRST',
+    closedTrades: rows.length,
+    wins: stats.wins,
+    losses: stats.losses,
+    breakeven: stats.breakeven,
+    unknownClosed: stats.unknown,
+    winRate: stats.winRate,
+    decisiveWinRate: stats.decisiveWinRate,
+    netPnlBps: stats.netPnlBps,
+    totalResultR: stats.totalResultR,
+    avgResultR: stats.avgResultR,
+    avgPnlBps: stats.avgPnlBps,
+    profitFactorR: stats.profitFactorR,
+    profitFactorBps: stats.profitFactorBps,
+    bestWin: wins[0] || null,
+    largestLoss: losses[0] || null,
+    recentClosedTrades: sortable.slice(-20).reverse(),
+    winningTrades: wins.slice(0, 20),
+    losingTrades: losses.slice(0, 20),
+    breakevenTrades: breakeven.slice(-20).reverse(),
+    byPair,
+    byTimeframe,
+    rule: 'Win/loss metrics are aggregated from the full canonical server closed ledger; compact visible trade summaries are no longer used to compute dashboard totals.'
+  };
+}
+function v10142ClosedLedgerFlatFields(stats = {}) {
+  return {
+    wins: n(stats.wins, 0),
+    losses: n(stats.losses, 0),
+    breakeven: n(stats.breakeven, 0),
+    unknownClosed: n(stats.unknownClosed, 0),
+    winRate: stats.winRate ?? null,
+    decisiveWinRate: stats.decisiveWinRate ?? null,
+    netPnlBps: stats.netPnlBps ?? null,
+    totalResultR: stats.totalResultR ?? null,
+    avgResultR: stats.avgResultR ?? null,
+    avgPnlBps: stats.avgPnlBps ?? null,
+    profitFactorR: stats.profitFactorR ?? null,
+    profitFactorBps: stats.profitFactorBps ?? null,
+    closedLedgerStatsStatus: n(stats.closedTrades,0) > 0 ? 'FULL_CLOSED_LEDGER_STATS_READY' : 'WAITING_FOR_CLOSED_TRADES'
+  };
 }
 
 
@@ -1358,6 +1498,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const topRejected = Object.entries(reasons || {}).sort((a,b)=>n(b[1],0)-n(a[1],0))[0];
   const openTrades = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
   const closedTrades = v10131MergeClosedTradeRows(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  const closedLedgerStats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  const closedLedgerFlat = v10142ClosedLedgerFlatFields(closedLedgerStats);
   const symbolStatusRows = safeArray(sym.statusBySymbol);
   const serverOpenCount = v10116CountOpenTrades();
   const serverClosedCount = v10116CountClosedTrades();
@@ -1415,6 +1557,25 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     paperLedgerStatus,
     paperLedgerMismatch: serverLedgerAuthority ? false : (canonicalOpenCount !== serverOpenCount),
     serverPaperLedgerClosed: serverClosedCount,
+    wins: closedLedgerFlat.wins,
+    losses: closedLedgerFlat.losses,
+    breakeven: closedLedgerFlat.breakeven,
+    unknownClosed: closedLedgerFlat.unknownClosed,
+    winRate: closedLedgerFlat.winRate,
+    decisiveWinRate: closedLedgerFlat.decisiveWinRate,
+    netPnlBps: closedLedgerFlat.netPnlBps,
+    totalResultR: closedLedgerFlat.totalResultR,
+    avgResultR: closedLedgerFlat.avgResultR,
+    avgPnlBps: closedLedgerFlat.avgPnlBps,
+    profitFactorR: closedLedgerFlat.profitFactorR,
+    profitFactorBps: closedLedgerFlat.profitFactorBps,
+    closedLedgerStatsStatus: closedLedgerFlat.closedLedgerStatsStatus,
+    closedLedgerStatsJson: v10116FlatJson(closedLedgerStats),
+    bestWinJson: v10116FlatJson(closedLedgerStats.bestWin || {}),
+    largestLossJson: v10116FlatJson(closedLedgerStats.largestLoss || {}),
+    pairPerformanceJson: v10116FlatJson(closedLedgerStats.byPair || []),
+    timeframePerformanceJson: v10116FlatJson(closedLedgerStats.byTimeframe || []),
+    fullClosedTradeSampleJson: v10116FlatJson(closedLedgerStats.recentClosedTrades || []),
     lifecycleOpenMonitored: n(lastV1018LifecycleView?.openMonitored, 0),
     lifecyclePriceChecks: n(lastV1018LifecycleView?.priceChecks, 0),
     lifecyclePriceCheckAttempts: n(lastV1018LifecycleView?.priceCheckAttempts, lastV1018LifecycleView?.openMonitored || 0),
@@ -1674,6 +1835,12 @@ function v10118ReportAuthorityMarkdown(report = {}, authority = null) {
     `| Paper Signals | ${v10118MdCell(c.paperSignals)} |`,
     `| Open Positions | ${v10118MdCell(c.openPositions)} |`,
     `| Closed Trades | ${v10118MdCell(c.closedTrades)} |`,
+    `| Wins | ${v10118MdCell(c.wins)} |`,
+    `| Losses | ${v10118MdCell(c.losses)} |`,
+    `| Breakeven | ${v10118MdCell(c.breakeven)} |`,
+    `| Win Rate | ${v10118MdCell(c.winRate == null ? '' : c.winRate + '%')} |`,
+    `| Net PnL bps | ${v10118MdCell(c.netPnlBps)} |`,
+    `| Total ResultR | ${v10118MdCell(c.totalResultR)} |`,
     `| Rejected | ${v10118MdCell(c.rejected)} |`,
     '',
     '### Report Truth Checks',
@@ -7851,6 +8018,8 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
 function v10128BuildHealthLite(source = 'health-lite') {
   const base = v953HealthTruthFromCurrentHealth(lastHealth || {}, source) || {};
   const exportCounts = tradeExportCounts(lastTradeExport || {});
+  const closedLedgerStats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  const closedLedgerFlat = v10142ClosedLedgerFlatFields(closedLedgerStats);
   const canonicalOpenRows = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
   const observedOpenSnapshot = Math.max(n(base.openPositions,0), n(base.paperSignals,0));
   const serverLedgerAuthorityLite = !!(lastTradeExport && (exportCounts.open > 0 || exportCounts.closed > 0));
@@ -7878,7 +8047,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   );
   const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen: canonicalOpenCountLite });
   const healthLite = {
-    schema: 'alps.healthLite.v10138',
+    schema: 'alps.healthLite.v10142',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -7896,6 +8065,19 @@ function v10128BuildHealthLite(source = 'health-lite') {
     paperSignals: canonicalOpenCountLite,
     openPositions: canonicalOpenCountLite,
     closedTrades: Math.max(n(base.closedTrades,0), exportCounts.closed),
+    wins: closedLedgerFlat.wins,
+    losses: closedLedgerFlat.losses,
+    breakeven: closedLedgerFlat.breakeven,
+    unknownClosed: closedLedgerFlat.unknownClosed,
+    winRate: closedLedgerFlat.winRate,
+    decisiveWinRate: closedLedgerFlat.decisiveWinRate,
+    netPnlBps: closedLedgerFlat.netPnlBps,
+    totalResultR: closedLedgerFlat.totalResultR,
+    avgResultR: closedLedgerFlat.avgResultR,
+    avgPnlBps: closedLedgerFlat.avgPnlBps,
+    profitFactorR: closedLedgerFlat.profitFactorR,
+    profitFactorBps: closedLedgerFlat.profitFactorBps,
+    closedLedgerStatsStatus: closedLedgerFlat.closedLedgerStatsStatus,
     observedPaperSignals: serverLedgerAuthorityLite ? canonicalOpenCountLite : Math.max(n(base.paperSignals, 0), canonicalOpenCountLite),
     observedOpenPositions: serverLedgerAuthorityLite ? canonicalOpenCountLite : Math.max(n(base.openPositions, 0), canonicalOpenCountLite),
     staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite,
@@ -7923,6 +8105,12 @@ function v10128BuildHealthLite(source = 'health-lite') {
       openTrades: canonicalOpenCountLite,
       closedTrades: exportCounts.closed,
       canonicalOpen: canonicalOpenCountLite,
+      wins: closedLedgerFlat.wins,
+      losses: closedLedgerFlat.losses,
+      breakeven: closedLedgerFlat.breakeven,
+      winRate: closedLedgerFlat.winRate,
+      netPnlBps: closedLedgerFlat.netPnlBps,
+      totalResultR: closedLedgerFlat.totalResultR,
       status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? (staleCurrentHealthOpenDeltaLite > 0 ? 'SERVER_LEDGER_AUTHORITY_CURRENTHEALTH_OPEN_STALE_AUDIT_ONLY' : 'SERVER_LEDGER_SYNCED') : 'WAITING_FOR_OPEN_TRADES'
     },
     paperLedger: {
@@ -7983,6 +8171,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
     v10138LivePriceSentinel: lastV10138LivePriceSentinelView || { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, status:'WAITING_FOR_FIRST_SENTINEL_TICK', priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntries:v10138PendingEntries.length, paperOnly:true, liveCapitalExecution:false, testnetOnly:true },
     v10140SentinelBindingGuard: v10140SentinelBindingGuardView(),
     v10141HealthLiteSentinelBindingFix: lastV10141HealthLiteSentinelSyncView || { schema:'alps.v10141HealthLiteSentinelBindingFix.view.v1', version:FINAL_V930_VERSION, installed:true, status:'WAITING_FOR_HEALTH_LITE_SYNC', rule:'Health-lite performs a bounded post-ledger Live Price Sentinel sync before returning when open trades exist.' },
+    v10142ClosedLedgerStats: closedLedgerStats,
+    winLossLedger: closedLedgerStats,
     v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView || { schema:'alps.testnetExecutionBridge.v10138', version:FINAL_V930_VERSION, installed:true, ...v10138TestnetSafetyStatus(), orders:[], paperOnly:false, liveCapitalExecution:false, testnetOnly:true },
     finalHealthGate: {
       schema: 'alps.finalHealthGate.v10138.liveLiteOverride',
@@ -7998,7 +8188,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10138',
+    schema: 'alps.currentHealthLite.snapshot.v10142',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -8015,6 +8205,19 @@ function v10128BuildHealthLite(source = 'health-lite') {
     paperSignals: healthLite.paperSignals,
     openPositions: healthLite.openPositions,
     closedTrades: healthLite.closedTrades,
+    wins: healthLite.wins,
+    losses: healthLite.losses,
+    breakeven: healthLite.breakeven,
+    unknownClosed: healthLite.unknownClosed,
+    winRate: healthLite.winRate,
+    decisiveWinRate: healthLite.decisiveWinRate,
+    netPnlBps: healthLite.netPnlBps,
+    totalResultR: healthLite.totalResultR,
+    avgResultR: healthLite.avgResultR,
+    avgPnlBps: healthLite.avgPnlBps,
+    profitFactorR: healthLite.profitFactorR,
+    profitFactorBps: healthLite.profitFactorBps,
+    closedLedgerStatsStatus: healthLite.closedLedgerStatsStatus,
     observedPaperSignals: healthLite.observedPaperSignals,
     observedOpenPositions: healthLite.observedOpenPositions,
     duplicateOpenDelta: healthLite.duplicateOpenDelta,
@@ -8056,6 +8259,12 @@ function v10128BuildHealthLite(source = 'health-lite') {
     livePriceSentinelExitProof: safeArray(healthLite.v10138LivePriceSentinel?.exitProof).slice(0,8),
     pendingEntryProof: safeArray(healthLite.v10138LivePriceSentinel?.pendingProof).slice(0,8),
     testnetExecutionOrders: safeArray(healthLite.v10138TestnetExecutionBridge?.orders).slice(-8),
+    closedLedgerStats: closedLedgerStats,
+    winningTrades: safeArray(closedLedgerStats.winningTrades).slice(0,8),
+    losingTrades: safeArray(closedLedgerStats.losingTrades).slice(0,8),
+    breakevenTrades: safeArray(closedLedgerStats.breakevenTrades).slice(0,8),
+    pairPerformance: safeArray(closedLedgerStats.byPair).slice(0,10),
+    timeframePerformance: safeArray(closedLedgerStats.byTimeframe).slice(0,10),
     sourceOfTruth: 'currentHealth',
     authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY'
   };
