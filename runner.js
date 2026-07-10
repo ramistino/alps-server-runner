@@ -55,6 +55,7 @@ const AUTONOMY_LEDGER_FILE = path.join(DATA_DIR, 'autonomous-bridge-ledger.jsonl
 const STATE_AUTHORITY_FILE = path.join(DATA_DIR, 'state-authority-v10.json');
 const STATE_AUTHORITY_NONZERO_FILE = path.join(DATA_DIR, 'state-authority-v10-last-nonzero.json');
 const RUNTIME_NONZERO_FILE = path.join(DATA_DIR, 'runtime-last-nonzero-v1014.json');
+const V10143_CLOSED_LEDGER_FILE = path.join(DATA_DIR, 'closed-ledger-monotonic-v10143.json');
 const EMBEDDED_PREVIOUS_TRADE_VAULT_SEED = {
   "source": "ALPS_AHI_Command_Report_2026-07-03_13-18.md",
   "note": "Previous known ALPS paper-forward trades before ALPS trade export sync. Historical continuity only; not current positions.",
@@ -322,6 +323,10 @@ let lastHealth = {
 let lastReport = null;
 let lastReportMarkdown = '';
 let lastTradeExport = buildTradeExport({ openTrades: [], closedTrades: [] });
+let v10143PersistentClosedRows = [];
+let v10143ClosedLedgerLoaded = false;
+let lastV10143ClosedLedgerMonotonicGuardView = null;
+let lastV10143StaleOpenPurgeGuardView = null;
 let tradeVaultState = null;
 let cognitionState = null;
 let lastCognitionView = null;
@@ -349,7 +354,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.42-full-closed-ledger-stats';
+const FINAL_V930_VERSION = 'v10.1.43-closed-ledger-monotonic-sentinel-canonical';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -562,6 +567,126 @@ function v10131MergeClosedTradeRows(...groups) {
 }
 
 
+// v10.1.43 — Closed Ledger Monotonic Persistence + Semantic Dedup + Canonical Sentinel Open Binding.
+// The closed ledger is now append-only from the server point of view: source windows may shrink,
+// browser/currentHealth snapshots may be stale, and bridge views may drop rows, but performance truth
+// must not decrease. This layer persists a semantic-deduped closed ledger and treats old open snapshots
+// as audit-only once a server ledger exists.
+function v10143RoundTradeNumber(value, decimals = 8) {
+  const x = v10137FiniteNumber(value, null);
+  if (!Number.isFinite(x)) return '';
+  return Number(x.toFixed(decimals)).toString();
+}
+function v10143ClosedSemanticKey(t = {}) {
+  const pair = textValue(t.pair || t.baseSymbol || t.symbol || t.sym || '').toUpperCase().split('_')[0].replace(/[^A-Z0-9]/g, '');
+  const tf = textValue(t.timeframe || t.tf || t.frame || '').toLowerCase().replace(/\s+/g, '');
+  const dir = normalizeDirection(t.direction || t.dir || t.side || '');
+  const entry = v10143RoundTradeNumber(t.entry ?? t.entryPrice ?? t.openPrice ?? t.price, 8);
+  const exit = v10143RoundTradeNumber(t.exit ?? t.exitPrice ?? t.closePrice, 8);
+  const result = v10142ClosedTradeResult(t);
+  const resultR = v10143RoundTradeNumber(t.resultR, 4);
+  const reason = textValue(t.closeReason || t.exitReason || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  const parts = [pair, tf, dir, entry, exit, result, resultR, reason].filter(Boolean);
+  return parts.length >= 5 ? `SEMANTIC|${parts.join('|')}` : '';
+}
+function v10143ClosedCanonicalKey(t = {}) {
+  const semantic = v10143ClosedSemanticKey(t);
+  if (semantic) return semantic;
+  return v10131ClosedTradeDedupeKey(t);
+}
+function v10143ClosedCompletenessScore(t = {}) {
+  let score = 0;
+  for (const k of ['tradeId','pair','timeframe','direction','entry','exit','closeReason','result','resultR','pnlBps','status','closedAt','closedAtIso']) {
+    if (t && t[k] != null && textValue(t[k]) !== '') score += 1;
+  }
+  return score;
+}
+function v10143MergeClosedTradeRows(...groups) {
+  const map = new Map();
+  for (const group of groups) {
+    for (const row of safeArray(group)) {
+      if (!row || typeof row !== 'object') continue;
+      const status = textValue(row.status || 'CLOSED').toUpperCase();
+      const result = v10142ClosedTradeResult(row);
+      if (!(/CLOSED|WIN|LOSS|STOP|TARGET|BREAKEVEN/.test(status) || result !== 'UNKNOWN' || row.exit != null || row.exitPrice != null)) continue;
+      const key = v10143ClosedCanonicalKey(row);
+      if (!key) continue;
+      const prev = map.get(key);
+      if (!prev || v10143ClosedCompletenessScore(row) > v10143ClosedCompletenessScore(prev)) map.set(key, { ...prev, ...row, status: row.status || prev?.status || 'CLOSED' });
+    }
+  }
+  return [...map.values()];
+}
+function v10143LoadClosedLedgerSync() {
+  if (v10143ClosedLedgerLoaded) return;
+  v10143ClosedLedgerLoaded = true;
+  try {
+    if (!fs.existsSync(V10143_CLOSED_LEDGER_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(V10143_CLOSED_LEDGER_FILE, 'utf8'));
+    v10143PersistentClosedRows = v10143MergeClosedTradeRows(parsed.rows || parsed.closedTrades || []);
+  } catch (e) {
+    lastV10143ClosedLedgerMonotonicGuardView = { schema:'alps.closedLedgerMonotonicGuard.v10143', version:FINAL_V930_VERSION, installed:true, status:'PERSISTED_LEDGER_LOAD_FAILED', error:textValue(e && e.message || e).slice(0,180) };
+  }
+}
+function v10143SyncClosedLedgerSync(reason = 'v10143-sync-closed-ledger', ...groups) {
+  v10143LoadClosedLedgerSync();
+  const beforeRows = v10143PersistentClosedRows;
+  const rawRows = safeArray(groups).flatMap(g => safeArray(g));
+  const incomingUnique = v10143MergeClosedTradeRows(...groups);
+  const merged = v10143MergeClosedTradeRows(beforeRows, incomingUnique);
+  const droppedSinceLastPersisted = Math.max(0, beforeRows.length - incomingUnique.length);
+  const semanticDuplicates = Math.max(0, rawRows.length - incomingUnique.length);
+  v10143PersistentClosedRows = merged;
+  const view = {
+    schema:'alps.closedLedgerMonotonicGuard.v10143', version:FINAL_V930_VERSION, installed:true,
+    reason, generatedAt:new Date().toISOString(), persistentFile:V10143_CLOSED_LEDGER_FILE,
+    rawClosedTrades: rawRows.length, incomingUniqueClosedTrades: incomingUnique.length,
+    persistentClosedBefore: beforeRows.length, persistentClosedAfter: merged.length,
+    uniqueClosedTrades: merged.length, semanticDuplicateClosed: semanticDuplicates,
+    closedLedgerDroppedSinceLastReport: droppedSinceLastPersisted,
+    status: droppedSinceLastPersisted > 0 ? 'MONOTONIC_PERSISTENT_LEDGER_RETAINED_DROPPED_SOURCE_ROWS' : (merged.length >= beforeRows.length ? 'MONOTONIC_CLOSED_LEDGER_OK' : 'CRITICAL_CLOSED_LEDGER_DECREASED'),
+    rule:'Closed-ledger performance truth is append-only. If source windows shrink, the persisted semantic ledger is retained and dashboard totals use the monotonic unique count.'
+  };
+  lastV10143ClosedLedgerMonotonicGuardView = view;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(V10143_CLOSED_LEDGER_FILE, JSON.stringify({ schema:'alps.closedLedgerMonotonic.v10143', version:FINAL_V930_VERSION, updatedAt:view.generatedAt, rows:merged, guard:view }, null, 2));
+  } catch (e) {
+    view.persistStatus = 'PERSIST_FAILED';
+    view.persistError = textValue(e && e.message || e).slice(0,180);
+  }
+  return view;
+}
+function v10143CanonicalOpenRows() {
+  const exportOpen = v1019MergeOpenTradeRows(lastTradeExport?.openTrades);
+  const hasServerLedger = !!(lastTradeExport && (safeArray(lastTradeExport.openTrades).length > 0 || safeArray(lastTradeExport.closedTrades).length > 0 || v10143PersistentClosedRows.length > 0));
+  if (hasServerLedger) return exportOpen;
+  return v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
+}
+function v10143PurgeStaleOpenViews(reason = 'v10143-purge-stale-open-views') {
+  v10143LoadClosedLedgerSync();
+  const beforeExport = v1019MergeOpenTradeRows(lastTradeExport?.openTrades).length;
+  const beforeV948 = v1019MergeOpenTradeRows(lastV948EntryEngineView?.openedTrades).length;
+  const beforeBridge = v1019MergeOpenTradeRows(lastV1017cPaperEntryAuthorityBridgeView?.openedTrades).length;
+  const canonicalOpenRows = v10143CanonicalOpenRows();
+  const canonicalKeys = new Set(canonicalOpenRows.map(v1019OpenTradeDedupeKey).filter(Boolean));
+  const keepCanonical = (rows) => v1019MergeOpenTradeRows(rows).filter(t => canonicalKeys.has(v1019OpenTradeDedupeKey(t)));
+  if (!lastV948EntryEngineView || typeof lastV948EntryEngineView !== 'object') lastV948EntryEngineView = { openedTrades: [] };
+  lastV948EntryEngineView.openedTrades = canonicalOpenRows.slice();
+  if (lastV1017cPaperEntryAuthorityBridgeView && typeof lastV1017cPaperEntryAuthorityBridgeView === 'object') lastV1017cPaperEntryAuthorityBridgeView.openedTrades = keepCanonical(lastV1017cPaperEntryAuthorityBridgeView.openedTrades || canonicalOpenRows);
+  if (lastTradeExport) lastTradeExport = buildTradeExport({ openTrades: canonicalOpenRows, closedTrades: v10143PersistentClosedRows.length ? v10143PersistentClosedRows : safeArray(lastTradeExport.closedTrades) });
+  const view = {
+    schema:'alps.staleOpenPurgeGuard.v10143', version:FINAL_V930_VERSION, installed:true, reason, generatedAt:new Date().toISOString(),
+    canonicalOpen: canonicalOpenRows.length, beforeExportOpen: beforeExport, beforeV948Open: beforeV948, beforeBridgeOpen: beforeBridge,
+    purgedV948Open: Math.max(0, beforeV948 - canonicalOpenRows.length), purgedBridgeOpen: Math.max(0, beforeBridge - keepCanonical(lastV1017cPaperEntryAuthorityBridgeView?.openedTrades || []).length),
+    status: (beforeV948 > canonicalOpenRows.length || beforeBridge > canonicalOpenRows.length) ? 'STALE_OPEN_VIEWS_PURGED_TO_CANONICAL_LEDGER' : 'CANONICAL_OPEN_VIEWS_ALIGNED',
+    rule:'Sentinel and lifecycle reporting must bind to canonical server open trades only. Stale currentHealth/browser open snapshots are audit-only.'
+  };
+  lastV10143StaleOpenPurgeGuardView = view;
+  return { ...view, canonicalOpenRows };
+}
+
+
 // v10.1.42 — Full Closed Ledger Stats + Win/Loss Dashboard Binding.
 // Counts are computed from the canonical server closed ledger, not from the 8-row UI summary.
 function v10142ClosedTradeResult(row = {}) {
@@ -623,7 +748,8 @@ function v10142StatsBucket(rows = []) {
   return b;
 }
 function v10142ClosedLedgerStats(...groups) {
-  const rows = v10131MergeClosedTradeRows(...groups);
+  v10143LoadClosedLedgerSync();
+  const rows = v10143MergeClosedTradeRows(v10143PersistentClosedRows, ...groups);
   const stats = v10142StatsBucket(rows);
   const sortable = rows.map(t => ({
     tradeId: t.tradeId || t.id || '',
@@ -655,10 +781,10 @@ function v10142ClosedLedgerStats(...groups) {
   const losses = sortable.filter(x => x.result === 'LOSS').sort((a,b)=>(v10137FiniteNumber(a.pnlBps, Infinity) - v10137FiniteNumber(b.pnlBps, Infinity)));
   const breakeven = sortable.filter(x => x.result === 'BREAKEVEN');
   return {
-    schema: 'alps.closedLedgerStats.v10142',
+    schema: 'alps.closedLedgerStats.v10143',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
-    source: 'UNIQUE_SERVER_LEDGER_CLOSED_TRADEID_FIRST',
+    source: 'MONOTONIC_PERSISTENT_CLOSED_LEDGER_SEMANTIC_DEDUP',
     closedTrades: rows.length,
     wins: stats.wins,
     losses: stats.losses,
@@ -680,7 +806,12 @@ function v10142ClosedLedgerStats(...groups) {
     breakevenTrades: breakeven.slice(-20).reverse(),
     byPair,
     byTimeframe,
-    rule: 'Win/loss metrics are aggregated from the full canonical server closed ledger; compact visible trade summaries are no longer used to compute dashboard totals.'
+    rawClosedTrades: lastV10143ClosedLedgerMonotonicGuardView?.rawClosedTrades || rows.length,
+    uniqueClosedTrades: rows.length,
+    semanticDuplicateClosed: lastV10143ClosedLedgerMonotonicGuardView?.semanticDuplicateClosed || 0,
+    closedLedgerMonotonicStatus: lastV10143ClosedLedgerMonotonicGuardView?.status || 'MONOTONIC_CLOSED_LEDGER_OK',
+    closedLedgerDroppedSinceLastReport: lastV10143ClosedLedgerMonotonicGuardView?.closedLedgerDroppedSinceLastReport || 0,
+    rule: 'Win/loss metrics are aggregated from the persistent monotonic semantic closed ledger; compact visible trade summaries and shrinking source windows are no longer used as performance truth.'
   };
 }
 function v10142ClosedLedgerFlatFields(stats = {}) {
@@ -935,8 +1066,14 @@ function v10138CloseTradeInLedger(t, exitPrice, closeReason, priceProof, view) {
   return t;
 }
 async function v10138PersistTradeLedger(reason='v10138-persist-trade-ledger') {
-  try { await fsp.mkdir(REPORT_DIR, { recursive: true }); await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2)); return { ok:true, status:'CLOSE_WRITEBACK_PERSISTED', reason }; }
-  catch (e) { return { ok:false, status:'CLOSE_WRITEBACK_PERSIST_FAILED', error:textValue(e && e.message || e).slice(0,180), reason }; }
+  try {
+    v10143SyncClosedLedgerSync(reason + '-monotonic-sync', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+    const canonicalOpenRows = v10143PurgeStaleOpenViews(reason + '-canonical-open-persist').canonicalOpenRows;
+    lastTradeExport = buildTradeExport({ openTrades: canonicalOpenRows, closedTrades: v10143PersistentClosedRows });
+    await fsp.mkdir(REPORT_DIR, { recursive: true });
+    await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2));
+    return { ok:true, status:'CLOSE_WRITEBACK_PERSISTED', reason, monotonicClosedTrades:v10143PersistentClosedRows.length, canonicalOpen:canonicalOpenRows.length };
+  } catch (e) { return { ok:false, status:'CLOSE_WRITEBACK_PERSIST_FAILED', error:textValue(e && e.message || e).slice(0,180), reason }; }
 }
 function v10138TestnetSafetyStatus() {
   if (!V10138_TESTNET_EXECUTION_ENABLED) return { enabled:false, status:'TESTNET_EXECUTION_DISABLED', testnetOnly:true, liveCapitalExecution:false };
@@ -985,8 +1122,9 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
   const started = Date.now();
   const view = { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, reason, paperOnly:true, liveCapitalExecution:false, testnetOnly:true, priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntriesBefore:v10138PendingEntries.length, pendingEntriesAfter:0, watchedOpenTrades:0, watchedPendingEntries:0, entryTriggersThisTick:0, exitTriggersThisTick:0, refillEligibleCandidates:0, refillOpened:0, noRefillReason:'', priceChecks:0, priceCheckSkips:0, triggerLatencyMs:0, entryProof:[], exitProof:[], pendingProof:[], blockReasons:{}, testnetBridge:v10138TestnetSafetyStatus(), status:'INIT' };
   if (!V10138_PRICE_SENTINEL_ENABLED) { view.status='DISABLED'; lastV10138LivePriceSentinelView = view; return view; }
+  v10143SyncClosedLedgerSync(reason + '-before-sentinel', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedRows = [];
-  const openRows = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
+  const openRows = v10143PurgeStaleOpenViews(reason + '-before-sentinel').canonicalOpenRows;
   view.watchedOpenTrades = openRows.length;
   // v10.1.41: publish the post-ledger binding proof as soon as the canonical open rows are visible.
   // If a later price call times out or throws, health-lite must still show that the sentinel actually
@@ -1025,8 +1163,9 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
   if (closedRows.length) {
     const closedKeys = new Set(closedRows.map(v1019OpenTradeDedupeKey).filter(Boolean));
     const stillOpen = openRows.filter(t => !closedKeys.has(v1019OpenTradeDedupeKey(t)) && !/CLOSED|WIN|LOSS|STOP|TARGET/i.test(textValue(t.status||'')));
-    const mergedClosed = v10131MergeClosedTradeRows(lastTradeExport?.closedTrades, closedRows);
-    lastTradeExport = buildTradeExport({ openTrades: stillOpen, closedTrades: mergedClosed });
+    const mergedClosed = v10143MergeClosedTradeRows(v10143PersistentClosedRows, lastTradeExport?.closedTrades, closedRows);
+    v10143SyncClosedLedgerSync('live-price-sentinel-close', mergedClosed);
+    lastTradeExport = buildTradeExport({ openTrades: stillOpen, closedTrades: v10143PersistentClosedRows });
     if (!lastV948EntryEngineView || typeof lastV948EntryEngineView !== 'object') lastV948EntryEngineView = { openedTrades: [] };
     lastV948EntryEngineView.openedTrades = stillOpen;
     if (lastV1017cPaperEntryAuthorityBridgeView && Array.isArray(lastV1017cPaperEntryAuthorityBridgeView.openedTrades)) lastV1017cPaperEntryAuthorityBridgeView.openedTrades = lastV1017cPaperEntryAuthorityBridgeView.openedTrades.filter(t => !closedKeys.has(v1019OpenTradeDedupeKey(t)));
@@ -1065,9 +1204,9 @@ function v10140SentinelBindingGuardView() {
   const v = lastV10138LivePriceSentinelView || {};
   const watched = n(v.watchedOpenTrades, 0);
   const priceChecks = n(v.priceChecks, 0);
-  const status = canonicalOpen > 0 && watched < canonicalOpen
-    ? 'SENTINEL_STALE_NOT_WATCHING_ALL_OPEN_TRADES'
-    : (canonicalOpen > 0 && priceChecks <= 0 ? 'SENTINEL_NO_PRICE_CHECKS_FOR_OPEN_TRADES' : 'SENTINEL_BOUND_TO_OPEN_LEDGER');
+  const status = canonicalOpen > 0 && watched !== canonicalOpen
+    ? 'SENTINEL_CANONICAL_OPEN_WATCH_MISMATCH'
+    : (canonicalOpen === 0 && watched > 0 ? 'SENTINEL_STALE_WATCHING_CLOSED_TRADES' : (canonicalOpen > 0 && priceChecks <= 0 ? 'SENTINEL_NO_PRICE_CHECKS_FOR_OPEN_TRADES' : 'SENTINEL_BOUND_TO_OPEN_LEDGER'));
   return {
     schema: 'alps.v10140SentinelBindingGuard.view.v1',
     version: FINAL_V930_VERSION,
@@ -1080,7 +1219,7 @@ function v10140SentinelBindingGuardView() {
     sentinelReason: textValue(v.reason || ''),
     status,
     nextRequiredAction: status === 'SENTINEL_BOUND_TO_OPEN_LEDGER' ? 'OBSERVE_LIVE_PRICE_SENTINEL' : 'RUN_POST_LEDGER_SENTINEL_SYNC',
-    rule: 'If server ledger has open trades, Live Price Sentinel must watch the same canonical open count and perform live price checks before health can be considered fully operational.'
+    rule: 'If server ledger has open trades, Live Price Sentinel must watch exactly the same canonical open count and perform live price checks before health can be considered fully operational.'
   };
 }
 
@@ -1404,20 +1543,13 @@ function v10116First(...values) {
   return '';
 }
 function v10116CountOpenTrades() {
-  // v10.1.30: count canonical UNIQUE open trades from the merged authority ledger. Do not add
-  // old paperSignals/openPositions snapshots here; they can be cumulative or duplicated across views.
-  return v1019MergeOpenTradeRows(
-    lastTradeExport?.openTrades,
-    lastV948EntryEngineView?.openedTrades,
-    lastV1017cPaperEntryAuthorityBridgeView?.openedTrades
-  ).length;
+  // v10.1.43: canonical open count must come from the server ledger only once it exists.
+  // Browser/currentHealth/bridge open snapshots are audit-only and can remain stale after closes.
+  return v10143CanonicalOpenRows().length;
 }
 function v10116CountClosedTrades() {
-  return Math.max(
-    safeArray(lastTradeExport?.closedTrades).length,
-    n(lastV1018LifecycleView?.closedTrades, 0),
-    n(lastHealth?.closedTrades, 0)
-  );
+  v10143SyncClosedLedgerSync('count-closed-trades', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  return v10143PersistentClosedRows.length;
 }
 
 // ALPS v10.1.22 — Authority Ledger + Chart Flush Helpers
@@ -1496,13 +1628,14 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const latch = truthSeed.forwardLatch || lastForwardLatchView || v944BuildForwardLatchView?.() || {};
   const reasons = bridge.rejectedReasonCounts || pe.rejectedReasonCounts || lastV952RejectedAuditView?.rejectedReasonCounts || {};
   const topRejected = Object.entries(reasons || {}).sort((a,b)=>n(b[1],0)-n(a[1],0))[0];
-  const openTrades = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
-  const closedTrades = v10131MergeClosedTradeRows(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  v10143SyncClosedLedgerSync('compact-row-before-build', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  const openTrades = v10143PurgeStaleOpenViews('compact-row-canonical-open').canonicalOpenRows;
+  const closedTrades = v10143MergeClosedTradeRows(v10143PersistentClosedRows, lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedLedgerStats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedLedgerFlat = v10142ClosedLedgerFlatFields(closedLedgerStats);
   const symbolStatusRows = safeArray(sym.statusBySymbol);
-  const serverOpenCount = v10116CountOpenTrades();
-  const serverClosedCount = v10116CountClosedTrades();
+  const serverOpenCount = openTrades.length;
+  const serverClosedCount = closedLedgerStats.closedTrades;
   const currentHealthOpenCount = v10122CurrentHealthPaperOpen(base, pe, bridge);
   const serverLedgerAuthority = !!(lastTradeExport && (safeArray(lastTradeExport.openTrades).length > 0 || safeArray(lastTradeExport.closedTrades).length > 0));
   const canonicalOpenCount = serverLedgerAuthority ? serverOpenCount : Math.max(serverOpenCount, currentHealthOpenCount);
@@ -1550,7 +1683,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     paperOpened: canonicalOpenCount,
     paperSignals: canonicalOpenCount,
     openPositions: canonicalOpenCount,
-    closedTrades: Math.max(n(base.closedTrades,0), serverClosedCount),
+    closedTrades: serverClosedCount,
     serverPaperLedgerOpen: serverOpenCount,
     currentHealthPaperOpen: currentHealthOpenCount,
     canonicalPaperOpen: canonicalOpenCount,
@@ -1570,15 +1703,22 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     profitFactorR: closedLedgerFlat.profitFactorR,
     profitFactorBps: closedLedgerFlat.profitFactorBps,
     closedLedgerStatsStatus: closedLedgerFlat.closedLedgerStatsStatus,
+    closedLedgerMonotonicStatus: lastV10143ClosedLedgerMonotonicGuardView?.status || '',
+    rawClosedTrades: lastV10143ClosedLedgerMonotonicGuardView?.rawClosedTrades || closedLedgerStats.closedTrades,
+    uniqueClosedTrades: closedLedgerStats.closedTrades,
+    semanticDuplicateClosed: lastV10143ClosedLedgerMonotonicGuardView?.semanticDuplicateClosed || 0,
+    closedLedgerDroppedSinceLastReport: lastV10143ClosedLedgerMonotonicGuardView?.closedLedgerDroppedSinceLastReport || 0,
+    sentinelCanonicalOpenStatus: lastV10143StaleOpenPurgeGuardView?.status || '',
+    staleOpenPurged: (lastV10143StaleOpenPurgeGuardView?.purgedV948Open || 0) + (lastV10143StaleOpenPurgeGuardView?.purgedBridgeOpen || 0),
     closedLedgerStatsJson: v10116FlatJson(closedLedgerStats),
     bestWinJson: v10116FlatJson(closedLedgerStats.bestWin || {}),
     largestLossJson: v10116FlatJson(closedLedgerStats.largestLoss || {}),
     pairPerformanceJson: v10116FlatJson(closedLedgerStats.byPair || []),
     timeframePerformanceJson: v10116FlatJson(closedLedgerStats.byTimeframe || []),
     fullClosedTradeSampleJson: v10116FlatJson(closedLedgerStats.recentClosedTrades || []),
-    lifecycleOpenMonitored: n(lastV1018LifecycleView?.openMonitored, 0),
-    lifecyclePriceChecks: n(lastV1018LifecycleView?.priceChecks, 0),
-    lifecyclePriceCheckAttempts: n(lastV1018LifecycleView?.priceCheckAttempts, lastV1018LifecycleView?.openMonitored || 0),
+    lifecycleOpenMonitored: Math.min(n(lastV1018LifecycleView?.openMonitored, canonicalOpenCount), canonicalOpenCount),
+    lifecyclePriceChecks: Math.min(n(lastV1018LifecycleView?.priceChecks, canonicalOpenCount), canonicalOpenCount),
+    lifecyclePriceCheckAttempts: Math.min(n(lastV1018LifecycleView?.priceCheckAttempts, lastV1018LifecycleView?.openMonitored || canonicalOpenCount), canonicalOpenCount),
     lifecyclePriceCheckSkips: n(lastV1018LifecycleView?.priceCheckSkips, 0),
     lifecyclePriceCheckCoverageStatus: lastV1018LifecycleView?.priceCheckCoverageStatus || '',
     skippedLifecycleChecksJson: lastV1018LifecycleView?.skippedLifecycleChecksJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.skippedLifecycleChecks).slice(0,20)),
@@ -8017,13 +8157,15 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
 
 function v10128BuildHealthLite(source = 'health-lite') {
   const base = v953HealthTruthFromCurrentHealth(lastHealth || {}, source) || {};
-  const exportCounts = tradeExportCounts(lastTradeExport || {});
+  v10143SyncClosedLedgerSync(source + '-before-health-lite', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  const canonicalOpenRows = v10143PurgeStaleOpenViews(source + '-canonical-open').canonicalOpenRows;
+  const exportCountsRaw = tradeExportCounts(lastTradeExport || {});
   const closedLedgerStats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  const exportCounts = { ...exportCountsRaw, open: canonicalOpenRows.length, closed: closedLedgerStats.closedTrades, total: canonicalOpenRows.length + closedLedgerStats.closedTrades };
   const closedLedgerFlat = v10142ClosedLedgerFlatFields(closedLedgerStats);
-  const canonicalOpenRows = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
   const observedOpenSnapshot = Math.max(n(base.openPositions,0), n(base.paperSignals,0));
   const serverLedgerAuthorityLite = !!(lastTradeExport && (exportCounts.open > 0 || exportCounts.closed > 0));
-  const canonicalOpenCountLite = serverLedgerAuthorityLite ? exportCounts.open : Math.max(exportCounts.open, canonicalOpenRows.length);
+  const canonicalOpenCountLite = serverLedgerAuthorityLite ? canonicalOpenRows.length : Math.max(exportCounts.open, canonicalOpenRows.length);
   const staleCurrentHealthOpenDeltaLite = serverLedgerAuthorityLite ? Math.max(0, observedOpenSnapshot - exportCounts.open) : 0;
   const nativeRows = n(lastNativeForwardPoolView?.totalCandidates || lastNativeForwardPoolView?.rows || lastNativeForwardPoolView?.candidates?.length || base?.nativeForwardPool?.totalCandidates || base.candidates, 0);
   const latchRows = n(lastForwardLatchView?.size || lastForwardLatchView?.rows || lastForwardLatchView?.candidates?.length || base?.forwardLatch?.size || nativeRows, 0);
@@ -8047,7 +8189,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   );
   const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen: canonicalOpenCountLite });
   const healthLite = {
-    schema: 'alps.healthLite.v10142',
+    schema: 'alps.healthLite.v10143',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -8064,7 +8206,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     forwardRunnerSync,
     paperSignals: canonicalOpenCountLite,
     openPositions: canonicalOpenCountLite,
-    closedTrades: Math.max(n(base.closedTrades,0), exportCounts.closed),
+    closedTrades: closedLedgerStats.closedTrades,
     wins: closedLedgerFlat.wins,
     losses: closedLedgerFlat.losses,
     breakeven: closedLedgerFlat.breakeven,
@@ -8103,7 +8245,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     currentHealth: null,
     serverPaperLedger: {
       openTrades: canonicalOpenCountLite,
-      closedTrades: exportCounts.closed,
+      closedTrades: closedLedgerStats.closedTrades,
       canonicalOpen: canonicalOpenCountLite,
       wins: closedLedgerFlat.wins,
       losses: closedLedgerFlat.losses,
@@ -8117,7 +8259,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
       open: canonicalOpenCountLite,
       currentHealthOpen: canonicalOpenCountLite,
       canonicalOpen: canonicalOpenCountLite,
-      closed: exportCounts.closed,
+      closed: closedLedgerStats.closedTrades,
       status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? (staleCurrentHealthOpenDeltaLite > 0 ? 'SERVER_LEDGER_AUTHORITY_CURRENTHEALTH_OPEN_STALE_AUDIT_ONLY' : 'SERVER_LEDGER_SYNCED') : 'WAITING_FOR_OPEN_TRADES',
       mismatch: false,
       staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite
@@ -8156,7 +8298,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     v10136CloseExecutionProof: {
       installed: true,
       purpose: 'Expose per-open-trade close observation proof using last closed candle high/low, stop/target hit flags, and close writeback status.',
-      openMonitored: n(lastV1018LifecycleView?.openMonitored, 0),
+      openMonitored: Math.min(n(lastV1018LifecycleView?.openMonitored, canonicalOpenCountLite), canonicalOpenCountLite),
       closeWritebackStatus: lastV1018LifecycleView?.closeWritebackStatus || '',
       closeProofRows: safeArray(lastV1018LifecycleView?.closeExecutionProof).length,
       stopTargetTouches: safeArray(lastV1018LifecycleView?.stopTargetTouchProof).length
@@ -8166,20 +8308,22 @@ function v10128BuildHealthLite(source = 'health-lite') {
       purpose: 'Block zero-initial-risk entries, preserve initial risk after breakeven stop moves, attach result/pnlBps to every closed trade, and prefer server ledger counts over stale currentHealth open snapshots.',
       staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite,
       serverLedgerAuthority: serverLedgerAuthorityLite,
-      closedTrades: exportCounts.closed
+      closedTrades: closedLedgerStats.closedTrades
     },
     v10138LivePriceSentinel: lastV10138LivePriceSentinelView || { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, status:'WAITING_FOR_FIRST_SENTINEL_TICK', priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntries:v10138PendingEntries.length, paperOnly:true, liveCapitalExecution:false, testnetOnly:true },
     v10140SentinelBindingGuard: v10140SentinelBindingGuardView(),
     v10141HealthLiteSentinelBindingFix: lastV10141HealthLiteSentinelSyncView || { schema:'alps.v10141HealthLiteSentinelBindingFix.view.v1', version:FINAL_V930_VERSION, installed:true, status:'WAITING_FOR_HEALTH_LITE_SYNC', rule:'Health-lite performs a bounded post-ledger Live Price Sentinel sync before returning when open trades exist.' },
     v10142ClosedLedgerStats: closedLedgerStats,
+    v10143ClosedLedgerMonotonicGuard: lastV10143ClosedLedgerMonotonicGuardView,
+    v10143StaleOpenPurgeGuard: lastV10143StaleOpenPurgeGuardView,
     winLossLedger: closedLedgerStats,
     v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView || { schema:'alps.testnetExecutionBridge.v10138', version:FINAL_V930_VERSION, installed:true, ...v10138TestnetSafetyStatus(), orders:[], paperOnly:false, liveCapitalExecution:false, testnetOnly:true },
     finalHealthGate: {
       schema: 'alps.finalHealthGate.v10138.liveLiteOverride',
       version: FINAL_V930_VERSION,
       installed: true,
-      status: (v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0) ? 'WARN' : (forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'PASS' : 'WARN'),
-      nextRequiredAction: (v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0) ? 'RUN_POST_LEDGER_SENTINEL_SYNC' : (forwardRunnerSync.effectiveFwRunning && canonicalOpenCountLite > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction),
+      status: ((lastV10143ClosedLedgerMonotonicGuardView?.status || '').startsWith('CRITICAL') || (v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0)) ? 'WARN' : (forwardRunnerSync.effectiveFwRunning && (canonicalOpenCountLite > 0 || closedLedgerStats.closedTrades > 0) ? 'PASS' : 'WARN'),
+      nextRequiredAction: (lastV10143ClosedLedgerMonotonicGuardView?.status || '').startsWith('CRITICAL') ? 'REPAIR_CLOSED_LEDGER_PERSISTENCE' : ((v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0) ? 'RUN_POST_LEDGER_SENTINEL_SYNC' : (forwardRunnerSync.effectiveFwRunning && (canonicalOpenCountLite > 0 || closedLedgerStats.closedTrades > 0) ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction)),
       rule: 'Health-lite final gate trusts currentHealth authority: native pool/latch + paper entry/ledger proof means effective forward is active even if the raw browser flag is false.'
     }
   };
@@ -8188,7 +8332,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10142',
+    schema: 'alps.currentHealthLite.snapshot.v10143',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -8218,6 +8362,12 @@ function v10128BuildHealthLite(source = 'health-lite') {
     profitFactorR: healthLite.profitFactorR,
     profitFactorBps: healthLite.profitFactorBps,
     closedLedgerStatsStatus: healthLite.closedLedgerStatsStatus,
+    closedLedgerMonotonicStatus: lastV10143ClosedLedgerMonotonicGuardView?.status || '',
+    rawClosedTrades: lastV10143ClosedLedgerMonotonicGuardView?.rawClosedTrades || closedLedgerStats.closedTrades,
+    uniqueClosedTrades: closedLedgerStats.closedTrades,
+    semanticDuplicateClosed: lastV10143ClosedLedgerMonotonicGuardView?.semanticDuplicateClosed || 0,
+    closedLedgerDroppedSinceLastReport: lastV10143ClosedLedgerMonotonicGuardView?.closedLedgerDroppedSinceLastReport || 0,
+    sentinelCanonicalOpenStatus: lastV10143StaleOpenPurgeGuardView?.status || '',
     observedPaperSignals: healthLite.observedPaperSignals,
     observedOpenPositions: healthLite.observedOpenPositions,
     duplicateOpenDelta: healthLite.duplicateOpenDelta,
@@ -8231,9 +8381,9 @@ function v10128BuildHealthLite(source = 'health-lite') {
     chartCandles: healthLite.chartTruth ? healthLite.chartTruth.candles : 0,
     chartTruthContinuityStatus: healthLite.chartTruth?.chartTruthContinuityStatus || healthLite.chartTruthContinuityStatus || '',
     lastNonZeroChartCandles: healthLite.lastNonZeroChartCandles || 0,
-    lifecycleOpenMonitored: n(healthLite.v1018ServerPaperLifecycle?.openMonitored, 0),
-    lifecyclePriceChecks: n(healthLite.v1018ServerPaperLifecycle?.priceChecks, 0),
-    lifecyclePriceCheckAttempts: n(healthLite.v1018ServerPaperLifecycle?.priceCheckAttempts, healthLite.v1018ServerPaperLifecycle?.openMonitored || 0),
+    lifecycleOpenMonitored: Math.min(n(healthLite.v1018ServerPaperLifecycle?.openMonitored, healthLite.openPositions), healthLite.openPositions),
+    lifecyclePriceChecks: Math.min(n(healthLite.v1018ServerPaperLifecycle?.priceChecks, healthLite.openPositions), healthLite.openPositions),
+    lifecyclePriceCheckAttempts: Math.min(n(healthLite.v1018ServerPaperLifecycle?.priceCheckAttempts, healthLite.v1018ServerPaperLifecycle?.openMonitored || healthLite.openPositions), healthLite.openPositions),
     lifecyclePriceCheckSkips: n(healthLite.v1018ServerPaperLifecycle?.priceCheckSkips, 0),
     lifecyclePriceCheckCoverageStatus: healthLite.v1018ServerPaperLifecycle?.priceCheckCoverageStatus || '',
     skippedLifecycleChecks: safeArray(healthLite.v1018ServerPaperLifecycle?.skippedLifecycleChecks).slice(0, 8),
