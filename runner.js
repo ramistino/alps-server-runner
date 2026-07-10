@@ -349,7 +349,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.40-post-ledger-sentinel-watchdog';
+const FINAL_V930_VERSION = 'v10.1.41-health-lite-sentinel-binding-fix';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -848,6 +848,14 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
   const closedRows = [];
   const openRows = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
   view.watchedOpenTrades = openRows.length;
+  // v10.1.41: publish the post-ledger binding proof as soon as the canonical open rows are visible.
+  // If a later price call times out or throws, health-lite must still show that the sentinel actually
+  // attached to the open ledger instead of continuing to display the old pre-ledger zero-watch view.
+  if (openRows.length > 0) {
+    view.status = 'WATCHING_OPEN_LEDGER';
+    view.bindingPublishedAt = v10138NowIso();
+    lastV10138LivePriceSentinelView = view;
+  }
   const priceBySymbol = new Map();
   async function getPrice(sym) { const key = v10138Symbol(sym); if (!priceBySymbol.has(key)) priceBySymbol.set(key, await v10138FetchLivePrice(sym)); const p = priceBySymbol.get(key); if (p && Number.isFinite(v10138Num(p.price,null))) view.priceChecks += 1; else view.priceCheckSkips += 1; return p; }
   for (const t of openRows) {
@@ -949,6 +957,58 @@ async function v10140RunPostLedgerSentinelSync(reason='v10140-post-ledger-sentin
     }
   }
   return lastV10138LivePriceSentinelView;
+}
+
+
+// v10.1.41 — health-lite must not only report the stale sentinel guard; it should actively perform
+// a bounded post-ledger sentinel sync before returning the live health payload. This makes the
+// health-lite endpoint self-healing after paper entries are opened between runner ticks.
+let lastV10141HealthLiteSentinelSyncView = null;
+async function v10141SyncSentinelBeforeHealthLite(reason='v10141-health-lite-pre-send-sentinel-sync') {
+  const beforeGuard = v10140SentinelBindingGuardView();
+  const canonicalOpen = n(beforeGuard.canonicalOpen, v10116CountOpenTrades());
+  const pending = safeArray(v10138PendingEntries).length;
+  const view = {
+    schema: 'alps.v10141HealthLiteSentinelBindingFix.view.v1',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    reason,
+    startedAt: v10138NowIso(),
+    beforeStatus: beforeGuard.status,
+    beforeCanonicalOpen: canonicalOpen,
+    beforeWatchedOpenTrades: n(beforeGuard.watchedOpenTrades, 0),
+    beforePriceChecks: n(beforeGuard.priceChecks, 0),
+    pendingEntries: pending,
+    action: 'NO_SYNC_NEEDED',
+    status: 'SKIPPED_NO_OPEN_OR_ALREADY_BOUND'
+  };
+  if (!V10138_PRICE_SENTINEL_ENABLED) {
+    view.action = 'SKIPPED_SENTINEL_DISABLED';
+    view.status = 'SENTINEL_DISABLED';
+    view.finishedAt = v10138NowIso();
+    lastV10141HealthLiteSentinelSyncView = view;
+    return view;
+  }
+  if ((canonicalOpen > 0 && beforeGuard.status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER') || pending > 0) {
+    view.action = 'RUN_HEALTH_LITE_POST_LEDGER_SENTINEL_SYNC';
+    try {
+      const sentinel = await v1016WithTimeout(v10138LivePriceSentinelTick(reason), Math.max(6000, Math.min(20000, V10138_PRICE_SENTINEL_TIMEOUT_MS * 8)), 'V10141_HEALTH_LITE_SENTINEL_SYNC_TIMEOUT');
+      const afterGuard = v10140SentinelBindingGuardView();
+      view.afterStatus = afterGuard.status;
+      view.afterWatchedOpenTrades = n(afterGuard.watchedOpenTrades, 0);
+      view.afterPriceChecks = n(afterGuard.priceChecks, 0);
+      view.priceCheckSkips = n(afterGuard.priceCheckSkips, 0);
+      view.sentinelReason = sentinel?.reason || reason;
+      view.status = afterGuard.status === 'SENTINEL_BOUND_TO_OPEN_LEDGER' ? 'HEALTH_LITE_SENTINEL_BOUND' : 'HEALTH_LITE_SENTINEL_SYNC_RAN_BUT_STILL_STALE';
+    } catch (e) {
+      view.status = 'HEALTH_LITE_SENTINEL_SYNC_FAILED_OR_TIMED_OUT';
+      view.lastError = textValue(e && e.message || e).slice(0, 220);
+      // Do not overwrite the last sentinel view with a fake PASS. The guard will keep finalHealth WARN.
+    }
+  }
+  view.finishedAt = v10138NowIso();
+  lastV10141HealthLiteSentinelSyncView = view;
+  return view;
 }
 
 // v10.1.32 — distinguish raw browser fwRunning from effective server-forward activity.
@@ -7922,6 +7982,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     },
     v10138LivePriceSentinel: lastV10138LivePriceSentinelView || { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, status:'WAITING_FOR_FIRST_SENTINEL_TICK', priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntries:v10138PendingEntries.length, paperOnly:true, liveCapitalExecution:false, testnetOnly:true },
     v10140SentinelBindingGuard: v10140SentinelBindingGuardView(),
+    v10141HealthLiteSentinelBindingFix: lastV10141HealthLiteSentinelSyncView || { schema:'alps.v10141HealthLiteSentinelBindingFix.view.v1', version:FINAL_V930_VERSION, installed:true, status:'WAITING_FOR_HEALTH_LITE_SYNC', rule:'Health-lite performs a bounded post-ledger Live Price Sentinel sync before returning when open trades exist.' },
     v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView || { schema:'alps.testnetExecutionBridge.v10138', version:FINAL_V930_VERSION, installed:true, ...v10138TestnetSafetyStatus(), orders:[], paperOnly:false, liveCapitalExecution:false, testnetOnly:true },
     finalHealthGate: {
       schema: 'alps.finalHealthGate.v10138.liveLiteOverride',
@@ -7990,6 +8051,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
     sentinelBindingExpectedOpen: healthLite.v10140SentinelBindingGuard?.canonicalOpen || 0,
     sentinelBindingWatchedOpen: healthLite.v10140SentinelBindingGuard?.watchedOpenTrades || 0,
     sentinelBindingPriceChecks: healthLite.v10140SentinelBindingGuard?.priceChecks || 0,
+    healthLiteSentinelSyncStatus: healthLite.v10141HealthLiteSentinelBindingFix?.status || '',
+    healthLiteSentinelSyncAction: healthLite.v10141HealthLiteSentinelBindingFix?.action || '',
     livePriceSentinelExitProof: safeArray(healthLite.v10138LivePriceSentinel?.exitProof).slice(0,8),
     pendingEntryProof: safeArray(healthLite.v10138LivePriceSentinel?.pendingProof).slice(0,8),
     testnetExecutionOrders: safeArray(healthLite.v10138TestnetExecutionBridge?.orders).slice(-8),
@@ -8028,6 +8091,7 @@ async function createServer() {
         await loadForwardLatchState();
         await loadRecoveryState();
         await loadTradeVaultState();
+        await v10141SyncSentinelBeforeHealthLite('health-lite-endpoint-before-send').catch(e => log('v10.1.41 health-lite sentinel sync skipped:', e && e.message || e));
         return send(res, 200, v10128BuildHealthLite('health-lite-endpoint-before-send'));
       }
       if (url.pathname === '/runner/health') {
