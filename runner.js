@@ -367,7 +367,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.47-closed-ledger-high-water-sentinel-rebind';
+const FINAL_V930_VERSION = 'v10.1.48-sentinel-heartbeat-currenthealth-truth';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -807,12 +807,11 @@ function v10147ApplyAuthorityFields(target = {}, actualCanonicalRows = v10143Per
 function v10147RebindSentinelToCanonicalOpen(reason = 'v10147-sentinel-canonical-rebind') {
   const canonicalOpenRows = v10143PurgeStaleOpenViews(reason + '-purge').canonicalOpenRows;
   const prior = lastV10138LivePriceSentinelView || {};
-  lastV10138LivePriceSentinelView = {
+  lastV10138LivePriceSentinelView = v10148ApplySentinelTelemetry({
     ...prior,
-    schema: prior.schema || 'alps.livePriceSentinel.v10138',
+    schema: prior.schema || 'alps.livePriceSentinel.v10148',
     version: FINAL_V930_VERSION,
     installed: true,
-    status: prior.status || 'RUNNING',
     watchedOpenTrades: canonicalOpenRows.length,
     canonicalOpenAfterRebind: canonicalOpenRows.length,
     sentinelCanonicalRebindReason: reason,
@@ -820,7 +819,7 @@ function v10147RebindSentinelToCanonicalOpen(reason = 'v10147-sentinel-canonical
     paperOnly: true,
     liveCapitalExecution: false,
     testnetOnly: true,
-  };
+  });
   return lastV10138LivePriceSentinelView;
 }
 
@@ -1012,7 +1011,7 @@ const V10138_PRICE_SENTINEL_ENABLED = String(process.env.ALPS_PRICE_SENTINEL_ENA
 const V10138_PRICE_SENTINEL_TIMEOUT_MS = Math.max(500, Number(process.env.ALPS_PRICE_SENTINEL_TIMEOUT_MS || 2500));
 const V10138_PENDING_ENTRY_TTL_MS = Math.max(60_000, Number(process.env.ALPS_PENDING_ENTRY_TTL_MS || 6 * 60 * 60 * 1000));
 const V10138_PENDING_ENTRY_MAX_STORE = Math.max(100, Number(process.env.ALPS_PENDING_ENTRY_MAX_STORE || 5000));
-const V10138_TESTNET_EXECUTION_ENABLED = false; // v10.1.47 paper-only boundary: testnet is hard-disabled.
+const V10138_TESTNET_EXECUTION_ENABLED = false; // v10.1.48 paper-only boundary: testnet is hard-disabled.
 const V10138_TESTNET_ONLY = String(process.env.ALPS_TESTNET_ONLY || '1') !== '0';
 const V10138_TESTNET_BASE_URL = String(process.env.BINANCE_FUTURES_TESTNET_BASE_URL || process.env.ALPS_TESTNET_BASE_URL || 'https://testnet.binancefuture.com').replace(/\/+$/,'');
 const V10138_TESTNET_API_KEY = String(process.env.BINANCE_TESTNET_API_KEY || process.env.ALPS_TESTNET_API_KEY || '').trim();
@@ -1026,7 +1025,251 @@ let lastV10138LivePriceSentinelView = null;
 let lastV10138TestnetExecutionBridgeView = null;
 let v10138PendingEntriesLoaded = false;
 
+// v10.1.48 — independent server-side Live Price Sentinel heartbeat.
+// This loop is intentionally separate from the browser/research runner tick so a slow or stuck
+// browser page cannot silently freeze paper-trade price monitoring.
+const V10148_SENTINEL_INTERVAL_MS = Math.max(5_000, Number(process.env.ALPS_SENTINEL_INTERVAL_MS || 15_000));
+const V10148_SENTINEL_STALE_AFTER_MS = Math.max(
+  V10148_SENTINEL_INTERVAL_MS * 3,
+  Number(process.env.ALPS_SENTINEL_STALE_AFTER_MS || 90_000)
+);
+const V10148_SENTINEL_RUNTIME_FILE = path.join(DATA_DIR, 'sentinel-runtime-v10148.json');
+const V10148_SENTINEL_PROCESS_STARTED_AT = new Date().toISOString();
+const V10148_SENTINEL_BOOT_ID = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+let v10148SentinelInterval = null;
+let v10148SentinelTickPromise = null;
+let v10148SentinelRuntimeLoaded = false;
+let v10148SentinelRuntime = {
+  schema: 'alps.sentinelRuntime.v10148',
+  version: FINAL_V930_VERSION,
+  processBootId: V10148_SENTINEL_BOOT_ID,
+  processStartedAt: V10148_SENTINEL_PROCESS_STARTED_AT,
+  firstStartedAt: V10148_SENTINEL_PROCESS_STARTED_AT,
+  lastTickStartedAt: '',
+  lastTickCompletedAt: '',
+  lastPriceFetchAt: '',
+  totalTicks: 0,
+  totalSuccessfulTicks: 0,
+  totalFailedTicks: 0,
+  totalPriceChecks: 0,
+  totalFreshPriceChecks: 0,
+  totalPriceCheckSkips: 0,
+  consecutiveFailures: 0,
+  lastReason: '',
+  lastError: '',
+  lastCheckedTradeIds: [],
+  lastCheckedPrices: [],
+  lastCheckResult: 'WAITING_FOR_FIRST_SENTINEL_TICK',
+  noExitReason: 'WAITING_FOR_FIRST_SENTINEL_TICK'
+};
+
 function v10138NowIso() { return new Date().toISOString(); }
+function v10148IsoMs(value) {
+  const ms = Date.parse(String(value || ''));
+  return Number.isFinite(ms) ? ms : 0;
+}
+function v10148LatestProofAt(view = {}) {
+  let latest = '';
+  for (const row of [...safeArray(view.priceFetchProof), ...safeArray(view.exitProof), ...safeArray(view.entryProof), ...safeArray(view.pendingProof)]) {
+    const at = textValue(row?.priceAt || row?.checkedAt || row?.at || '');
+    if (v10148IsoMs(at) > v10148IsoMs(latest)) latest = at;
+  }
+  return latest;
+}
+async function v10148LoadSentinelRuntime() {
+  if (v10148SentinelRuntimeLoaded) return v10148SentinelRuntime;
+  v10148SentinelRuntimeLoaded = true;
+  try {
+    const raw = JSON.parse(await fsp.readFile(V10148_SENTINEL_RUNTIME_FILE, 'utf8'));
+    if (raw && typeof raw === 'object') {
+      v10148SentinelRuntime = {
+        ...v10148SentinelRuntime,
+        firstStartedAt: raw.firstStartedAt || raw.processStartedAt || v10148SentinelRuntime.firstStartedAt,
+        lastTickStartedAt: raw.lastTickStartedAt || '',
+        lastTickCompletedAt: raw.lastTickCompletedAt || '',
+        lastPriceFetchAt: raw.lastPriceFetchAt || '',
+        totalTicks: Math.max(0, n(raw.totalTicks, 0)),
+        totalSuccessfulTicks: Math.max(0, n(raw.totalSuccessfulTicks, 0)),
+        totalFailedTicks: Math.max(0, n(raw.totalFailedTicks, 0)),
+        totalPriceChecks: Math.max(0, n(raw.totalPriceChecks, 0)),
+        totalFreshPriceChecks: Math.max(0, n(raw.totalFreshPriceChecks, 0)),
+        totalPriceCheckSkips: Math.max(0, n(raw.totalPriceCheckSkips, 0)),
+        consecutiveFailures: Math.max(0, n(raw.consecutiveFailures, 0)),
+        lastReason: textValue(raw.lastReason || ''),
+        lastError: textValue(raw.lastError || ''),
+        lastCheckedTradeIds: safeArray(raw.lastCheckedTradeIds).slice(0, 40),
+        lastCheckedPrices: safeArray(raw.lastCheckedPrices).slice(0, 40),
+        lastCheckResult: textValue(raw.lastCheckResult || 'RESTORED_SENTINEL_RUNTIME'),
+        noExitReason: textValue(raw.noExitReason || '')
+      };
+    }
+  } catch (_) {}
+  v10148SentinelRuntime.version = FINAL_V930_VERSION;
+  v10148SentinelRuntime.processBootId = V10148_SENTINEL_BOOT_ID;
+  v10148SentinelRuntime.processStartedAt = V10148_SENTINEL_PROCESS_STARTED_AT;
+  return v10148SentinelRuntime;
+}
+async function v10148PersistSentinelRuntime() {
+  try {
+    await fsp.mkdir(DATA_DIR, { recursive: true });
+    const tmp = `${V10148_SENTINEL_RUNTIME_FILE}.tmp-${process.pid}-${Date.now()}`;
+    await fsp.writeFile(tmp, JSON.stringify(v10148SentinelRuntime, null, 2));
+    await fsp.rename(tmp, V10148_SENTINEL_RUNTIME_FILE);
+    return { ok:true, status:'SENTINEL_RUNTIME_PERSISTED' };
+  } catch (e) {
+    return { ok:false, status:'SENTINEL_RUNTIME_PERSIST_FAILED', error:textValue(e && e.message || e).slice(0,180) };
+  }
+}
+function v10148HeartbeatAgeMs() {
+  const at = v10148IsoMs(v10148SentinelRuntime.lastTickCompletedAt);
+  return at > 0 ? Math.max(0, Date.now() - at) : null;
+}
+function v10148SentinelRuntimeStatus(ignoreInProgress = false) {
+  if (!V10138_PRICE_SENTINEL_ENABLED) return 'SENTINEL_DISABLED';
+  if (v10148SentinelTickPromise && !ignoreInProgress) {
+    const startedAt = v10148IsoMs(v10148SentinelRuntime.lastTickStartedAt);
+    const runningAge = startedAt > 0 ? Date.now() - startedAt : 0;
+    return runningAge > V10148_SENTINEL_STALE_AFTER_MS ? 'SENTINEL_TICK_STUCK' : 'SENTINEL_TICK_IN_PROGRESS';
+  }
+  const age = v10148HeartbeatAgeMs();
+  if (age === null) return 'SENTINEL_WAITING_FOR_FIRST_TICK';
+  if (age > V10148_SENTINEL_STALE_AFTER_MS) return 'SENTINEL_HEARTBEAT_STALE';
+  const active = v10116CountOpenTrades() > 0 || safeArray(v10138PendingEntries).length > 0;
+  if (active) {
+    const priceAt = v10148IsoMs(v10148SentinelRuntime.lastPriceFetchAt);
+    if (!priceAt || Date.now() - priceAt > V10148_SENTINEL_STALE_AFTER_MS) return 'SENTINEL_PRICE_DATA_STALE';
+  }
+  return 'SENTINEL_RUNNING_FRESH';
+}
+function v10148ApplySentinelTelemetry(view = {}, options = {}) {
+  const ageMs = v10148HeartbeatAgeMs();
+  const runtimeStatus = v10148SentinelRuntimeStatus(options.ignoreInProgress === true);
+  return {
+    ...(view || {}),
+    tickStatus: textValue(view?.tickStatus || view?.status || ''),
+    status: runtimeStatus,
+    sentinelRuntimeStatus: runtimeStatus,
+    sentinelLastTickStartedAt: v10148SentinelRuntime.lastTickStartedAt || '',
+    sentinelLastTickAt: v10148SentinelRuntime.lastTickCompletedAt || '',
+    sentinelLastPriceFetchAt: v10148SentinelRuntime.lastPriceFetchAt || '',
+    sentinelTotalTicks: n(v10148SentinelRuntime.totalTicks, 0),
+    sentinelTotalSuccessfulTicks: n(v10148SentinelRuntime.totalSuccessfulTicks, 0),
+    sentinelTotalFailedTicks: n(v10148SentinelRuntime.totalFailedTicks, 0),
+    sentinelTotalPriceChecks: n(v10148SentinelRuntime.totalPriceChecks, 0),
+    sentinelTotalFreshPriceChecks: n(v10148SentinelRuntime.totalFreshPriceChecks, 0),
+    sentinelTotalPriceCheckSkips: n(v10148SentinelRuntime.totalPriceCheckSkips, 0),
+    freshPriceChecksThisTick: n(view?.freshPriceChecks, 0),
+    stalePriceChecksThisTick: n(view?.stalePriceChecks, 0),
+    sentinelConsecutiveFailures: n(v10148SentinelRuntime.consecutiveFailures, 0),
+    sentinelLastError: textValue(v10148SentinelRuntime.lastError || ''),
+    sentinelHeartbeatAgeSec: ageMs === null ? null : Number((ageMs / 1000).toFixed(3)),
+    sentinelLastPriceFetchAgeSec: v10148IsoMs(v10148SentinelRuntime.lastPriceFetchAt) > 0 ? Number(((Date.now() - v10148IsoMs(v10148SentinelRuntime.lastPriceFetchAt)) / 1000).toFixed(3)) : null,
+    sentinelFreshnessThresholdSec: Number((V10148_SENTINEL_STALE_AFTER_MS / 1000).toFixed(3)),
+    sentinelLoopIntervalMs: V10148_SENTINEL_INTERVAL_MS,
+    sentinelProcessBootId: V10148_SENTINEL_BOOT_ID,
+    sentinelProcessStartedAt: V10148_SENTINEL_PROCESS_STARTED_AT,
+    lastCheckedTradeIds: safeArray(v10148SentinelRuntime.lastCheckedTradeIds).slice(0, 40),
+    lastCheckedPrices: safeArray(v10148SentinelRuntime.lastCheckedPrices).slice(0, 40),
+    lastCheckResult: v10148SentinelRuntime.lastCheckResult || '',
+    noExitReason: v10148SentinelRuntime.noExitReason || '',
+    paperOnly: true,
+    liveCapitalExecution: false,
+    testnetOnly: true
+  };
+}
+function v10148SentinelView() {
+  return v10148ApplySentinelTelemetry(lastV10138LivePriceSentinelView || {
+    schema:'alps.livePriceSentinel.v10148', version:FINAL_V930_VERSION, installed:true,
+    enabled:V10138_PRICE_SENTINEL_ENABLED, priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK',
+    watchedOpenTrades:v10116CountOpenTrades(), watchedPendingEntries:safeArray(v10138PendingEntries).length,
+    priceChecks:0, priceCheckSkips:0, entryProof:[], exitProof:[], pendingProof:[]
+  });
+}
+async function v10148FinalizeSentinelRuntime(view = {}, reason = '', error = null) {
+  const completedAt = v10138NowIso();
+  const priceChecks = Math.max(0, n(view?.priceChecks, 0));
+  const priceCheckSkips = Math.max(0, n(view?.priceCheckSkips, 0));
+  const freshPriceChecks = Math.max(0, n(view?.freshPriceChecks, 0));
+  const proofs = safeArray(view?.exitProof);
+  const checkedTradeRows = proofs.filter(x => x && x.tradeId);
+  const exits = checkedTradeRows.filter(x => x.action === 'LIVE_EXIT_TRIGGERED');
+  const latestPriceAt = v10148LatestProofAt(view);
+  v10148SentinelRuntime.lastTickCompletedAt = completedAt;
+  v10148SentinelRuntime.lastReason = reason;
+  v10148SentinelRuntime.totalTicks = n(v10148SentinelRuntime.totalTicks, 0) + 1;
+  v10148SentinelRuntime.totalPriceChecks = n(v10148SentinelRuntime.totalPriceChecks, 0) + priceChecks;
+  v10148SentinelRuntime.totalFreshPriceChecks = n(v10148SentinelRuntime.totalFreshPriceChecks, 0) + freshPriceChecks;
+  v10148SentinelRuntime.totalPriceCheckSkips = n(v10148SentinelRuntime.totalPriceCheckSkips, 0) + priceCheckSkips;
+  if (latestPriceAt) v10148SentinelRuntime.lastPriceFetchAt = latestPriceAt;
+  else if (priceChecks > 0) v10148SentinelRuntime.lastPriceFetchAt = completedAt;
+  v10148SentinelRuntime.lastCheckedTradeIds = checkedTradeRows.map(x => x.tradeId).filter(Boolean).slice(0, 40);
+  v10148SentinelRuntime.lastCheckedPrices = checkedTradeRows.map(x => ({
+    tradeId:x.tradeId, pair:x.pair || '', timeframe:x.timeframe || '', livePrice:x.livePrice,
+    stop:x.stop, target:x.target, action:x.action || 'WATCH', priceAt:x.priceAt || completedAt
+  })).slice(0, 40);
+  if (error) {
+    v10148SentinelRuntime.totalFailedTicks = n(v10148SentinelRuntime.totalFailedTicks, 0) + 1;
+    v10148SentinelRuntime.consecutiveFailures = n(v10148SentinelRuntime.consecutiveFailures, 0) + 1;
+    v10148SentinelRuntime.lastError = textValue(error && error.message || error).slice(0, 240);
+    v10148SentinelRuntime.lastCheckResult = 'SENTINEL_TICK_FAILED';
+    v10148SentinelRuntime.noExitReason = 'SENTINEL_TICK_FAILED_BEFORE_RELIABLE_EXIT_DECISION';
+  } else {
+    v10148SentinelRuntime.totalSuccessfulTicks = n(v10148SentinelRuntime.totalSuccessfulTicks, 0) + 1;
+    v10148SentinelRuntime.consecutiveFailures = 0;
+    v10148SentinelRuntime.lastError = '';
+    if (exits.length > 0) {
+      v10148SentinelRuntime.lastCheckResult = `LIVE_EXIT_TRIGGERED:${exits.length}`;
+      v10148SentinelRuntime.noExitReason = '';
+    } else if (checkedTradeRows.length > 0) {
+      v10148SentinelRuntime.lastCheckResult = `OPEN_TRADES_CHECKED_NO_EXIT:${checkedTradeRows.length}`;
+      v10148SentinelRuntime.noExitReason = 'STOP_AND_TARGET_NOT_REACHED_FOR_CHECKED_OPEN_TRADES';
+    } else if (n(view?.watchedOpenTrades, 0) > 0 && priceChecks <= 0) {
+      v10148SentinelRuntime.lastCheckResult = 'OPEN_TRADES_PRESENT_NO_VALID_PRICE_CHECK';
+      v10148SentinelRuntime.noExitReason = 'PRICE_UNAVAILABLE_OR_CHECK_FAILED';
+    } else if (n(view?.watchedPendingEntries, 0) > 0) {
+      v10148SentinelRuntime.lastCheckResult = 'PENDING_ENTRIES_CHECKED_NO_OPEN_TRADE_EXIT';
+      v10148SentinelRuntime.noExitReason = 'NO_OPEN_TRADE_EXIT_REQUIRED';
+    } else {
+      v10148SentinelRuntime.lastCheckResult = 'NO_OPEN_OR_PENDING_TRADES';
+      v10148SentinelRuntime.noExitReason = 'NO_ACTIVE_TRADES_TO_CHECK';
+    }
+  }
+  const telemetry = v10148ApplySentinelTelemetry({ ...(view || {}), version:FINAL_V930_VERSION }, { ignoreInProgress:true });
+  lastV10138LivePriceSentinelView = telemetry;
+  await v10148PersistSentinelRuntime();
+  return telemetry;
+}
+async function v10148RunSentinelTick(reason='v10148-independent-sentinel-loop') {
+  await v10148LoadSentinelRuntime();
+  if (v10148SentinelTickPromise) return v10148SentinelTickPromise;
+  v10148SentinelRuntime.lastTickStartedAt = v10138NowIso();
+  v10148SentinelRuntime.lastReason = reason;
+  v10148SentinelTickPromise = (async () => {
+    try {
+      const view = await v10138LivePriceSentinelTick(reason);
+      return await v10148FinalizeSentinelRuntime(view, reason, null);
+    } catch (e) {
+      await v10148FinalizeSentinelRuntime(lastV10138LivePriceSentinelView || {}, reason, e);
+      throw e;
+    } finally {
+      v10148SentinelTickPromise = null;
+    }
+  })();
+  return v10148SentinelTickPromise;
+}
+function v10148StartSentinelLoop() {
+  if (!V10138_PRICE_SENTINEL_ENABLED || v10148SentinelInterval) return;
+  const run = () => {
+    if (shuttingDown) return;
+    v10148RunSentinelTick('v10148-independent-server-sentinel').catch(e => log('v10.1.48 independent sentinel tick failed:', errorInfo(e)));
+  };
+  setTimeout(run, 1000);
+  v10148SentinelInterval = setInterval(run, V10148_SENTINEL_INTERVAL_MS);
+}
+function v10148StopSentinelLoop() {
+  if (v10148SentinelInterval) clearInterval(v10148SentinelInterval);
+  v10148SentinelInterval = null;
+}
 function v10138Num(value, fallback = null) {
   const x = Number(String(value == null ? '' : value).replace(/[,%$≈]/g, '').trim());
   return Number.isFinite(x) ? x : fallback;
@@ -1259,7 +1502,7 @@ async function v10138TestnetBridgeMaybeSend(trade, action, priceProof) {
 async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') {
   await v10138LoadPendingEntriesOnce().catch(() => null);
   const started = Date.now();
-  const view = { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, reason, paperOnly:true, liveCapitalExecution:false, testnetOnly:true, priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntriesBefore:v10138PendingEntries.length, pendingEntriesAfter:0, watchedOpenTrades:0, watchedPendingEntries:0, entryTriggersThisTick:0, exitTriggersThisTick:0, refillEligibleCandidates:0, refillOpened:0, noRefillReason:'', priceChecks:0, priceCheckSkips:0, triggerLatencyMs:0, entryProof:[], exitProof:[], pendingProof:[], blockReasons:{}, testnetBridge:v10138TestnetSafetyStatus(), status:'INIT' };
+  const view = { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, reason, paperOnly:true, liveCapitalExecution:false, testnetOnly:true, priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntriesBefore:v10138PendingEntries.length, pendingEntriesAfter:0, watchedOpenTrades:0, watchedPendingEntries:0, entryTriggersThisTick:0, exitTriggersThisTick:0, refillEligibleCandidates:0, refillOpened:0, noRefillReason:'', priceChecks:0, freshPriceChecks:0, stalePriceChecks:0, priceCheckSkips:0, triggerLatencyMs:0, priceFetchProof:[], entryProof:[], exitProof:[], pendingProof:[], blockReasons:{}, testnetBridge:v10138TestnetSafetyStatus(), status:'INIT' };
   if (!V10138_PRICE_SENTINEL_ENABLED) { view.status='DISABLED'; lastV10138LivePriceSentinelView = view; return view; }
   v10143SyncClosedLedgerSync(reason + '-before-sentinel', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedRows = [];
@@ -1271,10 +1514,26 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
   if (openRows.length > 0) {
     view.status = 'WATCHING_OPEN_LEDGER';
     view.bindingPublishedAt = v10138NowIso();
-    lastV10138LivePriceSentinelView = view;
+    lastV10138LivePriceSentinelView = v10148ApplySentinelTelemetry(view);
   }
   const priceBySymbol = new Map();
-  async function getPrice(sym) { const key = v10138Symbol(sym); if (!priceBySymbol.has(key)) priceBySymbol.set(key, await v10138FetchLivePrice(sym)); const p = priceBySymbol.get(key); if (p && Number.isFinite(v10138Num(p.price,null))) view.priceChecks += 1; else view.priceCheckSkips += 1; return p; }
+  async function getPrice(sym) {
+    const key = v10138Symbol(sym);
+    if (!priceBySymbol.has(key)) priceBySymbol.set(key, await v10138FetchLivePrice(sym));
+    const p = priceBySymbol.get(key);
+    const valid = !!(p && Number.isFinite(v10138Num(p.price, null)));
+    if (valid) {
+      view.priceChecks += 1;
+      const priceAtMs = v10148IsoMs(p.atIso || p.at);
+      if (priceAtMs > 0 && Math.abs(Date.now() - priceAtMs) <= V10148_SENTINEL_STALE_AFTER_MS) view.freshPriceChecks += 1;
+      else view.stalePriceChecks += 1;
+      if (view.priceFetchProof.length < 40) view.priceFetchProof.push({ symbol:key, requestedSymbol:sym, price:v10138Num(p.price,null), source:p.source || '', priceAt:p.atIso || '', fresh:priceAtMs > 0 && Math.abs(Date.now() - priceAtMs) <= V10148_SENTINEL_STALE_AFTER_MS });
+    } else {
+      view.priceCheckSkips += 1;
+      if (view.priceFetchProof.length < 40) view.priceFetchProof.push({ symbol:key, requestedSymbol:sym, price:null, source:p?.source || 'PRICE_UNAVAILABLE', priceAt:p?.atIso || v10138NowIso(), fresh:false });
+    }
+    return p;
+  }
   for (const t of openRows) {
     try {
       const priceProof = await getPrice(t.pair || t.symbol); const price = v10138Num(priceProof?.price, null);
@@ -1315,7 +1574,7 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
     view.canonicalOpenAfterClose = stillOpen.length;
     view.status = 'RUNNING_CANONICAL_OPEN_REBOUND_AFTER_CLOSE';
     view.bindingPublishedAt = v10138NowIso();
-    lastV10138LivePriceSentinelView = { ...view };
+    lastV10138LivePriceSentinelView = v10148ApplySentinelTelemetry({ ...view });
   }
   const stillPending = [];
   v10138PendingEntries = v10138DedupPendingEntries(v10138PendingEntries);
@@ -1347,25 +1606,47 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
 // It is not enough for the sentinel to report RUNNING; it must actively watch the canonical open ledger.
 function v10140SentinelBindingGuardView() {
   const canonicalOpen = v10116CountOpenTrades();
-  const v = lastV10138LivePriceSentinelView || {};
+  const pendingEntries = safeArray(v10138PendingEntries).length;
+  const v = v10148SentinelView();
   const watched = n(v.watchedOpenTrades, 0);
   const priceChecks = n(v.priceChecks, 0);
-  const status = canonicalOpen > 0 && watched !== canonicalOpen
-    ? 'SENTINEL_CANONICAL_OPEN_WATCH_MISMATCH'
-    : (canonicalOpen === 0 && watched > 0 ? 'SENTINEL_STALE_WATCHING_CLOSED_TRADES' : (canonicalOpen > 0 && priceChecks <= 0 ? 'SENTINEL_NO_PRICE_CHECKS_FOR_OPEN_TRADES' : 'SENTINEL_BOUND_TO_OPEN_LEDGER'));
+  const totalPriceChecks = n(v.sentinelTotalPriceChecks, 0);
+  const runtimeStatus = textValue(v.sentinelRuntimeStatus || '');
+  let status = 'SENTINEL_BOUND_TO_OPEN_LEDGER';
+  if (canonicalOpen > 0 && watched !== canonicalOpen) status = 'SENTINEL_CANONICAL_OPEN_WATCH_MISMATCH';
+  else if (canonicalOpen === 0 && watched > 0) status = 'SENTINEL_STALE_WATCHING_CLOSED_TRADES';
+  else if (canonicalOpen > 0 && priceChecks <= 0 && totalPriceChecks <= 0) status = 'SENTINEL_NO_PRICE_CHECKS_FOR_OPEN_TRADES';
+  else if ((canonicalOpen > 0 || pendingEntries > 0) && ['SENTINEL_HEARTBEAT_STALE','SENTINEL_PRICE_DATA_STALE','SENTINEL_TICK_STUCK'].includes(runtimeStatus)) status = runtimeStatus;
+  else if ((canonicalOpen > 0 || pendingEntries > 0) && runtimeStatus === 'SENTINEL_WAITING_FOR_FIRST_TICK') status = 'SENTINEL_WAITING_FOR_FIRST_TICK';
   return {
-    schema: 'alps.v10140SentinelBindingGuard.view.v1',
+    schema: 'alps.v10148SentinelBindingGuard.view.v1',
     version: FINAL_V930_VERSION,
     installed: true,
     canonicalOpen,
+    pendingEntries,
     watchedOpenTrades: watched,
     priceChecks,
+    totalPriceChecks,
+    totalFreshPriceChecks: n(v.sentinelTotalFreshPriceChecks, 0),
     priceCheckSkips: n(v.priceCheckSkips, 0),
+    totalPriceCheckSkips: n(v.sentinelTotalPriceCheckSkips, 0),
     sentinelStatus: textValue(v.status || ''),
+    sentinelTickStatus: textValue(v.tickStatus || ''),
+    sentinelRuntimeStatus: runtimeStatus,
+    sentinelLastTickAt: v.sentinelLastTickAt || '',
+    sentinelLastPriceFetchAt: v.sentinelLastPriceFetchAt || '',
+    sentinelHeartbeatAgeSec: v.sentinelHeartbeatAgeSec,
+    sentinelLastPriceFetchAgeSec: v.sentinelLastPriceFetchAgeSec,
+    sentinelConsecutiveFailures: n(v.sentinelConsecutiveFailures, 0),
+    sentinelLastError: textValue(v.sentinelLastError || ''),
     sentinelReason: textValue(v.reason || ''),
+    lastCheckedTradeIds: safeArray(v.lastCheckedTradeIds).slice(0, 40),
+    lastCheckedPrices: safeArray(v.lastCheckedPrices).slice(0, 40),
+    lastCheckResult: v.lastCheckResult || '',
+    noExitReason: v.noExitReason || '',
     status,
-    nextRequiredAction: status === 'SENTINEL_BOUND_TO_OPEN_LEDGER' ? 'OBSERVE_LIVE_PRICE_SENTINEL' : 'RUN_POST_LEDGER_SENTINEL_SYNC',
-    rule: 'If server ledger has open trades, Live Price Sentinel must watch exactly the same canonical open count and perform live price checks before health can be considered fully operational.'
+    nextRequiredAction: status === 'SENTINEL_BOUND_TO_OPEN_LEDGER' ? 'OBSERVE_LIVE_PRICE_SENTINEL' : (['SENTINEL_HEARTBEAT_STALE','SENTINEL_PRICE_DATA_STALE','SENTINEL_TICK_STUCK'].includes(status) ? 'RESTART_INDEPENDENT_SENTINEL_LOOP' : 'RUN_POST_LEDGER_SENTINEL_SYNC'),
+    rule: 'Canonical binding and a fresh independent server heartbeat are both required. A static RUNNING label cannot pass this guard when tick timestamps or cumulative price checks stop advancing.'
   };
 }
 
@@ -1375,7 +1656,7 @@ async function v10140RunPostLedgerSentinelSync(reason='v10140-post-ledger-sentin
   if (!V10138_PRICE_SENTINEL_ENABLED) return lastV10138LivePriceSentinelView;
   if (canonicalOpen > 0 || pending > 0) {
     try {
-      return await v10138LivePriceSentinelTick(reason);
+      return await v10148RunSentinelTick(reason);
     } catch (e) {
       log('v10.1.40 post-ledger sentinel sync failed:', errorInfo(e));
       return lastV10138LivePriceSentinelView;
@@ -1415,11 +1696,12 @@ async function v10141SyncSentinelBeforeHealthLite(reason='v10141-health-lite-pre
     return view;
   }
   const needsOpenRebind = canonicalOpen > 0 && beforeGuard.status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER';
+  const needsHeartbeatRefresh = (canonicalOpen > 0 || pending > 0) && ['SENTINEL_HEARTBEAT_STALE','SENTINEL_PRICE_DATA_STALE','SENTINEL_TICK_STUCK','SENTINEL_WAITING_FOR_FIRST_TICK'].includes(beforeGuard.status);
   const needsPendingBootstrap = canonicalOpen === 0 && pending > 0 && n(lastV10138LivePriceSentinelView?.watchedPendingEntries, 0) === 0;
-  if (needsOpenRebind || needsPendingBootstrap) {
-    view.action = needsOpenRebind ? 'RUN_HEALTH_LITE_POST_LEDGER_SENTINEL_SYNC' : 'RUN_HEALTH_LITE_PENDING_BOOTSTRAP_SYNC';
+  if (needsOpenRebind || needsPendingBootstrap || needsHeartbeatRefresh) {
+    view.action = needsHeartbeatRefresh ? 'RUN_HEALTH_LITE_SENTINEL_HEARTBEAT_REFRESH' : (needsOpenRebind ? 'RUN_HEALTH_LITE_POST_LEDGER_SENTINEL_SYNC' : 'RUN_HEALTH_LITE_PENDING_BOOTSTRAP_SYNC');
     try {
-      const sentinel = await v1016WithTimeout(v10138LivePriceSentinelTick(reason), Math.max(6000, Math.min(20000, V10138_PRICE_SENTINEL_TIMEOUT_MS * 8)), 'V10141_HEALTH_LITE_SENTINEL_SYNC_TIMEOUT');
+      const sentinel = await v1016WithTimeout(v10148RunSentinelTick(reason), Math.max(6000, Math.min(20000, V10138_PRICE_SENTINEL_TIMEOUT_MS * 8)), 'V10141_HEALTH_LITE_SENTINEL_SYNC_TIMEOUT');
       const afterGuard = v10140SentinelBindingGuardView();
       view.afterStatus = afterGuard.status;
       view.afterWatchedOpenTrades = n(afterGuard.watchedOpenTrades, 0);
@@ -1796,10 +2078,12 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const actualCanonicalClosedRows = closedLedgerStats.closedTrades;
   const closedLedgerAuthorityFields = v10147AuthorityFields(actualCanonicalClosedRows);
   const serverClosedCount = closedLedgerAuthorityFields.closedTrades;
-  const currentHealthOpenCount = v10122CurrentHealthPaperOpen(base, pe, bridge);
+  const rawCurrentHealthOpenAudit = v10122CurrentHealthPaperOpen(base, pe, bridge);
   const serverLedgerAuthority = !!(lastTradeExport && (safeArray(lastTradeExport.openTrades).length > 0 || safeArray(lastTradeExport.closedTrades).length > 0));
+  const currentHealthOpenCount = serverLedgerAuthority ? serverOpenCount : rawCurrentHealthOpenAudit;
   const canonicalOpenCount = serverLedgerAuthority ? serverOpenCount : Math.max(serverOpenCount, currentHealthOpenCount);
-  const staleCurrentHealthOpenDelta = Math.max(0, currentHealthOpenCount - serverOpenCount);
+  const staleCurrentHealthOpenAuditDelta = Math.max(0, rawCurrentHealthOpenAudit - serverOpenCount);
+  const staleCurrentHealthOpenDelta = 0;
   // v10.1.35 compatibility guard: older v10.1.33 report-authority code referenced `canonicalOpen`
   // while the corrected canonical count is `canonicalOpenCount`. Keeping this local alias prevents
   // any legacy compact/report path from crashing /runner/health-lite with ReferenceError.
@@ -1846,6 +2130,8 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     closedTrades: serverClosedCount,
     serverPaperLedgerOpen: serverOpenCount,
     currentHealthPaperOpen: currentHealthOpenCount,
+    rawCurrentHealthPaperOpenAudit: rawCurrentHealthOpenAudit,
+    staleCurrentHealthOpenAuditDelta,
     canonicalPaperOpen: canonicalOpenCount,
     paperLedgerStatus,
     paperLedgerMismatch: serverLedgerAuthority ? false : (canonicalOpenCount !== serverOpenCount),
@@ -1891,13 +2177,28 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     closeExecutionProofJson: lastV1018LifecycleView?.closeExecutionProofJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.closeExecutionProof).slice(0,20)),
     stopTargetTouchProofJson: lastV1018LifecycleView?.stopTargetTouchProofJson || v10116FlatJson(safeArray(lastV1018LifecycleView?.stopTargetTouchProof).slice(0,20)),
     closeWritebackStatus: lastV1018LifecycleView?.closeWritebackStatus || '',
-    priceSentinelStatus: lastV10138LivePriceSentinelView?.status || '',
-    priceWatchMode: lastV10138LivePriceSentinelView?.priceWatchMode || '',
-    pendingEntries: lastV10138LivePriceSentinelView?.pendingEntriesAfter ?? v10138PendingEntries.length,
-    watchedOpenTrades: n(lastV10138LivePriceSentinelView?.watchedOpenTrades, 0),
-    watchedPendingEntries: n(lastV10138LivePriceSentinelView?.watchedPendingEntries, 0),
-    entryTriggersThisTick: n(lastV10138LivePriceSentinelView?.entryTriggersThisTick, 0),
-    exitTriggersThisTick: n(lastV10138LivePriceSentinelView?.exitTriggersThisTick, 0),
+    priceSentinelStatus: v10148SentinelView().status || '',
+    priceSentinelTickStatus: v10148SentinelView().tickStatus || '',
+    priceWatchMode: v10148SentinelView().priceWatchMode || '',
+    pendingEntries: v10148SentinelView().pendingEntriesAfter ?? v10138PendingEntries.length,
+    watchedOpenTrades: n(v10148SentinelView().watchedOpenTrades, 0),
+    watchedPendingEntries: n(v10148SentinelView().watchedPendingEntries, 0),
+    entryTriggersThisTick: n(v10148SentinelView().entryTriggersThisTick, 0),
+    exitTriggersThisTick: n(v10148SentinelView().exitTriggersThisTick, 0),
+    sentinelLastTickAt: v10148SentinelView().sentinelLastTickAt || '',
+    sentinelLastPriceFetchAt: v10148SentinelView().sentinelLastPriceFetchAt || '',
+    sentinelTotalTicks: n(v10148SentinelView().sentinelTotalTicks, 0),
+    sentinelTotalPriceChecks: n(v10148SentinelView().sentinelTotalPriceChecks, 0),
+    sentinelTotalFreshPriceChecks: n(v10148SentinelView().sentinelTotalFreshPriceChecks, 0),
+    sentinelHeartbeatAgeSec: v10148SentinelView().sentinelHeartbeatAgeSec,
+    sentinelLastPriceFetchAgeSec: v10148SentinelView().sentinelLastPriceFetchAgeSec,
+    sentinelRuntimeStatus: v10148SentinelView().sentinelRuntimeStatus || '',
+    sentinelConsecutiveFailures: n(v10148SentinelView().sentinelConsecutiveFailures, 0),
+    sentinelLastError: v10148SentinelView().sentinelLastError || '',
+    lastCheckedTradeIdsJson: v10116FlatJson(v10148SentinelView().lastCheckedTradeIds || []),
+    lastCheckedPricesJson: v10116FlatJson(v10148SentinelView().lastCheckedPrices || []),
+    lastCheckResult: v10148SentinelView().lastCheckResult || '',
+    noExitReason: v10148SentinelView().noExitReason || '',
     refillEligibleCandidates: n(lastV10138LivePriceSentinelView?.refillEligibleCandidates, 0),
     refillOpened: n(lastV10138LivePriceSentinelView?.refillOpened, 0),
     noRefillReason: lastV10138LivePriceSentinelView?.noRefillReason || '',
@@ -1908,9 +2209,9 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     sentinelBindingWatchedOpen: v10140SentinelBindingGuardView().watchedOpenTrades,
     sentinelBindingPriceChecks: v10140SentinelBindingGuardView().priceChecks,
     testnetExecutionStatus: lastV10138TestnetExecutionBridgeView?.status || v10138TestnetSafetyStatus().status,
-    livePriceSentinelEntryProofJson: v10116FlatJson(safeArray(lastV10138LivePriceSentinelView?.entryProof).slice(0,20)),
-    livePriceSentinelExitProofJson: v10116FlatJson(safeArray(lastV10138LivePriceSentinelView?.exitProof).slice(0,20)),
-    pendingEntryProofJson: v10116FlatJson(safeArray(lastV10138LivePriceSentinelView?.pendingProof).slice(0,40)),
+    livePriceSentinelEntryProofJson: v10116FlatJson(safeArray(v10148SentinelView().entryProof).slice(0,20)),
+    livePriceSentinelExitProofJson: v10116FlatJson(safeArray(v10148SentinelView().exitProof).slice(0,20)),
+    pendingEntryProofJson: v10116FlatJson(safeArray(v10148SentinelView().pendingProof).slice(0,40)),
     testnetExecutionOrdersJson: v10116FlatJson(safeArray(lastV10138TestnetExecutionBridgeView?.orders).slice(-20)),
     lifecycleClosedThisTick: n(lastV1018LifecycleView?.closedThisTick, 0),
     lifecycleClosedTotal: n(lastV1018LifecycleView?.closedTotal, actualCanonicalClosedRows),
@@ -2027,11 +2328,21 @@ function v10119CurrentHealthSeed(report = {}, source = 'currentHealth-seed') {
   if (lastChartView) seed.chartTruth = lastChartView;
   if (lastTradeExport) seed.alpsTradeExport = lastTradeExport;
   const tradeCounts = tradeExportCounts(lastTradeExport);
-  if (tradeCounts.open > 0) {
-    seed.openPositions = Math.max(n(seed.openPositions, 0), tradeCounts.open);
-    seed.paperSignals = Math.max(n(seed.paperSignals, 0), tradeCounts.open);
+  if (lastTradeExport) {
+    const rawOpenAudit = Math.max(n(seed.openPositions, 0), n(seed.paperSignals, 0));
+    const canonicalOpen = v10116CountOpenTrades();
+    seed.rawCurrentHealthPaperOpenAudit = rawOpenAudit;
+    seed.staleCurrentHealthOpenAuditDelta = Math.max(0, rawOpenAudit - canonicalOpen);
+    seed.openPositions = canonicalOpen;
+    seed.paperSignals = canonicalOpen;
+    seed.openTrades = v10143CanonicalOpenRows();
+    seed.staleCurrentHealthOpenDelta = 0;
+    seed.paperLedgerStatus = 'SERVER_LEDGER_SYNCED';
   }
-  if (tradeCounts.closed > 0) seed.closedTrades = Math.max(n(seed.closedTrades, 0), tradeCounts.closed);
+  if (tradeCounts.closed > 0 || v10147PublishedClosedCount() > 0) seed.closedTrades = v10147PublishedClosedCount();
+  seed.appVersion = FINAL_V930_VERSION;
+  seed.version = FINAL_V930_VERSION;
+  seed.reportTitle = `ALPS Operational Truth Report — ${FINAL_V930_VERSION}`;
   return seed;
 }
 function v10119CurrentHealthTruthStatus(seed = {}) {
@@ -2081,7 +2392,7 @@ function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
     reportSnapshotsExcludedFromOperationalTruth: true,
     oldReportOverwriteBlocked: true,
     dashboardLocalGuessBlocked: true,
-    pageMarkdownIsLegacyWrapped: true,
+    pageMarkdownIsLegacyWrapped: false,
     staleMarkersRemoved,
     current: {
       status: compact.status || current.status || '',
@@ -8378,7 +8689,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   );
   const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen: canonicalOpenCountLite });
   const healthLite = {
-    schema: 'alps.healthLite.v10147',
+    schema: 'alps.healthLite.v10148',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -8433,13 +8744,16 @@ function v10128BuildHealthLite(source = 'health-lite') {
     } : closedLedgerAuthorityFieldsLite,
     observedPaperSignals: serverLedgerAuthorityLite ? canonicalOpenCountLite : Math.max(n(base.paperSignals, 0), canonicalOpenCountLite),
     observedOpenPositions: serverLedgerAuthorityLite ? canonicalOpenCountLite : Math.max(n(base.openPositions, 0), canonicalOpenCountLite),
-    staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite,
+    staleCurrentHealthOpenDelta: 0,
+    rawCurrentHealthPaperOpenAudit: observedOpenSnapshot,
+    staleCurrentHealthOpenAuditDelta: staleCurrentHealthOpenDeltaLite,
     duplicateOpenDelta: serverLedgerAuthorityLite ? 0 : Math.max(0, observedOpenSnapshot - canonicalOpenCountLite),
     canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
     rejected: n(base.rejected,0),
     rejectedSignals: n(base.rejectedSignals,0),
     appUrl: lastHealth?.appUrl || base.appUrl || '',
-    appVersion: base.appVersion || lastHealth?.appVersion || FINAL_V930_VERSION,
+    appVersion: FINAL_V930_VERSION,
+    reportTitle: `ALPS Operational Truth Report — ${FINAL_V930_VERSION}`,
     preflight: base.preflight || lastHealth?.preflight || '',
     serverRunner: base.serverRunner || lastHealth?.serverRunner || 'ON',
     pageReady: !!(base.pageReady ?? lastHealth?.pageReady),
@@ -8464,16 +8778,18 @@ function v10128BuildHealthLite(source = 'health-lite') {
       winRate: closedLedgerFlat.winRate,
       netPnlBps: closedLedgerFlat.netPnlBps,
       totalResultR: closedLedgerFlat.totalResultR,
-      status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? (staleCurrentHealthOpenDeltaLite > 0 ? 'SERVER_LEDGER_AUTHORITY_CURRENTHEALTH_OPEN_STALE_AUDIT_ONLY' : 'SERVER_LEDGER_SYNCED') : 'WAITING_FOR_OPEN_TRADES'
+      status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? 'SERVER_LEDGER_SYNCED' : 'WAITING_FOR_OPEN_TRADES'
     },
     paperLedger: {
       open: canonicalOpenCountLite,
       currentHealthOpen: canonicalOpenCountLite,
       canonicalOpen: canonicalOpenCountLite,
       closed: publishedClosedTradesLite,
-      status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? (staleCurrentHealthOpenDeltaLite > 0 ? 'SERVER_LEDGER_AUTHORITY_CURRENTHEALTH_OPEN_STALE_AUDIT_ONLY' : 'SERVER_LEDGER_SYNCED') : 'WAITING_FOR_OPEN_TRADES',
+      status: (canonicalOpenCountLite > 0 || exportCounts.closed > 0) ? 'SERVER_LEDGER_SYNCED' : 'WAITING_FOR_OPEN_TRADES',
       mismatch: false,
-      staleCurrentHealthOpenDelta: staleCurrentHealthOpenDeltaLite
+      staleCurrentHealthOpenDelta: 0,
+      rawCurrentHealthOpenAudit: observedOpenSnapshot,
+      staleCurrentHealthOpenAuditDelta: staleCurrentHealthOpenDeltaLite
     },
     chartTruth,
     chartTruthContinuityStatus: chartTruth?.chartTruthContinuityStatus || '',
@@ -8521,7 +8837,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
       serverLedgerAuthority: serverLedgerAuthorityLite,
       closedTrades: closedLedgerStats.closedTrades
     },
-    v10138LivePriceSentinel: lastV10138LivePriceSentinelView || { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, status:'WAITING_FOR_FIRST_SENTINEL_TICK', priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntries:v10138PendingEntries.length, paperOnly:true, liveCapitalExecution:false, testnetOnly:true },
+    v10138LivePriceSentinel: v10148SentinelView(),
+    v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() },
     v10140SentinelBindingGuard: v10140SentinelBindingGuardView(),
     v10141HealthLiteSentinelBindingFix: lastV10141HealthLiteSentinelSyncView || { schema:'alps.v10141HealthLiteSentinelBindingFix.view.v1', version:FINAL_V930_VERSION, installed:true, status:'WAITING_FOR_HEALTH_LITE_SYNC', rule:'Health-lite performs a bounded post-ledger Live Price Sentinel sync before returning when open trades exist.' },
     v10142ClosedLedgerStats: closedLedgerStats,
@@ -8544,7 +8861,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10147',
+    schema: 'alps.currentHealthLite.snapshot.v10148',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -8609,6 +8926,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     stopTargetTouchProof: safeArray(healthLite.v1018ServerPaperLifecycle?.stopTargetTouchProof).slice(0, 8),
     closeWritebackStatus: healthLite.v1018ServerPaperLifecycle?.closeWritebackStatus || '',
     priceSentinelStatus: healthLite.v10138LivePriceSentinel?.status || '',
+    priceSentinelTickStatus: healthLite.v10138LivePriceSentinel?.tickStatus || '',
     priceWatchMode: healthLite.v10138LivePriceSentinel?.priceWatchMode || '',
     pendingEntries: healthLite.v10138LivePriceSentinel?.pendingEntriesAfter ?? healthLite.v10138LivePriceSentinel?.pendingEntries ?? v10138PendingEntries.length,
     watchedOpenTrades: healthLite.v10138LivePriceSentinel?.watchedOpenTrades || 0,
@@ -8622,9 +8940,25 @@ function v10128BuildHealthLite(source = 'health-lite') {
     sentinelBindingExpectedOpen: healthLite.v10140SentinelBindingGuard?.canonicalOpen || 0,
     sentinelBindingWatchedOpen: healthLite.v10140SentinelBindingGuard?.watchedOpenTrades || 0,
     sentinelBindingPriceChecks: healthLite.v10140SentinelBindingGuard?.priceChecks || 0,
+    sentinelLastTickAt: healthLite.v10138LivePriceSentinel?.sentinelLastTickAt || '',
+    sentinelLastPriceFetchAt: healthLite.v10138LivePriceSentinel?.sentinelLastPriceFetchAt || '',
+    sentinelTotalTicks: healthLite.v10138LivePriceSentinel?.sentinelTotalTicks || 0,
+    sentinelTotalPriceChecks: healthLite.v10138LivePriceSentinel?.sentinelTotalPriceChecks || 0,
+    sentinelTotalFreshPriceChecks: healthLite.v10138LivePriceSentinel?.sentinelTotalFreshPriceChecks || 0,
+    sentinelHeartbeatAgeSec: healthLite.v10138LivePriceSentinel?.sentinelHeartbeatAgeSec,
+    sentinelLastPriceFetchAgeSec: healthLite.v10138LivePriceSentinel?.sentinelLastPriceFetchAgeSec,
+    sentinelRuntimeStatus: healthLite.v10138LivePriceSentinel?.sentinelRuntimeStatus || '',
+    sentinelConsecutiveFailures: healthLite.v10138LivePriceSentinel?.sentinelConsecutiveFailures || 0,
+    sentinelLastError: healthLite.v10138LivePriceSentinel?.sentinelLastError || '',
+    lastCheckedTradeIds: safeArray(healthLite.v10138LivePriceSentinel?.lastCheckedTradeIds).slice(0,40),
+    lastCheckedPrices: safeArray(healthLite.v10138LivePriceSentinel?.lastCheckedPrices).slice(0,40),
+    lastCheckResult: healthLite.v10138LivePriceSentinel?.lastCheckResult || '',
+    noExitReason: healthLite.v10138LivePriceSentinel?.noExitReason || '',
     healthLiteSentinelSyncStatus: healthLite.v10141HealthLiteSentinelBindingFix?.status || '',
     healthLiteSentinelSyncAction: healthLite.v10141HealthLiteSentinelBindingFix?.action || '',
     livePriceSentinelExitProof: safeArray(healthLite.v10138LivePriceSentinel?.exitProof).slice(0,8),
+    livePriceSentinelWatchProof: safeArray(healthLite.v10138LivePriceSentinel?.exitProof).filter(x => x && x.action === 'WATCH').slice(0,8),
+    livePriceFetchProof: safeArray(healthLite.v10138LivePriceSentinel?.priceFetchProof).slice(0,8),
     pendingEntryProof: safeArray(healthLite.v10138LivePriceSentinel?.pendingProof).slice(0,8),
     testnetExecutionOrders: safeArray(healthLite.v10138TestnetExecutionBridge?.orders).slice(-8),
     closedLedgerStats: closedLedgerStats,
@@ -8634,7 +8968,9 @@ function v10128BuildHealthLite(source = 'health-lite') {
     pairPerformance: safeArray(closedLedgerStats.byPair).slice(0,10),
     timeframePerformance: safeArray(closedLedgerStats.byTimeframe).slice(0,10),
     sourceOfTruth: 'currentHealth',
-    authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY'
+    authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY',
+    appVersion: FINAL_V930_VERSION,
+    reportTitle: `ALPS Operational Truth Report — ${FINAL_V930_VERSION}`
   };
   return healthLite;
 }
@@ -8721,7 +9057,7 @@ async function createServer() {
         healthTruth.v10118ReportAuthority = v10118ReportAuthorityView(healthTruth, 'health-endpoint-before-send');
         healthTruth.v10119ReportAuthority = healthTruth.v10118ReportAuthority;
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: lastV10138LivePriceSentinelView, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
+        return send(res, 200, { ...healthTruth, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
@@ -10838,7 +11174,7 @@ async function runnerTick(reason = 'server-runner tick') {
   tickBusy = true;
   try {
     // v10.1.38 live price sentinel: opens pending entries and closes open trades on live price touch.
-    try { await v10138LivePriceSentinelTick('runner-tick-before-candle-lifecycle'); } catch (e) { log('v10138 live price sentinel failed:', errorInfo(e)); }
+    try { await v10148RunSentinelTick('runner-tick-before-candle-lifecycle'); } catch (e) { log('v10138 live price sentinel failed:', errorInfo(e)); }
     // v10.1.8 server paper lifecycle remains as closed-candle proof/fallback.
     try { await v1018ServerPaperLifecycleTick(); } catch (e) { log('v1018 lifecycle tick failed:', errorInfo(e)); }
     if (!page || page.isClosed()) {
@@ -11091,6 +11427,13 @@ async function collectReport() {
   report = v10147ApplyAuthorityFields(report, v10143PersistentClosedRows.length);
   report.v10147ClosedLedgerAuthority = lastV10147ClosedLedgerAuthorityResult || report.v10147ClosedLedgerAuthority || null;
   report.currentHealth = v10147ApplyAuthorityFields(v10119CurrentHealthSeed(report, 'collect-report-final-currentHealth-object'), v10143PersistentClosedRows.length);
+  report.currentHealth.appVersion = FINAL_V930_VERSION;
+  report.currentHealth.version = FINAL_V930_VERSION;
+  report.currentHealth.reportTitle = `ALPS Operational Truth Report — ${FINAL_V930_VERSION}`;
+  report.currentHealth.openPositions = v10116CountOpenTrades();
+  report.currentHealth.paperSignals = v10116CountOpenTrades();
+  report.currentHealth.staleCurrentHealthOpenDelta = 0;
+  report.currentHealth.v10138LivePriceSentinel = v10148SentinelView();
   report.v10118ReportAuthority = v10118ReportAuthorityView(report, 'collect-report-final-before-save');
   report.v10119ReportAuthority = report.v10118ReportAuthority;
   report.dataSource = 'CURRENT_HEALTH_AUTHORITY';
@@ -11140,7 +11483,7 @@ ${buildV952Markdown(report)}`;
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
   await v1014PersistRuntimeNonzeroSnapshot(report, 'collect-report-final').catch(() => null);
-  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView, chartTruth: report.chartTruth || lastChartView || null, v10115OperationalTruth: report.v10115OperationalTruth || lastV10115OperationalTruthView, v10115SymbolStatus: report.v10115SymbolStatus || lastV10115SymbolStatusView, v10115FeatureGateDiagnostics: report.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView, v10115UnifiedLayerLog: report.v10115UnifiedLayerLog || lastV10115LayerLogView, v10115DeferredEntryQueue: report.v10115DeferredEntryQueue || lastV10115DeferredEntryQueueView, v10115ChartTruthSync: report.v10115ChartTruthSync, v10117LedgerConsistency: report.v10117LedgerConsistency || lastHealth?.v10117LedgerConsistency, v10138LivePriceSentinel: lastV10138LivePriceSentinelView, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView }, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView, chartTruth: report.chartTruth || lastChartView || null, v10115OperationalTruth: report.v10115OperationalTruth || lastV10115OperationalTruthView, v10115SymbolStatus: report.v10115SymbolStatus || lastV10115SymbolStatusView, v10115FeatureGateDiagnostics: report.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView, v10115UnifiedLayerLog: report.v10115UnifiedLayerLog || lastV10115LayerLogView, v10115DeferredEntryQueue: report.v10115DeferredEntryQueue || lastV10115DeferredEntryQueueView, v10115ChartTruthSync: report.v10115ChartTruthSync, v10117LedgerConsistency: report.v10117LedgerConsistency || lastHealth?.v10117LedgerConsistency, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
@@ -11222,10 +11565,12 @@ async function maybeNotify(h) {
 async function main() {
   await ensureDirs();
   await loadRecoveryState();
+  await v10148LoadSentinelRuntime();
   await v10147ReconcileClosedLedgerBeforePublish('startup-before-server-listen').catch(e => {
     lastHealth = { ...(lastHealth || {}), closedLedgerAuthorityStatus:'STARTUP_AUTHORITY_RECONCILE_FAILED', closedLedgerAuthorityError:textValue(e && e.message || e).slice(0,220) };
   });
   await createServer();
+  v10148StartSentinelLoop();
   const launched = await launchAppPage();
   if (launched) {
     await runnerTick('startup');
@@ -11245,6 +11590,7 @@ async function shutdown() {
   shuttingDown = true;
   log('Shutting down ALPS Server Runner...');
   try { if (runnerInterval) clearInterval(runnerInterval); } catch (_) {}
+  try { v10148StopSentinelLoop(); } catch (_) {}
   try { if (page && !page.isClosed()) await collectReport().catch(() => null); } catch (_) {}
   try { await saveRecoveryState(); } catch (_) {}
   try { if (context) await context.close(); } catch (_) {}
