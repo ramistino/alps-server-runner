@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.15 Operational Truth + IndexedDB Feature Pipeline
+ * ALPS Server Runner — v10.1.51 Temporal Truth + Intelligence + Evidence Autonomy
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -378,9 +378,22 @@ let lastOOSEvidenceRows = [];
 let lastRecoveryForwardCoreView = null;
 
 
+// ALPS v10.1.51 — Post-Entry Observation Guard + Intelligence Truth
+const V10151_TEMPORAL_EPOCH_FILE = path.join(DATA_DIR, 'temporal-evidence-epoch-v10151.json');
+const V10151_PROCESS_BOOT_ID = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+let v10151TemporalEpochState = null;
+let v10151LifecycleBaselineKeys = new Set();
+let lastV10151TemporalEvidenceView = null;
+let lastV10151AhiRegimeView = null;
+let lastV10151HypothesisDNAView = null;
+let lastV10151EvidenceChamberView = null;
+let lastV10151AutonomyEligibilityView = null;
+let lastV10151RefreshAt = 0;
+
+
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.50-live-feature-materializer-truth';
+const FINAL_V930_VERSION = 'v10.1.51-temporal-intelligence-autonomy-truth';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -1370,6 +1383,7 @@ async function v10149PersistEvidenceLedger(reason='persistent-evidence-write') {
       ledgerGenerationId:v10149Generation?.ledgerGenerationId||'',processBootId:V10149_PROCESS_BOOT_ID,
       dataDir:DATA_DIR,persistentPathConfigured:V10149_PERSISTENT_PATH_CONFIGURED,
       paperOnly:true,liveCapitalExecution:false,testnetExecution:false,
+      temporalEvidenceEpoch:v10151LoadOrCreateTemporalEpochSync(),
       openTrades:open,closedTrades:closed,pendingEntries:v10138DedupPendingEntries(v10138PendingEntries),
       entryFingerprints:[...v10149FingerprintMap.values()].slice(-V10149_ENTRY_FINGERPRINT_MAX),
       counts:{open:open.length,closed:closed.length,pending:v10138PendingEntries.length,entryFingerprints:v10149FingerprintMap.size}
@@ -1731,14 +1745,15 @@ async function v10138FetchLivePrice(symbol, timeoutMs = V10138_PRICE_SENTINEL_TI
     const lastRow = rows[rows.length - 1];
     const price = v10138Num(lastRow?.close ?? lastRow?.c, null);
     if (Number.isFinite(price) && price > 0) {
-      const out = { symbol: resolved, requestedSymbol:symbol, price, source:'FALLBACK_LAST_1M_CANDLE_CLOSE', latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
+      const candleOpenTime=v10151ToMs(lastRow?.time || lastRow?.openTime || lastRow?.t || lastRow?.timestamp); const out = { symbol: resolved, requestedSymbol:symbol, price, source:'FALLBACK_LAST_1M_CANDLE_CLOSE', candleOpenTime, candleCloseTime:candleOpenTime?candleOpenTime+60_000:0, latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
       v10138LastLivePriceBySymbol.set(resolved, out); return out;
     }
   } catch (_) {}
   return cached || { symbol: resolved, requestedSymbol:symbol, price:null, source:'PRICE_UNAVAILABLE', latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
 }
 function v10138BuildPaperTradeFromPending(pending, livePriceProof) {
-  const id = `SRV-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const openedAt = Date.now();
+  const id = `SRV-${openedAt}-${crypto.randomBytes(3).toString('hex')}`;
   const risk = v10137ValidInitialRiskPlan(pending.direction, pending.entry, pending.stop, pending.target);
   if (!risk.ok) return null;
   return {
@@ -1751,7 +1766,7 @@ function v10138BuildPaperTradeFromPending(pending, livePriceProof) {
     zoneLow:pending.zoneLow, zoneHigh:pending.zoneHigh, pendingEntryCreatedAt:pending.createdAt, pendingEntryReason:pending.reason,
     signalCandleTime: pending.signalCandleTime || 0,
     entryFingerprint: pending.entryFingerprint || v10149EntryFingerprint(pending,pending),
-    entryTriggeredAt:Date.now(), entryTriggeredAtIso:v10138NowIso(), entryTriggerPrice:v10138Num(livePriceProof?.price, pending.entry), entryTriggerReason:'LIVE_PRICE_ENTERED_ENTRY_ZONE', priceSource:livePriceProof?.source || 'LIVE_PRICE_SENTINEL',
+    openedAt, openedAtIso:new Date(openedAt).toISOString(), entryObservedAt:openedAt, entryObservedAtIso:new Date(openedAt).toISOString(), firstEligibleExitAt:openedAt+1, firstEligibleExitAtIso:new Date(openedAt+1).toISOString(), temporalEvidenceEpochId:v10151LoadOrCreateTemporalEpochSync().epochId, temporalIntegrityStatus:'POST_ENTRY_OBSERVATION_GUARD_ACTIVE', entryObservationSource:livePriceProof?.source || 'LIVE_PRICE_SENTINEL', entryTriggeredAt:openedAt, entryTriggeredAtIso:new Date(openedAt).toISOString(), entryTriggerPrice:v10138Num(livePriceProof?.price, pending.entry), entryTriggerReason:'LIVE_PRICE_ENTERED_ENTRY_ZONE', priceSource:livePriceProof?.source || 'LIVE_PRICE_SENTINEL',
     status:'OPEN', paperOnly:true, liveCapitalExecution:false, source:'SERVER_AUTHORITY_LIVE_PRICE_SENTINEL_V10138', __alpsSource:'SERVER_AUTHORITY_LIVE_PRICE_SENTINEL_V10138',
     breakEvenTriggerPct:50, lockProfitTriggerPct:75,
     exitManagement:{ breakEvenAtTargetPct:50, profitLockAtTargetPct:75, lockStopToTargetPct:50, mode:'AUTO_BREAKEVEN_AND_PROFIT_LOCK' },
@@ -1760,6 +1775,7 @@ function v10138BuildPaperTradeFromPending(pending, livePriceProof) {
 }
 function v10138AppendOpenTrade(trade) {
   if (!trade) return false;
+  v10151StampOpenTrade(trade, trade.entryObservationSource || trade.priceSource || trade.source || 'PAPER_ENTRY_APPEND');
   const key = v1019OpenTradeDedupeKey(trade);
   const existing = new Set(v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView?.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades).map(v1019OpenTradeDedupeKey).filter(Boolean));
   if (key && existing.has(key)) return false;
@@ -1788,7 +1804,7 @@ function v10138CloseTradeInLedger(t, exitPrice, closeReason, priceProof, view) {
   t.status = 'CLOSED'; t.closedAt = Date.now(); t.closedAtIso = v10138NowIso();
   t.exit = exitPrice; t.exitPrice = exitPrice; t.closeReason = closeReason; t.exitReason = closeReason;
   t.result = resultFields.result; t.pnlBps = resultFields.pnlBps; t.pnlPct = resultFields.pnlBps == null ? null : Number((resultFields.pnlBps/100).toFixed(6)); t.resultR = resultFields.resultR; t.win = resultFields.resultR > 0;
-  t.exitTriggerPrice = v10138Num(priceProof?.price, exitPrice); t.exitTriggeredAt = Date.now(); t.exitTriggeredAtIso = v10138NowIso(); t.exitTriggerReason = closeReason; t.closeWritebackStatus = 'CLOSE_MARKED_PENDING_WRITEBACK';
+  const temporalDecision = v10151LiveObservationDecision(t, priceProof || {}); v10151MarkCloseTemporalProof(t, temporalDecision, priceProof?.source || 'LIVE_PRICE_SENTINEL'); t.exitTriggerPrice = v10138Num(priceProof?.price, exitPrice); t.exitTriggeredAt = t.exitObservedAt; t.exitTriggeredAtIso = t.exitObservedAtIso; t.exitTriggerReason = closeReason; t.closeWritebackStatus = 'CLOSE_MARKED_PENDING_WRITEBACK';
   if (view) view.exitTriggersThisTick = (view.exitTriggersThisTick || 0) + 1;
   return t;
 }
@@ -1849,7 +1865,7 @@ async function v10138TestnetBridgeMaybeSend(trade, action, priceProof) {
 async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') {
   await v10138LoadPendingEntriesOnce().catch(() => null);
   const started = Date.now();
-  const view = { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, reason, paperOnly:true, liveCapitalExecution:false, testnetOnly:true, priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntriesBefore:v10138PendingEntries.length, pendingEntriesAfter:0, watchedOpenTrades:0, watchedPendingEntries:0, entryTriggersThisTick:0, exitTriggersThisTick:0, refillEligibleCandidates:0, refillOpened:0, noRefillReason:'', priceChecks:0, freshPriceChecks:0, stalePriceChecks:0, priceCheckSkips:0, triggerLatencyMs:0, priceFetchProof:[], entryProof:[], exitProof:[], pendingProof:[], blockReasons:{}, testnetBridge:v10138TestnetSafetyStatus(), status:'INIT' };
+  const view = { schema:'alps.livePriceSentinel.v10138', version:FINAL_V930_VERSION, installed:true, enabled:V10138_PRICE_SENTINEL_ENABLED, reason, paperOnly:true, liveCapitalExecution:false, testnetOnly:true, priceWatchMode:'LIVE_PRICE_TRIGGER_WITH_CLOSED_CANDLE_FALLBACK', openCapacityMode:'ADAPTIVE_NO_FIXED_OPEN_TRADE_CAP', noFixedOpenTradeLimit:true, pendingEntriesBefore:v10138PendingEntries.length, pendingEntriesAfter:0, watchedOpenTrades:0, watchedPendingEntries:0, entryTriggersThisTick:0, exitTriggersThisTick:0, refillEligibleCandidates:0, refillOpened:0, noRefillReason:'', priceChecks:0, freshPriceChecks:0, stalePriceChecks:0, priceCheckSkips:0, triggerLatencyMs:0, priceFetchProof:[], entryProof:[], exitProof:[], pendingProof:[], temporalObservationProof:[], temporalObservationBlocked:0, blockReasons:{}, testnetBridge:v10138TestnetSafetyStatus(), status:'INIT' };
   if (!V10138_PRICE_SENTINEL_ENABLED) { view.status='DISABLED'; lastV10138LivePriceSentinelView = view; return view; }
   v10143SyncClosedLedgerSync(reason + '-before-sentinel', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedRows = [];
@@ -1888,13 +1904,21 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
       const direction = normalizeDirection(t.direction || t.side || ''); const isShort = direction === 'SHORT';
       const entry = v10138Num(t.entry ?? t.entryPrice, null); let activeStop = v10138Num(t.stop ?? t.stopPrice, null); const target = v10138Num(t.target ?? t.targetPrice, null);
       if (!(Number.isFinite(entry) && Number.isFinite(activeStop) && Number.isFinite(target) && (direction === 'LONG' || direction === 'SHORT'))) { view.blockReasons.INVALID_OPEN_TRADE_PLAN = (view.blockReasons.INVALID_OPEN_TRADE_PLAN||0)+1; continue; }
+      const temporalDecision = v10151LiveObservationDecision(t, priceProof || {});
+      if (!temporalDecision.allowed) {
+        view.temporalObservationBlocked += 1;
+        view.blockReasons[temporalDecision.reason] = (view.blockReasons[temporalDecision.reason]||0)+1;
+        if (view.temporalObservationProof.length < 40) view.temporalObservationProof.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', decision:temporalDecision.reason, openedAt:temporalDecision.openedAt||0, observedAt:temporalDecision.observedAt||0, source:temporalDecision.source||priceProof?.source||'', action:'BLOCK_EXIT_AND_TRAILING' });
+        continue;
+      }
+      t.firstEligibleExitAt = Math.max(v10151ToMs(t.firstEligibleExitAt), temporalDecision.openedAt+1);
       const riskPlan = v10137ValidInitialRiskPlan(direction, entry, v10138Num(t.initialStop ?? t.openedStop ?? activeStop, activeStop), target);
       const initialRisk = Number.isFinite(v10138Num(t.initialRisk, null)) && v10138Num(t.initialRisk, null) > 0 ? v10138Num(t.initialRisk, null) : riskPlan.initialRisk;
       const targetDist = Math.abs(target - entry); const progress = targetDist > 0 ? (isShort ? (entry - price) / targetDist : (price - entry) / targetDist) : 0;
       if (progress >= 0.5 && !t.breakevenApplied) { const ns = entry; if ((isShort && ns < activeStop) || (!isShort && ns > activeStop)) { t.stop = ns; activeStop = ns; } t.breakevenApplied = true; }
       if (progress >= 0.75 && !t.profitLockApplied) { const lock = isShort ? entry - initialRisk * 0.5 : entry + initialRisk * 0.5; if ((isShort && lock < activeStop) || (!isShort && lock > activeStop)) { t.stop = lock; activeStop = lock; } t.profitLockApplied = true; }
       const stopHit = isShort ? price >= activeStop : price <= activeStop; const targetHit = isShort ? price <= target : price >= target;
-      const proof = { tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction, livePrice:price, entry, stop:activeStop, target, progress:Number.isFinite(progress)?Number(progress.toFixed(4)):null, stopHit, targetHit, priceSource:priceProof.source, priceAt:priceProof.atIso, action:'WATCH' };
+      const proof = { tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction, livePrice:price, entry, stop:activeStop, target, progress:Number.isFinite(progress)?Number(progress.toFixed(4)):null, stopHit, targetHit, priceSource:priceProof.source, priceAt:priceProof.atIso, openedAt:temporalDecision.openedAt, firstEligibleExitAt:t.firstEligibleExitAt, temporalObservationDecision:temporalDecision.reason, observationType:temporalDecision.observationType, action:'WATCH' };
       if (stopHit || targetHit) {
         const closeReason = stopHit ? (t.breakevenApplied || t.profitLockApplied ? 'LIVE_TRAILED_STOP_HIT' : 'LIVE_STOP_HIT') : 'LIVE_TARGET_HIT';
         const exitPrice = stopHit ? activeStop : target;
@@ -2597,7 +2621,7 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     finalHealthNextAction: truthSeed.finalHealthGate?.nextRequiredAction || (compactForwardSync.effectiveFwRunning && canonicalOpenCount > 0 ? 'OBSERVE_TRADE_LIFECYCLE' : (lastV949FinalHealthGateView?.nextRequiredAction || '')),
     reportRefreshStatus: base.v10122ReportRefreshStatus || '',
     reportRefreshError: /FAST_REFRESHED/i.test(textValue(base.v10122ReportRefreshStatus || '')) ? '' : (base.v10122ReportRefreshError || ''),
-    lastError: base.lastError && !/V10116_COMPACT_COLLECT_REPORT_TIMEOUT/.test(String(base.lastError)) ? base.lastError : '',
+    temporalGuardStatus:(lastV10151TemporalEvidenceView||v10151BuildTemporalEvidenceView()).guardStatus, cleanPostGuardClosedTrades:(lastV10151TemporalEvidenceView||v10151BuildTemporalEvidenceView()).cleanClosedRows, invalidTemporalEvidenceRows:(lastV10151TemporalEvidenceView||v10151BuildTemporalEvidenceView()).invalidTemporalRows, legacyPreGuardRowsExcluded:(lastV10151TemporalEvidenceView||v10151BuildTemporalEvidenceView()).legacyPreGuardRows, ahiRegimeStatus:(lastV10151AhiRegimeView||v10151BuildAhiRegimeIntelligence()).status, ahiRegimeReadyPairFrames:(lastV10151AhiRegimeView||v10151BuildAhiRegimeIntelligence()).readyPairFrames, hypothesisDNAStatus:(lastV10151HypothesisDNAView||v10151BuildHypothesisDNA(base)).status, hypothesisDNATotal:(lastV10151HypothesisDNAView||v10151BuildHypothesisDNA(base)).totalHypotheses, evidenceChamberStatus:(lastV10151EvidenceChamberView||v10151BuildEvidenceChamber(base)).status, autonomyEligibilityStatus:(lastV10151AutonomyEligibilityView||v10151ApplyEvidenceDrivenAutonomy(base)).status, autonomyEligibleCandidates:(lastV10151AutonomyEligibilityView||v10151ApplyEvidenceDrivenAutonomy(base)).autonomyEligibleCandidates, autonomyBlockedCandidates:(lastV10151AutonomyEligibilityView||v10151ApplyEvidenceDrivenAutonomy(base)).autonomyBlockedCandidates, autonomyBlockReasonsJson:v10116FlatJson((lastV10151AutonomyEligibilityView||v10151ApplyEvidenceDrivenAutonomy(base)).blockReasons||{}), temporalObservationProofJson:v10116FlatJson(safeArray(lastV1018LifecycleView?.temporalObservationProof).slice(0,40)), lastError: base.lastError && !/V10116_COMPACT_COLLECT_REPORT_TIMEOUT/.test(String(base.lastError)) ? base.lastError : '',
     openTradeSummaryJson: v10116FlatJson(openTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction:normalizeDirection(t.direction||t.side||''), entry:t.entry||t.entryPrice, initialStop:t.initialStop||t.openedStop||'', stop:t.stop||t.stopPrice, target:t.target||t.targetPrice, initialRisk:t.initialRisk||'', riskGuardStatus:t.riskGuardStatus||'', breakevenApplied:!!(t.breakevenApplied||t.breakEvenMoved), profitLockApplied:!!(t.profitLockApplied||t.profitLocked), status:t.status||'OPEN', source:t.source||t.__alpsSource||'' }))),
     closedTradeSummaryJson: v10116FlatJson(closedTrades.slice(0, 8).map(t => ({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction:normalizeDirection(t.direction||t.side||''), entry:t.entry||t.entryPrice, exit:t.exit||t.exitPrice, closeReason:t.closeReason||t.exitReason||'', result:t.result||'', resultR:t.resultR, pnlBps:t.pnlBps, status:t.status||'CLOSED' })))
   };
@@ -2617,6 +2641,11 @@ function v10116CompactReport(seed = {}, chart = null, source = 'chatgpt-compact'
     layerLog: lastV10115LayerLogView || null,
     tradeExport: lastTradeExport || buildTradeExport({ openTrades:[], closedTrades:[] }),
     chartTruth: chart || lastChartView || null,
+    v10151TemporalEvidence: lastV10151TemporalEvidenceView || v10151BuildTemporalEvidenceView(),
+    ahiRegimeIntelligence: lastV10151AhiRegimeView || v10151BuildAhiRegimeIntelligence(),
+    hypothesisDNA: lastV10151HypothesisDNAView || v10151BuildHypothesisDNA(seed),
+    evidenceChamber: lastV10151EvidenceChamberView || v10151BuildEvidenceChamber(seed),
+    autonomyEligibility: lastV10151AutonomyEligibilityView || v10151ApplyEvidenceDrivenAutonomy(seed),
     note: 'Use this JSON/CSV for ChatGPT diagnostics. Legacy seven-column system CSV is blocked and intentionally superseded by currentHealth authority export.'
   };
 }
@@ -2902,9 +2931,9 @@ function v10118NormalizeReportMarkdown(report = {}, md = '') {
 }
 
 async function v10118BuildCompactMarkdownForEndpoint(url, reason = 'endpoint-md') {
-  const compact = await v10116BuildCompactReportForEndpoint(url, reason);
-  const lite = v10128BuildHealthLite(reason + '-compact-md-authority');
-  return v10118CompactMarkdown({ ...(lastReport || {}), ...(lastHealth || {}), ...lite, nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView, v10118ReportAuthority: v10118ReportAuthorityView(lite, reason) }, reason);
+  await v10116BuildCompactReportForEndpoint(url, reason);
+  v10151RefreshIntelligence(lastReport || lastHealth || {}, true);
+  return v10151BuildOperationalReportMarkdown(lastReport || lastHealth || {}, reason);
 }
 
 async function v10116BuildCompactReportForEndpoint(url, reason = 'endpoint') {
@@ -4068,7 +4097,8 @@ async function v951CollectRealCandleDiscoveryMaterializer(reason = 'v951-real-ca
         const win=rows.slice(Math.max(0,idx-120),idx+1); const closes=win.map(x=>x.close).filter(finite); if(closes.length<30) return null;
         const price=closes[closes.length-1], a=atr(win,14)||price*0.003, e20=ema(closes.slice(-80),20), e50=ema(closes.slice(-120),50), r=rsi(closes,14), last20=closes.slice(-20), m=sma(last20), sd=std(last20);
         const highs=win.slice(-80).map(x=>x.high), lows=win.slice(-80).map(x=>x.low), swingHigh=Math.max(...highs), swingLow=Math.min(...lows), poc=pct(win.slice(-96).map(x=>(x.high+x.low+x.close)/3),0.5);
-        return { pair,timeframe:tf,index:idx,time:rows[idx].t,close:price,atr:a,ema20:e20,ema50:e50,rsi:r,bbMid:m,bbUpper:m!=null&&sd!=null?m+2*sd:null,bbLower:m!=null&&sd!=null?m-2*sd:null,swingHigh,swingLow,poc };
+        const volumes=win.map(x=>Number(x.volume||0)).filter(x=>Number.isFinite(x)&&x>=0), volume=Number(rows[idx].volume||0), volumeSma20=sma(volumes.slice(-20)), volumeRatio=Number.isFinite(volumeSma20)&&volumeSma20>0?volume/volumeSma20:null;
+        return { pair,timeframe:tf,index:idx,time:rows[idx].t,close:price,atr:a,ema20:e20,ema50:e50,rsi:r,bbMid:m,bbUpper:m!=null&&sd!=null?m+2*sd:null,bbLower:m!=null&&sd!=null?m-2*sd:null,swingHigh,swingLow,poc,volume,volumeSma20,volumeRatio };
       }
       function signal(strategy,f){
         const p=f.close, buf=Math.max(p*0.0018,(f.atr||p*0.003)*0.18);
@@ -7931,7 +7961,8 @@ function v1012Feature(pair,tf,rows,idx){
   const win=rows.slice(Math.max(0,idx-160),idx+1); const closes=win.map(x=>x.close).filter(Number.isFinite); if(closes.length<60) return null;
   const price=closes[closes.length-1], a=v1012Atr(win,14)||price*0.003, e20=v1012Ema(closes.slice(-100),20), e50=v1012Ema(closes.slice(-140),50), r=v1012Rsi(closes,14), last20=closes.slice(-20), m=v1012Sma(last20), sd=v1012Std(last20);
   const highs=win.slice(-100).map(x=>x.high), lows=win.slice(-100).map(x=>x.low), swingHigh=Math.max(...highs), swingLow=Math.min(...lows), poc=v1012Pct(win.slice(-96).map(x=>(x.high+x.low+x.close)/3),0.5);
-  return { pair,timeframe:tf,index:idx,time:rows[idx].t,close:price,atr:a,ema20:e20,ema50:e50,rsi:r,bbMid:m,bbUpper:m!=null&&sd!=null?m+2*sd:null,bbLower:m!=null&&sd!=null?m-2*sd:null,swingHigh,swingLow,poc };
+  const volumes=win.map(x=>Number(x.volume||0)).filter(x=>Number.isFinite(x)&&x>=0), volume=Number(rows[idx].volume||0), volumeSma20=v1012Sma(volumes.slice(-20)), volumeRatio=Number.isFinite(volumeSma20)&&volumeSma20>0?volume/volumeSma20:null;
+  return { pair,timeframe:tf,index:idx,time:rows[idx].t,close:price,atr:a,ema20:e20,ema50:e50,rsi:r,bbMid:m,bbUpper:m!=null&&sd!=null?m+2*sd:null,bbLower:m!=null&&sd!=null?m-2*sd:null,swingHigh,swingLow,poc,volume,volumeSma20,volumeRatio };
 }
 function v1012Signal(strategy,f){
   const p=f.close, buf=Math.max(p*0.0018,(f.atr||p*0.003)*0.18);
@@ -8177,6 +8208,401 @@ async function v1015HealthMarketDataBootstrap(healthTruth = {}, reason = 'health
 }
 
 
+
+
+// v10.1.51 — temporal integrity, AHI regime truth, Hypothesis DNA, Evidence Chamber,
+// and evidence-driven Full Autonomy eligibility. This layer is paper-only and does not
+// change strategy rules, pairs, timeframes, entries, stops, targets, or risk logic.
+function v10151Num(value, fallback = null) {
+  const x = Number(String(value == null ? '' : value).replace(/[,%$≈]/g, '').trim());
+  return Number.isFinite(x) ? x : fallback;
+}
+function v10151Clamp(x, lo = 0, hi = 1) {
+  const n0 = Number(x); return Number.isFinite(n0) ? Math.max(lo, Math.min(hi, n0)) : lo;
+}
+function v10151ToMs(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const n0 = Number(value);
+  if (Number.isFinite(n0) && n0 > 10_000_000_000) return n0;
+  if (Number.isFinite(n0) && n0 > 1_000_000_000) return n0 * 1000;
+  const p = Date.parse(String(value));
+  return Number.isFinite(p) ? p : 0;
+}
+function v10151TradeIdTime(trade = {}) {
+  const raw = textValue(trade.tradeId || trade.id || '');
+  const m = raw.match(/SRV-(\d{12,14})-/i);
+  return m ? v10151ToMs(m[1]) : 0;
+}
+function v10151TradeOpenedAtMs(trade = {}) {
+  return v10151ToMs(trade.openedAt || trade.entryTriggeredAt || trade.entryObservedAt || trade.timestamp || trade.createdAt || trade.openedAtIso || trade.entryTriggeredAtIso || trade.entryObservedAtIso) || v10151TradeIdTime(trade);
+}
+function v10151TradeClosedAtMs(trade = {}) {
+  return v10151ToMs(trade.exitObservedAt || trade.exitTriggeredAt || trade.closedAt || trade.closedAtIso || trade.exitTriggeredAtIso || trade.exitObservedAtIso);
+}
+function v10151TfMs(tf) { return v1012TfMs(tf || '1h'); }
+function v10151CandleOpenMs(proof = {}) {
+  return v10151ToMs(proof.candleOpenTime || proof.openTime || proof.candleTime || proof.time || proof.t || proof.timestamp);
+}
+function v10151CandleCloseMs(proof = {}, timeframe = '') {
+  const explicit = v10151ToMs(proof.candleCloseTime || proof.closeTime);
+  if (explicit) return explicit;
+  const openMs = v10151CandleOpenMs(proof);
+  return openMs ? openMs + v10151TfMs(timeframe) : 0;
+}
+function v10151LoadOrCreateTemporalEpochSync() {
+  if (v10151TemporalEpochState) return v10151TemporalEpochState;
+  try {
+    const raw = JSON.parse(fs.readFileSync(V10151_TEMPORAL_EPOCH_FILE, 'utf8'));
+    if (raw && raw.epochId && v10151ToMs(raw.startedAt)) v10151TemporalEpochState = raw;
+  } catch (_) {}
+  if (!v10151TemporalEpochState) {
+    const startedAtMs = Date.now();
+    v10151TemporalEpochState = {
+      schema:'alps.temporalEvidenceEpoch.v10151', version:FINAL_V930_VERSION,
+      epochId:`V10151-${startedAtMs}-${crypto.randomBytes(3).toString('hex')}`,
+      startedAt:startedAtMs, startedAtIso:new Date(startedAtMs).toISOString(),
+      createdByProcessBootId:V10151_PROCESS_BOOT_ID,
+      rule:'Only trades opened in this epoch and closed from a proven post-entry observation are eligible for new performance learning and Full Autonomy promotion.'
+    };
+    try { fs.mkdirSync(DATA_DIR, { recursive:true }); fs.writeFileSync(V10151_TEMPORAL_EPOCH_FILE, JSON.stringify(v10151TemporalEpochState, null, 2)); } catch (_) {}
+  }
+  v10151TemporalEpochState.version = FINAL_V930_VERSION;
+  return v10151TemporalEpochState;
+}
+function v10151StampOpenTrade(trade = {}, source = 'PAPER_ENTRY') {
+  if (!trade || typeof trade !== 'object') return trade;
+  const epoch = v10151LoadOrCreateTemporalEpochSync();
+  const openedAt = v10151TradeOpenedAtMs(trade) || Date.now();
+  trade.openedAt = openedAt;
+  trade.openedAtIso = trade.openedAtIso || new Date(openedAt).toISOString();
+  trade.entryObservedAt = v10151ToMs(trade.entryObservedAt || trade.entryTriggeredAt) || openedAt;
+  trade.entryObservedAtIso = trade.entryObservedAtIso || new Date(trade.entryObservedAt).toISOString();
+  trade.entryObservationSource = trade.entryObservationSource || source;
+  trade.firstEligibleExitAt = Math.max(v10151ToMs(trade.firstEligibleExitAt), openedAt + 1);
+  trade.firstEligibleExitAtIso = trade.firstEligibleExitAtIso || new Date(trade.firstEligibleExitAt).toISOString();
+  trade.temporalEvidenceEpochId = trade.temporalEvidenceEpochId || epoch.epochId;
+  trade.temporalIntegrityStatus = trade.temporalIntegrityStatus || 'POST_ENTRY_OBSERVATION_GUARD_ACTIVE';
+  return trade;
+}
+function v10151LiveObservationDecision(trade = {}, priceProof = {}) {
+  const openedAt = v10151TradeOpenedAtMs(trade);
+  const observedAt = v10151ToMs(priceProof.at || priceProof.atIso || priceProof.priceAt);
+  const source = textValue(priceProof.source || priceProof.priceSource || '');
+  if (!openedAt) return { allowed:false, reason:'OPENED_AT_UNAVAILABLE_BASELINE_REQUIRED', openedAt:0, observedAt, source };
+  if (!observedAt || observedAt <= openedAt) return { allowed:false, reason:'LIVE_OBSERVATION_NOT_AFTER_ENTRY', openedAt, observedAt, source };
+  if (/FALLBACK_LAST_1M_CANDLE_CLOSE|CANDLE/i.test(source)) {
+    const candleOpenTime = v10151CandleOpenMs(priceProof);
+    const candleCloseTime = v10151CandleCloseMs(priceProof, '1m');
+    if (!candleOpenTime) return { allowed:false, reason:'CANDLE_TIME_UNAVAILABLE_FOR_FALLBACK_PRICE', openedAt, observedAt, source, candleOpenTime, candleCloseTime };
+    if (candleOpenTime < openedAt) return { allowed:false, reason:'ENTRY_CANDLE_RANGE_QUARANTINED', openedAt, observedAt, source, candleOpenTime, candleCloseTime };
+    if (candleCloseTime > observedAt + 2000) return { allowed:false, reason:'CANDLE_NOT_CLOSED_AT_OBSERVATION', openedAt, observedAt, source, candleOpenTime, candleCloseTime };
+    return { allowed:true, reason:'FULL_POST_ENTRY_CANDLE_OBSERVATION', openedAt, observedAt, source, candleOpenTime, candleCloseTime, observationType:'CLOSED_CANDLE_FALLBACK' };
+  }
+  return { allowed:true, reason:'LIVE_TICK_AFTER_ENTRY', openedAt, observedAt, source, observationType:'LIVE_TICK' };
+}
+function v10151CandleObservationDecision(trade = {}, proof = {}) {
+  const openedAt = v10151TradeOpenedAtMs(trade);
+  const candleOpenTime = v10151CandleOpenMs(proof);
+  const candleCloseTime = v10151CandleCloseMs(proof, trade.timeframe || trade.tf || proof.timeframe);
+  if (!openedAt) return { allowed:false, reason:'OPENED_AT_UNAVAILABLE_BASELINE_REQUIRED', openedAt:0, candleOpenTime, candleCloseTime };
+  if (!candleOpenTime || !candleCloseTime) return { allowed:false, reason:'CANDLE_TIME_UNAVAILABLE', openedAt, candleOpenTime, candleCloseTime };
+  if (candleOpenTime < openedAt) return { allowed:false, reason:'ENTRY_CANDLE_RANGE_QUARANTINED', openedAt, candleOpenTime, candleCloseTime };
+  if (candleCloseTime > Date.now() + 2000) return { allowed:false, reason:'CANDLE_NOT_CLOSED_YET', openedAt, candleOpenTime, candleCloseTime };
+  return { allowed:true, reason:'FULL_CANDLE_OPENED_AFTER_ENTRY', openedAt, candleOpenTime, candleCloseTime, observedAt:Date.now(), observationType:'CLOSED_CANDLE' };
+}
+function v10151MarkCloseTemporalProof(trade = {}, decision = {}, source = '') {
+  const observedAt = v10151ToMs(decision.observedAt) || Date.now();
+  trade.exitObservedAt = observedAt;
+  trade.exitObservedAtIso = new Date(observedAt).toISOString();
+  trade.exitObservationSource = source || decision.source || decision.observationType || 'POST_ENTRY_OBSERVATION';
+  trade.firstEligibleExitAt = Math.max(v10151ToMs(trade.firstEligibleExitAt), v10151TradeOpenedAtMs(trade) + 1);
+  trade.firstEligibleExitAtIso = new Date(trade.firstEligibleExitAt).toISOString();
+  if (decision.candleOpenTime) trade.exitCandleOpenTime = decision.candleOpenTime;
+  if (decision.candleCloseTime) trade.exitCandleCloseTime = decision.candleCloseTime;
+  trade.temporalIntegrityStatus = 'VALID_POST_ENTRY_OBSERVATION';
+  trade.temporalObservationDecision = decision.reason || 'VALID_POST_ENTRY_OBSERVATION';
+  return trade;
+}
+function v10151CanonicalEvidenceKey(row = {}) {
+  const raw = textValue(row.key || row.__alpsV1019Key || row.__alpsV10138PendingKey || '').toUpperCase().replace(/^KEY\|/, '');
+  return raw || uniqueKeyFromCandidate(row);
+}
+function v10151TradeTemporalClassification(trade = {}) {
+  const epoch = v10151LoadOrCreateTemporalEpochSync();
+  const openedAt = v10151TradeOpenedAtMs(trade);
+  const closedAt = v10151TradeClosedAtMs(trade);
+  const source = textValue(trade.exitObservationSource || trade.priceSource || trade.closeReason || '');
+  const candleOpenTime = v10151ToMs(trade.exitCandleOpenTime);
+  let status = 'UNVERIFIED_PRE_GUARD';
+  let valid = false;
+  if (openedAt && closedAt && closedAt > openedAt) {
+    valid = true;
+    if (/CANDLE/i.test(source) && candleOpenTime && candleOpenTime < openedAt) valid = false;
+    status = valid ? 'VALID_POST_ENTRY_OBSERVATION' : 'INVALID_PRE_ENTRY_OBSERVATION';
+  } else if (textValue(trade.temporalIntegrityStatus) === 'INVALID_PRE_ENTRY_OBSERVATION') {
+    status = 'INVALID_PRE_ENTRY_OBSERVATION';
+  }
+  const inEpoch = openedAt >= v10151ToMs(epoch.startedAt);
+  const cleanEligible = inEpoch && valid && textValue(trade.temporalIntegrityStatus || status) === 'VALID_POST_ENTRY_OBSERVATION';
+  return { status, valid, inEpoch, cleanEligible, openedAt, closedAt, source, candleOpenTime, epochId:epoch.epochId };
+}
+function v10151SimpleStats(rows = []) {
+  const b = v10142StatsBucket(safeArray(rows));
+  return {
+    closed:b.closed, wins:b.wins, losses:b.losses, breakeven:b.breakeven, unknown:b.unknown,
+    winRate:b.winRate, decisiveWinRate:b.decisiveWinRate, netPnlBps:b.netPnlBps,
+    totalResultR:b.totalResultR, avgResultR:b.avgResultR, avgPnlBps:b.avgPnlBps,
+    profitFactorR:b.profitFactorR, profitFactorBps:b.profitFactorBps
+  };
+}
+function v10151BuildTemporalEvidenceView() {
+  const epoch = v10151LoadOrCreateTemporalEpochSync();
+  const rows = v10143MergeClosedTradeRows(v10143PersistentClosedRows, lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+  const clean = [], invalid = [], legacy = [];
+  for (const t of rows) {
+    const c = v10151TradeTemporalClassification(t);
+    if (c.cleanEligible) clean.push(t);
+    else if (c.status === 'INVALID_PRE_ENTRY_OBSERVATION') invalid.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', ...c });
+    else legacy.push({ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', ...c });
+  }
+  const view = {
+    schema:'alps.temporalEvidenceTruth.v10151', version:FINAL_V930_VERSION, installed:true,
+    epoch, processBootId:V10151_PROCESS_BOOT_ID,
+    guardStatus:'POST_ENTRY_OBSERVATION_GUARD_ACTIVE',
+    totalClosedRows:rows.length, cleanClosedRows:clean.length, invalidTemporalRows:invalid.length, legacyPreGuardRows:legacy.length,
+    cleanPerformance:v10151SimpleStats(clean),
+    invalidTemporalSample:invalid.slice(0,20), legacyExcludedSample:legacy.slice(0,12),
+    cleanEvidenceKeys:[...new Set(clean.map(v10151CanonicalEvidenceKey).filter(Boolean))].length,
+    performanceTruthStatus: clean.length ? 'CLEAN_POST_GUARD_PERFORMANCE_AVAILABLE' : 'WAITING_FOR_POST_GUARD_CLOSED_TRADES',
+    rule:'The monotonic ledger is preserved. Only trades opened in the v10.1.51 epoch and closed by a proven observation after entry are admitted to new performance learning and autonomy promotion.'
+  };
+  lastV10151TemporalEvidenceView = view;
+  return view;
+}
+function v10151RegimeFromFeature(f = {}, coverageRow = {}) {
+  const close = v10151Num(f.close, null), ema20 = v10151Num(f.ema20, null), ema50 = v10151Num(f.ema50, null);
+  const atr = v10151Num(f.atr, null), rsi = v10151Num(f.rsi, null), bbU = v10151Num(f.bbUpper, null), bbL = v10151Num(f.bbLower, null), poc = v10151Num(f.poc, null), volumeRatio = v10151Num(f.volumeRatio, null);
+  let trendState = 'UNRESOLVED';
+  if ([close,ema20,ema50].every(Number.isFinite)) trendState = close > ema20 && ema20 > ema50 ? 'TREND_UP' : (close < ema20 && ema20 < ema50 ? 'TREND_DOWN' : 'MIXED');
+  const atrPct = Number.isFinite(close) && close !== 0 && Number.isFinite(atr) ? Math.abs(atr/close) : null;
+  let volatilityState = 'UNRESOLVED';
+  if (atrPct != null) volatilityState = atrPct >= 0.008 ? 'HIGH_VOL' : (atrPct <= 0.0025 ? 'LOW_VOL' : 'NORMAL_VOL');
+  const bbWidth = [bbU,bbL,close].every(Number.isFinite) && close !== 0 ? Math.abs(bbU-bbL)/Math.abs(close) : null;
+  let rangeOrExpansion = 'UNRESOLVED';
+  if (bbWidth != null && atrPct != null) rangeOrExpansion = bbWidth >= atrPct * 5 ? 'EXPANSION' : (bbWidth <= atrPct * 2.2 ? 'COMPRESSION' : 'BALANCED_RANGE');
+  const valueLocation = Number.isFinite(close) && Number.isFinite(poc) ? (close > poc ? 'ABOVE_POC' : (close < poc ? 'BELOW_POC' : 'AT_POC')) : 'POC_UNAVAILABLE';
+  const momentumState = Number.isFinite(rsi) ? (rsi >= 65 ? 'MOMENTUM_HIGH' : (rsi <= 35 ? 'MOMENTUM_LOW' : 'MOMENTUM_NEUTRAL')) : 'RSI_UNAVAILABLE';
+  const liquidityState = Number.isFinite(volumeRatio) ? (volumeRatio >= 1.5 ? 'HIGH_MARKET_ACTIVITY' : (volumeRatio <= 0.55 ? 'THIN_MARKET_ACTIVITY' : 'NORMAL_MARKET_ACTIVITY')) : 'VOLUME_ACTIVITY_UNAVAILABLE';
+  const available = [close,ema20,ema50,atr,rsi,bbU,bbL,poc,volumeRatio].filter(Number.isFinite).length;
+  const confidence = Number((available / 9 * (coverageRow?.fresh ? 1 : 0.5)).toFixed(4));
+  return { trendState, volatilityState, liquidityState, liquidityProxy:'CLOSED_CANDLE_VOLUME_RATIO_NOT_ORDER_BOOK_LIQUIDITY', volumeRatio:volumeRatio==null?null:Number(volumeRatio.toFixed(4)), rangeOrExpansion, valueLocation, momentumState, atrPct:atrPct==null?null:Number((atrPct*100).toFixed(4)), bbWidthPct:bbWidth==null?null:Number((bbWidth*100).toFixed(4)), confidence, availableFeatureFields:available, marketRegime:`${trendState} / ${volatilityState} / ${rangeOrExpansion} / ${valueLocation}` };
+}
+function v10151BuildAhiRegimeIntelligence() {
+  const coverage = v10150FeatureCoverageSnapshot(lastV1017FeatureMaterializerView || {}, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES);
+  const fmap = new Map();
+  for (const view of [lastV1017FeatureMaterializerView || {}, lastV1012ServerCandleBootstrapView || {}]) {
+    for (const f of safeArray(view.featureRows)) {
+      const key = v10150PairFrameKey(f.pair || f.symbol || f.baseSymbol || textValue(f.__alpsV1017Source||'').split('_')[0], f.timeframe || f.tf || textValue(f.__alpsV1017Source||'').split('_')[1]);
+      if (!key) continue;
+      const prev = fmap.get(key); if (!prev || v10151ToMs(f.time || f.latestClosedCandleTs) >= v10151ToMs(prev.time || prev.latestClosedCandleTs)) fmap.set(key, f);
+    }
+  }
+  const rows = coverage.detail.map(c => {
+    const f = fmap.get(c.key) || {};
+    const r = v10151RegimeFromFeature(f, c);
+    return { pair:c.pair, timeframe:c.timeframe, status:fmap.has(c.key)?(c.fresh?'REGIME_READY':'REGIME_STALE'):'REGIME_FEATURES_MISSING', ...r, close:v10151Num(f.close,null), ema20:v10151Num(f.ema20,null), ema50:v10151Num(f.ema50,null), rsi:v10151Num(f.rsi,null), atr:v10151Num(f.atr,null), evidenceTimestamp:c.latestClosedCandleTs, evidenceTimestampIso:c.latestClosedCandleTs?new Date(c.latestClosedCandleTs).toISOString():'', dataFreshness:c.fresh?'FRESH':'STALE_OR_MISSING', featureSource:c.featureSource, candleSource:c.candleSource };
+  });
+  const ready = rows.filter(x=>x.status==='REGIME_READY').length;
+  const view = { schema:'alps.ahiRegimeIntelligence.v10151', version:FINAL_V930_VERSION, installed:true, status:ready===coverage.requiredPairFrames?'AHI_REGIME_INTELLIGENCE_READY_35_OF_35':(ready?'AHI_REGIME_INTELLIGENCE_PARTIAL':'AHI_REGIME_INTELLIGENCE_WAITING_FOR_FEATURES'), pairFrames:rows.length, readyPairFrames:ready, freshPairFrames:coverage.freshFeaturePairFrames, rows, generatedAt:new Date().toISOString(), executionInfluence:'DIAGNOSTIC_AND_EVIDENCE_CONTEXT_ONLY', rule:'Regime labels are computed from current real closed-candle feature rows. Missing fields remain explicitly unresolved and are never fabricated.' };
+  lastV10151AhiRegimeView = view; return view;
+}
+function v10151CleanEvidenceByKey() {
+  const map = new Map();
+  const temporal = lastV10151TemporalEvidenceView || v10151BuildTemporalEvidenceView();
+  const rows = v10143MergeClosedTradeRows(v10143PersistentClosedRows, lastTradeExport?.closedTrades);
+  for (const t of rows) {
+    const c = v10151TradeTemporalClassification(t); if (!c.cleanEligible) continue;
+    const key = v10151CanonicalEvidenceKey(t); if (!key) continue;
+    if (!map.has(key)) map.set(key, []); map.get(key).push(t);
+  }
+  return map;
+}
+function v10151WilsonLower(wins, n, z = 1.2816) {
+  if (!(n > 0)) return 0;
+  const p = wins/n, z2=z*z, den=1+z2/n;
+  return Math.max(0,(p+z2/(2*n)-z*Math.sqrt((p*(1-p)+z2/(4*n))/n))/den);
+}
+function v10151AutonomyDecision(candidate = {}, cleanRows = []) {
+  const oosTrades = Math.max(0, v10151Num(candidate.oosTrades ?? candidate.totalTrades ?? candidate.nEffOOS, 0));
+  const oosPF = v10151Num(candidate.oosPF ?? candidate.quantitative?.oosPF, null);
+  const posterior = v10151Num(candidate.posteriorPFgt1 ?? candidate.quantitative?.posteriorPFgt1, null);
+  const stats = v10151SimpleStats(cleanRows);
+  const decisive = stats.wins + stats.losses;
+  const adaptiveSampleTarget = Math.max(3, Math.min(12, Math.ceil(Math.sqrt(Math.max(1,oosTrades)))));
+  const wilsonLower = v10151WilsonLower(stats.wins, decisive);
+  const blockers = [];
+  if (!cleanRows.length) blockers.push('NO_POST_GUARD_PAPER_EVIDENCE');
+  if (cleanRows.length < adaptiveSampleTarget) blockers.push('ADAPTIVE_SAMPLE_NOT_REACHED');
+  if (!(Number.isFinite(oosPF) && oosPF > 1)) blockers.push('OOS_PROFIT_FACTOR_NOT_ABOVE_ONE');
+  if (!(oosTrades > 0)) blockers.push('OOS_SAMPLE_UNAVAILABLE');
+  if (posterior != null && posterior < 0.55) blockers.push('OOS_POSTERIOR_WEAK');
+  if (!(stats.totalResultR > 0)) blockers.push('POST_GUARD_NET_R_NOT_POSITIVE');
+  if (decisive > 0 && !(wilsonLower > 0.5)) blockers.push('POST_GUARD_WIN_CONFIDENCE_NOT_POSITIVE');
+  const eligibilityScore = Number((
+    v10151Clamp(oosTrades/60)*0.20 + v10151Clamp(((oosPF||0)-1)/1.5)*0.20 + v10151Clamp(posterior||0)*0.15 +
+    v10151Clamp(cleanRows.length/adaptiveSampleTarget)*0.20 + v10151Clamp((stats.avgResultR||0)/1.5)*0.10 +
+    v10151Clamp(wilsonLower)*0.15
+  ).toFixed(4));
+  const eligible = blockers.length === 0 && eligibilityScore >= 0.65;
+  return { eligible, status:eligible?'FULL_AUTONOMY_ELIGIBLE':'AUTONOMY_EVIDENCE_INCOMPLETE', blockers, eligibilityScore, adaptiveSampleTarget, cleanClosed:cleanRows.length, cleanStats:stats, oosTrades, oosPF, posteriorPFgt1:posterior, wilsonLower:Number(wilsonLower.toFixed(4)), noFixedQuota:true, noPairOrTimeframeBan:true };
+}
+function v10151ApplyEvidenceDrivenAutonomy(report = {}) {
+  const cleanByKey = v10151CleanEvidenceByKey();
+  const sourceRows = safeArray(lastNativeForwardPoolView?.candidates).length ? safeArray(lastNativeForwardPoolView.candidates) : v949CollectForwardRows(report);
+  if (!sourceRows.length) {
+    const emptyView = {
+      schema:'alps.autonomyEligibility.v10151', version:FINAL_V930_VERSION, installed:true,
+      status:'AUTONOMY_PROMOTION_ENGINE_WAITING_FOR_CANDIDATES', evaluatedCandidates:0,
+      autonomyEligibleCandidates:0, autonomyBlockedCandidates:0, blockReasons:{}, tierCounts:{},
+      evidenceCompleteness:(lastV10151TemporalEvidenceView||v10151BuildTemporalEvidenceView()).performanceTruthStatus,
+      temporalIntegrityStatus:'POST_ENTRY_OBSERVATION_GUARD_REQUIRED',
+      promotionDecision:'WAITING_NO_CANDIDATE_POOL_NO_STATE_MUTATION',
+      noFixedCandidateQuota:true, noFixedPairQuota:true, noFixedTimeframeQuota:true,
+      decisions:[], generatedAt:new Date().toISOString(),
+      rule:'The autonomy engine never zeroes or rewrites pool counters when no candidate rows are available. Promotion remains evidence-driven and never forced.'
+    };
+    lastV10151AutonomyEligibilityView=emptyView;
+    return emptyView;
+  }
+  const decisions = [];
+  const counts = {};
+  const candidateMap = new Map();
+  for (const c of sourceRows) {
+    const key = v10151CanonicalEvidenceKey(c); const cleanRows = cleanByKey.get(key) || [];
+    const d = v10151AutonomyDecision(c, cleanRows); decisions.push({ key, pair:c.pair||c.symbol||'', timeframe:c.timeframe||c.tf||'', strategy:c.strategy||c.stratName||c.name||'', exit:c.exit||c.exitName||'', ...d });
+    candidateMap.set(key, d);
+    let tier = textValue(c.tier || c.candidateTier || c.promotionTier || 'EXPERIMENTAL_FORWARD').toUpperCase();
+    if (d.eligible) tier = 'FULL_AUTONOMY_FORWARD';
+    else if (tier === 'FULL_AUTONOMY_FORWARD') tier = 'WATCH_FORWARD';
+    if (!/^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD|RESEARCH_SANDBOX|COGNITION_SUSPENDED|SAFETY_BLOCKED|DATA_BLOCKED)$/.test(tier)) tier='EXPERIMENTAL_FORWARD';
+    c.tier=tier; c.candidateTier=tier; c.promotionTier=tier; c.autonomyEligibilityStatus=d.status; c.autonomyEligibilityScore=d.eligibilityScore; c.autonomyBlockReasons=d.blockers; c.postGuardPaperClosed=d.cleanClosed; c.temporalIntegrityRequired=true;
+    counts[tier]=(counts[tier]||0)+1;
+  }
+  function syncPool(pool) {
+    if (!pool || typeof pool !== 'object') return;
+    pool.fullAutonomyForward=counts.FULL_AUTONOMY_FORWARD||0; pool.watchForward=counts.WATCH_FORWARD||0; pool.experimentalForward=counts.EXPERIMENTAL_FORWARD||0;
+    pool.researchSandbox=counts.RESEARCH_SANDBOX||0; pool.cognitionSuspended=counts.COGNITION_SUSPENDED||0; pool.safetyBlocked=counts.SAFETY_BLOCKED||0; pool.dataBlocked=counts.DATA_BLOCKED||0;
+    pool.promotedByFullAutonomy=pool.fullAutonomyForward;
+    pool.v10151AutonomyPromotion={ status:pool.fullAutonomyForward?'FULL_AUTONOMY_CANDIDATES_AVAILABLE':'AUTONOMY_ENGINE_ACTIVE_NO_ELIGIBLE_CANDIDATES', eligibleCandidates:pool.fullAutonomyForward, evaluatedCandidates:sourceRows.length, noFixedQuota:true, cleanTemporalEvidenceRequired:true };
+  }
+  syncPool(lastNativeForwardPoolView); syncPool(report.nativeForwardPool);
+  for (const c of safeArray(forwardLatchState?.candidates)) {
+    const d=candidateMap.get(v10151CanonicalEvidenceKey(c)); if (!d) continue;
+    c.autonomyEligibilityStatus=d.status; c.autonomyEligibilityScore=d.eligibilityScore; c.autonomyBlockReasons=d.blockers;
+    if (d.eligible) { c.tier='FULL_AUTONOMY_FORWARD'; c.candidateTier='FULL_AUTONOMY_FORWARD'; c.promotionTier='FULL_AUTONOMY_FORWARD'; }
+  }
+  const blockReasons = {};
+  for (const d of decisions) for (const b of d.blockers) blockReasons[b]=(blockReasons[b]||0)+1;
+  const view = { schema:'alps.autonomyEligibility.v10151', version:FINAL_V930_VERSION, installed:true, status:(counts.FULL_AUTONOMY_FORWARD||0)>0?'FULL_AUTONOMY_FORWARD_ACTIVE':'AUTONOMY_PROMOTION_ENGINE_ACTIVE_NO_ELIGIBLE_CANDIDATES', evaluatedCandidates:sourceRows.length, autonomyEligibleCandidates:counts.FULL_AUTONOMY_FORWARD||0, autonomyBlockedCandidates:sourceRows.length-(counts.FULL_AUTONOMY_FORWARD||0), blockReasons, tierCounts:counts, evidenceCompleteness:(lastV10151TemporalEvidenceView||v10151BuildTemporalEvidenceView()).performanceTruthStatus, temporalIntegrityStatus:'POST_ENTRY_OBSERVATION_GUARD_REQUIRED', promotionDecision:'EVIDENCE_DRIVEN_NO_FORCED_PROMOTION', noFixedCandidateQuota:true, noFixedPairQuota:true, noFixedTimeframeQuota:true, decisions:decisions.sort((a,b)=>b.eligibilityScore-a.eligibilityScore).slice(0,300), generatedAt:new Date().toISOString(), rule:'Every candidate is evaluated independently from real OOS fields plus clean post-guard paper evidence. No candidate is promoted merely to make the Full Autonomy count non-zero.' };
+  lastV10151AutonomyEligibilityView=view; return view;
+}
+function v10151BuildHypothesisDNA(report = {}) {
+  const cleanByKey=v10151CleanEvidenceByKey();
+  const regimes=new Map(safeArray((lastV10151AhiRegimeView||v10151BuildAhiRegimeIntelligence()).rows).map(r=>[`${r.pair}|${r.timeframe}`,r]));
+  const autonomyMap=new Map(safeArray((lastV10151AutonomyEligibilityView||v10151ApplyEvidenceDrivenAutonomy(report)).decisions).map(d=>[d.key,d]));
+  const rows=[];
+  for (const c of v949CollectForwardRows(report)) {
+    const key=v10151CanonicalEvidenceKey(c); const clean=cleanByKey.get(key)||[]; const stats=v10151SimpleStats(clean); const pair=v10115CanonicalSymbol(c.pair||c.symbol||c.baseSymbol||''); const tf=textValue(c.timeframe||c.tf||'').toLowerCase(); const reg=regimes.get(`${pair}|${tf}`)||{}; const aut=autonomyMap.get(key)||{};
+    const rr=v10151Num(c.rMultiple,null) ?? v10151Num((textValue(c.exit||c.exitName||'').match(/([0-9]+(?:\.[0-9]+)?)\s*R/i)||[])[1],null);
+    rows.push({ key, pair, timeframe:tf, setupFamily:cogRootStrategy(c.strategy||c.stratName||c.name||''), marketRegime:reg.marketRegime||'REGIME_UNRESOLVED', entryLogic:c.entryLogic||c.entryRule||c.strategy||c.stratName||'NOT_EXPOSED', stopLogic:c.stopLogic||c.stopRule||'NOT_EXPOSED', targetLogic:c.targetLogic||c.exit||c.exitName||'NOT_EXPOSED', rrVariant:rr, evidenceScore:v10151Num(c.score,null), oosPF:v10151Num(c.oosPF,null), oosTrades:v10151Num(c.oosTrades??c.totalTrades,0), posteriorPFgt1:v10151Num(c.posteriorPFgt1,null), cleanPaperResults:stats, cleanPaperClosed:clean.length, failureReasons:aut.blockers||[], mutationLineage:c.mutationLineage||c.parentKey||c.mutationParent||'ROOT_OR_LINEAGE_NOT_EXPOSED', promotionState:aut.eligible?'FULL_AUTONOMY_FORWARD':textValue(c.candidateTier||c.promotionTier||c.tier||'EXPERIMENTAL_FORWARD'), autonomyEligibilityScore:aut.eligibilityScore??0, temporalEvidenceRequired:true, dataFreshness:reg.dataFreshness||'UNKNOWN' });
+  }
+  rows.sort((a,b)=>b.cleanPaperClosed-a.cleanPaperClosed || b.autonomyEligibilityScore-a.autonomyEligibilityScore || (b.evidenceScore||0)-(a.evidenceScore||0));
+  const view={ schema:'alps.hypothesisDNA.v10151', version:FINAL_V930_VERSION, installed:true, status:rows.length?'HYPOTHESIS_DNA_READY':'HYPOTHESIS_DNA_WAITING_FOR_CANDIDATES', totalHypotheses:rows.length, rows:rows.slice(0,300), rowsInReport:Math.min(300,rows.length), fullDetailFile:'latest-hypothesis-dna.json', generatedAt:new Date().toISOString(), rule:'DNA joins candidate identity, current regime, real OOS fields, clean post-guard paper results, mutation lineage, failure reasons, and promotion state without inventing missing evidence.' };
+  lastV10151HypothesisDNAView=view; return view;
+}
+function v10151BuildEvidenceChamber(report = {}) {
+  const temporal=lastV10151TemporalEvidenceView||v10151BuildTemporalEvidenceView();
+  const cleanRows=v10143MergeClosedTradeRows(v10143PersistentClosedRows,lastTradeExport?.closedTrades).filter(t=>v10151TradeTemporalClassification(t).cleanEligible);
+  const rejected={ ...(lastV952RejectedAuditView?.rejectedReasonCounts||{}), ...(lastV948EntryEngineView?.rejectedReasonCounts||{}), ...(lastV1017cPaperEntryAuthorityBridgeView?.rejectedReasonCounts||{}) };
+  const sentinelBlocks={ ...(lastV10138LivePriceSentinelView?.blockReasons||{}) };
+  const lifecycleSkips=safeArray(lastV1018LifecycleView?.skippedLifecycleChecks);
+  const events=[];
+  for (const [reason,count] of Object.entries(rejected).sort((a,b)=>n(b[1],0)-n(a[1],0)).slice(0,30)) events.push({ category:'SIGNAL_REJECTION', reason, count:n(count,0), evidenceClass:/STALE|CANDLE|DATA|PRICE/i.test(reason)?'DATA_QUALITY_FAILURE':'INSUFFICIENT_OR_INVALID_SETUP' });
+  for (const [reason,count] of Object.entries(sentinelBlocks).sort((a,b)=>n(b[1],0)-n(a[1],0)).slice(0,30)) events.push({ category:'SENTINEL_BLOCK', reason, count:n(count,0), evidenceClass:/TEMPORAL|ENTRY_CANDLE|OBSERVATION/i.test(reason)?'INVALID_TEMPORAL_EVIDENCE':'DATA_QUALITY_FAILURE' });
+  for (const x of lifecycleSkips.slice(0,30)) events.push({ category:'LIFECYCLE_SKIP', reason:x.reason||'UNKNOWN', count:1, evidenceClass:/TEMPORAL|ENTRY_CANDLE|OBSERVATION|BASELINE/i.test(x.reason||'')?'INVALID_TEMPORAL_EVIDENCE':'DATA_QUALITY_FAILURE', tradeId:x.tradeId||'' });
+  for (const t of cleanRows.filter(t=>v10142ClosedTradeResult(t)==='LOSS').slice(0,30)) events.push({ category:'CLEAN_STRATEGY_LOSS', reason:t.closeReason||t.exitReason||'LOSS', count:1, evidenceClass:'STRATEGY_FAILURE', tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', resultR:t.resultR, pnlBps:t.pnlBps });
+  const dna=lastV10151HypothesisDNAView;
+  const insufficient=dna?safeArray(dna.rows).filter(x=>x.cleanPaperClosed < 1).length:0;
+  const categories={ VALID_EVIDENCE:temporal.cleanClosedRows, INVALID_TEMPORAL_EVIDENCE:temporal.invalidTemporalRows, LEGACY_PRE_GUARD_EXCLUDED:temporal.legacyPreGuardRows, INSUFFICIENT_SAMPLE:insufficient, DATA_QUALITY_FAILURE:Object.values(rejected).reduce((a,b)=>a+n(b,0),0)+Object.values(sentinelBlocks).reduce((a,b)=>a+n(b,0),0)+lifecycleSkips.length, STRATEGY_FAILURE:cleanRows.filter(t=>v10142ClosedTradeResult(t)==='LOSS').length };
+  const view={ schema:'alps.evidenceChamber.v10151', version:FINAL_V930_VERSION, installed:true, status:'EVIDENCE_CHAMBER_ACTIVE', categories, events:events.slice(0,120), rejectedReasonCounts:rejected, sentinelBlockReasons:sentinelBlocks, lifecycleSkipReasons:lifecycleSkips.slice(0,40), cleanLearningRows:temporal.cleanClosedRows, invalidTemporalRows:temporal.invalidTemporalRows, legacyRowsExcluded:temporal.legacyPreGuardRows, generatedAt:new Date().toISOString(), rule:'Only valid post-entry temporal evidence is allowed to influence strategy learning or autonomy promotion. Data failures, insufficient samples, strategy losses, and legacy rows remain separate evidence classes.' };
+  lastV10151EvidenceChamberView=view; return view;
+}
+function v10151RefreshIntelligence(report = {}, force = false) {
+  if (!force && Date.now()-lastV10151RefreshAt < 5000 && lastV10151AhiRegimeView && lastV10151HypothesisDNAView && lastV10151EvidenceChamberView && lastV10151AutonomyEligibilityView) return { temporal:lastV10151TemporalEvidenceView, regime:lastV10151AhiRegimeView, autonomy:lastV10151AutonomyEligibilityView, dna:lastV10151HypothesisDNAView, chamber:lastV10151EvidenceChamberView };
+  lastV10151RefreshAt=Date.now();
+  const temporal=v10151BuildTemporalEvidenceView();
+  const regime=v10151BuildAhiRegimeIntelligence();
+  const autonomy=v10151ApplyEvidenceDrivenAutonomy(report);
+  const dna=v10151BuildHypothesisDNA(report);
+  const chamber=v10151BuildEvidenceChamber(report);
+  return { temporal, regime, autonomy, dna, chamber };
+}
+function v10151BuildIntelligenceMarkdown(report = {}) {
+  const v=v10151RefreshIntelligence(report);
+  const r=v.regime||{}, d=v.dna||{}, e=v.chamber||{}, a=v.autonomy||{}, t=v.temporal||{};
+  const lines=[];
+  lines.push('## 5. AHI Regime Intelligence','',`- Status: ${r.status||'WAITING'}`,`- Ready Pair-Frames: ${r.readyPairFrames||0}/${r.pairFrames||35}`,`- Execution Influence: ${r.executionInfluence||'DIAGNOSTIC_ONLY'}`,'','| Pair | TF | Regime | Confidence | Freshness |','|---|---|---|---:|---|');
+  for (const x of safeArray(r.rows).slice(0,35)) lines.push(`| ${v10118MdCell(x.pair)} | ${v10118MdCell(x.timeframe)} | ${v10118MdCell(x.marketRegime)} | ${v10118MdCell(x.confidence)} | ${v10118MdCell(x.dataFreshness)} |`);
+  lines.push('','## 6. Hypothesis DNA','',`- Status: ${d.status||'WAITING'}`,`- Total Hypotheses: ${d.totalHypotheses||0}`,`- Rows Included: ${d.rowsInReport||0}`,'','| Pair | TF | Setup | R/R | Clean Closed | OOS PF | Promotion | Blocks |','|---|---|---|---:|---:|---:|---|---|');
+  for (const x of safeArray(d.rows).slice(0,40)) lines.push(`| ${v10118MdCell(x.pair)} | ${v10118MdCell(x.timeframe)} | ${v10118MdCell(x.setupFamily)} | ${v10118MdCell(x.rrVariant)} | ${v10118MdCell(x.cleanPaperClosed)} | ${v10118MdCell(x.oosPF)} | ${v10118MdCell(x.promotionState)} | ${v10118MdCell(safeArray(x.failureReasons).slice(0,3).join(','))} |`);
+  lines.push('','## 7. Evidence Chamber — Failure Learning','',`- Status: ${e.status||'WAITING'}`,'','| Evidence Class | Count |','|---|---:|');
+  for (const [k,c] of Object.entries(e.categories||{})) lines.push(`| ${v10118MdCell(k)} | ${v10118MdCell(c)} |`);
+  lines.push('','## 8. Evidence-Driven Full Autonomy','',`- Status: ${a.status||'WAITING'}`,`- Evaluated Candidates: ${a.evaluatedCandidates||0}`,`- Eligible: ${a.autonomyEligibleCandidates||0}`,`- Blocked: ${a.autonomyBlockedCandidates||0}`,`- Decision: ${a.promotionDecision||''}`,'','| Block Reason | Candidates |','|---|---:|');
+  for (const [k,c] of Object.entries(a.blockReasons||{}).sort((x,y)=>y[1]-x[1]).slice(0,20)) lines.push(`| ${v10118MdCell(k)} | ${v10118MdCell(c)} |`);
+  lines.push('','## 9. Post-Entry Temporal Evidence','',`- Guard: ${t.guardStatus||'WAITING'}`,`- Epoch: ${t.epoch?.epochId||''}`,`- Epoch Started: ${t.epoch?.startedAtIso||''}`,`- Clean Closed: ${t.cleanClosedRows||0}`,`- Invalid Temporal: ${t.invalidTemporalRows||0}`,`- Legacy Excluded: ${t.legacyPreGuardRows||0}`,`- Performance Truth: ${t.performanceTruthStatus||''}`,'');
+  return lines.join('\n');
+}
+function v10151BuildOperationalReportMarkdown(report = {}, source = 'authority-md') {
+  const lite=v10128BuildHealthLite(source+'-lite');
+  const a=v10118ReportAuthorityView({ ...(report||{}), ...lite }, source);
+  const c=a.current||{}, u=a.universe||{}, f=a.featureGate||{}, ch=a.chartTruth||{};
+  const rows=[];
+  rows.push(`# ALPS Operational Truth Report — ${FINAL_V930_VERSION}`,'',`- Generated At: ${a.generatedAt}`,`- Source of Truth: ${a.sourceOfTruth}`,`- Data Source: ${a.dataSource}`,`- Authority Status: ${a.authorityStatus}`,`- App Version: ${FINAL_V930_VERSION}`,'- Mode: Paper-only autonomous research monitor; live capital execution disabled.','',v10118ReportAuthorityMarkdown({...(report||{}),...lite},a),'','## 1. Executive Runtime Snapshot','', '| Field | Value |','|---|---|',`| status | ${v10118MdCell(c.status)} |`,`| engineReady | ${v10118MdCell(c.engineReady)} |`,`| labRunning | ${v10118MdCell(c.labRunning)} |`,`| fwRunning | ${v10118MdCell(c.fwRunning)} |`,`| version | ${FINAL_V930_VERSION} |`,'','## 2. Core Paper Metrics — currentHealth','', '| Metric | Value |','|---|---:|',`| candidates | ${v10118MdCell(c.candidates)} |`,`| nativePoolCandidates | ${v10118MdCell(c.nativePoolCandidates)} |`,`| forwardLatchSize | ${v10118MdCell(c.forwardLatchSize)} |`,`| paperSignals | ${v10118MdCell(c.paperSignals)} |`,`| openPositions | ${v10118MdCell(c.openPositions)} |`,`| historicalLedgerClosedTrades | ${v10118MdCell(c.closedTrades)} |`,`| cleanPostGuardClosedTrades | ${v10118MdCell(lite.performanceClosedTrades||0)} |`,`| cleanPostGuardWins | ${v10118MdCell(lite.performanceWins||0)} |`,`| cleanPostGuardLosses | ${v10118MdCell(lite.performanceLosses||0)} |`,`| cleanPostGuardWinRate | ${v10118MdCell(lite.performanceWinRate||0)} |`,`| performanceTruthStatus | ${v10118MdCell(lite.performanceTruthStatus||'')} |`,`| rejected | ${v10118MdCell(c.rejected)} |`,'','## 3. Symbol Status — loaded / partial / missing / alias-needed','',`- Universe: ${u.status||''}`,'','| Symbol | Status | Source Symbol | Frames Loaded | Missing Frames |','|---|---|---|---|---|');
+  for (const x of safeArray(u.rows)) rows.push(`| ${v10118MdCell(x.symbol)} | ${v10118MdCell(x.status)} | ${v10118MdCell(x.sourceSymbol||'')} | ${v10118MdCell(safeArray(x.framesLoaded).join('/'))} | ${v10118MdCell(safeArray(x.missingFrames).join('/'))} |`);
+  rows.push('','## 4. Feature Gate / Candle Visibility','', '| Check | Value |','|---|---|',`| Feature Gate Status | ${v10118MdCell(f.status)} |`,`| Feature Rows Found | ${v10118MdCell(f.featureRowsFound)} |`,`| Candles Visible | ${v10118MdCell(f.candlesVisible)} |`,`| Pair-frames Diagnosed | ${v10118MdCell(f.pairFrames)} |`,`| Chart Truth | ${v10118MdCell(ch.ready)} · ${v10118MdCell(ch.pair)} ${v10118MdCell(ch.timeframe)} · candles=${v10118MdCell(ch.candles)} |`,'',v10151BuildIntelligenceMarkdown(report),'','## 10. Raw CurrentHealth JSON','```json',JSON.stringify(lite,null,2),'```');
+  return rows.join('\n');
+}
+function v10151RunSelfTest() {
+  const now=Date.now();
+  const epoch=v10151LoadOrCreateTemporalEpochSync();
+  epoch.startedAt=now-60_000; epoch.startedAtIso=new Date(epoch.startedAt).toISOString();
+  const t={tradeId:`SRV-${now-20*60_000}-abc`,openedAt:now-20*60_000,timeframe:'5m'};
+  const liveGood=v10151LiveObservationDecision(t,{source:'BINANCE_VISION_SPOT_TICKER',at:now});
+  const liveBad=v10151LiveObservationDecision(t,{source:'BINANCE_VISION_SPOT_TICKER',at:now-25*60_000});
+  const candleBad=v10151CandleObservationDecision(t,{candleTime:now-25*60_000,timeframe:'5m'});
+  const candleGood=v10151CandleObservationDecision(t,{candleTime:now-10*60_000,timeframe:'5m'});
+  const groups=[], features=[];
+  for (const pair of V10150_REQUIRED_SYMBOLS) for (const timeframe of V10150_REQUIRED_FRAMES) {
+    const ts=now-Math.max(60_000,v1012TfMs(timeframe));
+    groups.push({pair,timeframe,rows:700,latestClosedCandleTs:ts,source:'SELFTEST_CANDLES'});
+    features.push({pair,timeframe,time:ts,close:100,atr:0.5,ema20:101,ema50:99,rsi:55,bbUpper:103,bbLower:97,poc:100,volume:1200,volumeSma20:1000,volumeRatio:1.2,__alpsV1017Source:`${pair}_${timeframe}`});
+  }
+  lastV1017FeatureMaterializerView={schema:'selftest',status:'FEATURE_ROWS_35_OF_35_READY',candleGroups:groups,featureRows:features};
+  const candidate={key:'SELFTEST||5M||EMA_TREND||2R_FIXED',pair:'BTCUSDT',timeframe:'5m',strategy:'EMA_TREND',exit:'2R Fixed',oosPF:1.6,oosTrades:25,posteriorPFgt1:0.92,score:80,tier:'EXPERIMENTAL_FORWARD'};
+  lastNativeForwardPoolView={schema:'selftest.pool',candidates:[candidate],totalCandidates:1,experimentalForward:1,watchForward:0,fullAutonomyForward:0};
+  const closed=[];
+  for(let i=0;i<6;i++) {
+    const openedAt=epoch.startedAt+1000+i*1000, exitObservedAt=openedAt+500;
+    const entry=100+i*0.01, exit=entry+2+i*0.001;
+    closed.push({tradeId:`SRV-${openedAt}-t${i}`,key:candidate.key,pair:'BTCUSDT',timeframe:'5m',strategy:'EMA_TREND',direction:'LONG',entry,exit,status:'CLOSED',result:'WIN',resultR:2,pnlBps:Number(((exit-entry)/entry*10000).toFixed(4)),openedAt,openedAtIso:new Date(openedAt).toISOString(),entryObservedAt:openedAt,entryObservedAtIso:new Date(openedAt).toISOString(),firstEligibleExitAt:openedAt+1,firstEligibleExitAtIso:new Date(openedAt+1).toISOString(),exitObservedAt,exitObservedAtIso:new Date(exitObservedAt).toISOString(),closedAt:exitObservedAt,closedAtIso:new Date(exitObservedAt).toISOString(),exitObservationSource:'BINANCE_VISION_SPOT_TICKER',temporalIntegrityStatus:'VALID_POST_ENTRY_OBSERVATION',temporalEvidenceEpochId:epoch.epochId});
+  }
+  v10143PersistentClosedRows=[]; lastTradeExport=buildTradeExport({openTrades:[],closedTrades:closed});
+  lastV10151RefreshAt=0; lastV10151TemporalEvidenceView=null; lastV10151AhiRegimeView=null; lastV10151HypothesisDNAView=null; lastV10151EvidenceChamberView=null; lastV10151AutonomyEligibilityView=null;
+  const intel=v10151RefreshIntelligence({nativeForwardPool:lastNativeForwardPoolView},true);
+  const result={ version:FINAL_V930_VERSION, epochReady:!!epoch.epochId, liveGood:liveGood.allowed===true, liveBadBlocked:liveBad.allowed===false, entryCandleBlocked:candleBad.allowed===false, postEntryCandleAllowed:candleGood.allowed===true, regimeReady35:intel.regime.readyPairFrames===35, hypothesisDNAReady:intel.dna.totalHypotheses>=1, evidenceChamberActive:intel.chamber.status==='EVIDENCE_CHAMBER_ACTIVE', cleanEvidenceCount:intel.temporal.cleanClosedRows===6, autonomyPromotionActive:intel.autonomy.autonomyEligibleCandidates===1 };
+  result.pass=Object.entries(result).filter(([k])=>!['version','pass'].includes(k)).every(([,v])=>v===true);
+  return result;
+}
 
 // v10.1.50 — Live Feature Materializer Truth
 // Candidate rows, forward-latch rows, and feature rows are different layers. Existing candidates must
@@ -9597,6 +10023,28 @@ function v10128BuildHealthLite(source = 'health-lite') {
     appVersion: FINAL_V930_VERSION,
     reportTitle: `ALPS Operational Truth Report — ${FINAL_V930_VERSION}`
   };
+  const v10151 = v10151RefreshIntelligence(healthLite);
+  healthLite.v10151TemporalEvidence = v10151.temporal;
+  healthLite.ahiRegimeIntelligence = v10151.regime;
+  healthLite.hypothesisDNA = v10151.dna;
+  healthLite.evidenceChamber = v10151.chamber;
+  healthLite.autonomyEligibility = v10151.autonomy;
+  healthLite.temporalGuardStatus = v10151.temporal?.guardStatus || '';
+  healthLite.cleanPostGuardClosedTrades = v10151.temporal?.cleanClosedRows || 0;
+  healthLite.invalidTemporalEvidenceRows = v10151.temporal?.invalidTemporalRows || 0;
+  healthLite.legacyPreGuardRowsExcluded = v10151.temporal?.legacyPreGuardRows || 0;
+  const cleanPerformance = v10151.temporal?.cleanPerformance || {};
+  healthLite.performanceTruthSource = 'CLEAN_POST_GUARD_TEMPORAL_EVIDENCE';
+  healthLite.performanceTruthStatus = v10151.temporal?.performanceTruthStatus || 'WAITING_FOR_POST_GUARD_CLOSED_TRADES';
+  healthLite.performanceClosedTrades = cleanPerformance.closed || 0;
+  healthLite.performanceWins = cleanPerformance.wins || 0;
+  healthLite.performanceLosses = cleanPerformance.losses || 0;
+  healthLite.performanceBreakeven = cleanPerformance.breakeven || 0;
+  healthLite.performanceWinRate = cleanPerformance.winRate || 0;
+  healthLite.performanceNetPnlBps = cleanPerformance.netPnlBps || 0;
+  healthLite.performanceTotalResultR = cleanPerformance.totalResultR || 0;
+  healthLite.performanceProfitFactorR = cleanPerformance.profitFactorR ?? null;
+  healthLite.historicalLedgerMetricsRole = 'AUDIT_ONLY_NOT_AUTONOMY_PROMOTION_INPUT';
   return healthLite;
 }
 
@@ -9619,6 +10067,12 @@ async function createServer() {
         const csv = v10116CompactCsv(compact);
         return send(res, 200, csv, 'text/csv; charset=utf-8');
       }
+      if (url.pathname === '/runner/ahi-regime.json') { v10151RefreshIntelligence(lastReport||lastHealth||{}, true); return send(res,200,lastV10151AhiRegimeView||{}); }
+      if (url.pathname === '/runner/hypothesis-dna.json') { v10151RefreshIntelligence(lastReport||lastHealth||{}, true); return send(res,200,lastV10151HypothesisDNAView||{}); }
+      if (url.pathname === '/runner/evidence-chamber.json') { v10151RefreshIntelligence(lastReport||lastHealth||{}, true); return send(res,200,lastV10151EvidenceChamberView||{}); }
+      if (url.pathname === '/runner/autonomy-eligibility.json') { v10151RefreshIntelligence(lastReport||lastHealth||{}, true); return send(res,200,lastV10151AutonomyEligibilityView||{}); }
+      if (url.pathname === '/runner/temporal-evidence.json') { v10151RefreshIntelligence(lastReport||lastHealth||{}, true); return send(res,200,lastV10151TemporalEvidenceView||{}); }
+      if (url.pathname === '/runner/v10151-self-test.json') return send(res,200,v10151RunSelfTest());
       if (url.pathname === '/runner/chart-candles.json' || url.pathname === '/runner/chart-truth.json') {
         const pair = url.searchParams.get('pair') || url.searchParams.get('symbol') || 'BTCUSDT';
         const timeframe = url.searchParams.get('timeframe') || url.searchParams.get('interval') || '1h';
@@ -9683,7 +10137,7 @@ async function createServer() {
         healthTruth.v10118ReportAuthority = v10118ReportAuthorityView(healthTruth, 'health-endpoint-before-send');
         healthTruth.v10119ReportAuthority = healthTruth.v10118ReportAuthority;
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
+        return send(res, 200, { ...healthTruth, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10151TemporalEvidence:(v10151RefreshIntelligence(healthTruth).temporal), ahiRegimeIntelligence:lastV10151AhiRegimeView, hypothesisDNA:lastV10151HypothesisDNAView, evidenceChamber:lastV10151EvidenceChamberView, autonomyEligibility:lastV10151AutonomyEligibilityView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
@@ -11142,7 +11596,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       function hasDuplicate(k, pair, tf){ const open = arr(globalThis.openPositions).concat(arr(globalThis.openTrades)).concat(arr(globalThis.paperSignals)); return open.some(x => text(x.__alpsV948Key || x.tradeId || x.key || '').toUpperCase() === k || (pairOf(x)===pair && tfOf(x)===tf && /OPEN|ACTIVE|PAPER/i.test(text(x.status || 'OPEN')))); }
       function makeTrade(c, d, srcPath){
         const k=keyOf(c); const pair=pairOf(c), tf=tfOf(c); const now=Date.now(); const id=`V948_${now}_${pair}_${tf}_${rootOf(c)}_${text(c.exit || c.exitName || 'GENERIC').replace(/[^A-Z0-9]+/gi,'_').slice(0,24)}`;
-        const riskPlan = v10137ValidInitialRiskPlan(d.direction, d.entry, d.stop, d.target); return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, initialStop:d.stop, openedStop:d.stop, stop:d.stop, stopPrice:d.stop, initialTarget:d.target, openedTarget:d.target, target:d.target, targetPrice:d.target, initialRisk:riskPlan.initialRisk, riskGuardStatus:riskPlan.ok?'VALID_INITIAL_RISK':'INVALID_INITIAL_RISK_BLOCKED', rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, timestamp:now, source:'v10.1.6-health-paper-entry-through-state-authority', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened after v10 State Authority candidate propagation, fresh candidate dedupe, featureSnapshot/IndexedDB-priority entry construction, finite stop/target validation, positive initial-risk guard, and valid recent zone persistence checks.' };
+        const riskPlan = v10137ValidInitialRiskPlan(d.direction, d.entry, d.stop, d.target); return { tradeId:id, key:k, __alpsV948Key:k, pair, baseSymbol:pair, symbol:pair, timeframe:tf, direction:d.direction, strategy:text(c.strategy || c.stratName || c.name || rootOf(c)), exit:text(c.exit || c.exitName || ''), entry:d.entry, entryPrice:d.entry, current:d.price, currentPrice:d.price, initialStop:d.stop, openedStop:d.stop, stop:d.stop, stopPrice:d.stop, initialTarget:d.target, openedTarget:d.target, target:d.target, targetPrice:d.target, initialRisk:riskPlan.initialRisk, riskGuardStatus:riskPlan.ok?'VALID_INITIAL_RISK':'INVALID_INITIAL_RISK_BLOCKED', rMultiple:d.rMultiple, status:'OPEN', paperOnly:true, liveCapitalExecution:false, simulated:true, openedAt:now, openedAtIso:new Date(now).toISOString(), entryObservedAt:now, entryObservedAtIso:new Date(now).toISOString(), firstEligibleExitAt:now+1, firstEligibleExitAtIso:new Date(now+1).toISOString(), entryObservationSource:'SERVER_CLOSED_CANDLE_ENTRY_AUTHORITY', temporalEvidenceEpochId:v10151LoadOrCreateTemporalEpochSync().epochId, temporalIntegrityStatus:'POST_ENTRY_OBSERVATION_GUARD_ACTIVE', timestamp:now, source:'v10.1.6-health-paper-entry-through-state-authority', candleSource:srcPath, setupAgeCandles:d.setupAgeCandles, currentPriceInsideEntryZone:true, zoneStillValid:true, invalidationHit:false, stopTargetReady:true, distanceFromEntryZoneBps:d.distanceFromEntryZoneBps, entryZoneMid:d.zoneMid, entryZoneBps:cfg.entryZoneBps, breakEvenTriggerPct:50, lockProfitTriggerPct:75, stopLogic:'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75', rejectedReason:'', freshEntryMode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', evidenceStatus:'PAPER_EVIDENCE_COLLECTION', note:'Opened after v10 State Authority candidate propagation, fresh candidate dedupe, featureSnapshot/IndexedDB-priority entry construction, finite stop/target validation, positive initial-risk guard, and valid recent zone persistence checks.' };
       }
       const candidates = []; const seenCandidates = new Set(); const candidateSources = {}; const staleSkipped = { latch:0, page:0, duplicate:0, invalid:0 };
       function pushCandidate(c, source){ if(!c || typeof c!=='object') return; const p=pairOf(c), tf=tfOf(c); if(!p || !tf) { staleSkipped.invalid++; return; } const k=keyOf(c); if(seenCandidates.has(k)) { staleSkipped.duplicate++; return; } seenCandidates.add(k); candidates.push({...c,__candidateSource:source}); candidateSources[source]=(candidateSources[source]||0)+1; }
@@ -11604,9 +12058,10 @@ async function v1018ServerPaperLifecycleTick() {
     closeExecutionProof: [], stopTargetTouchProof: [], closeWritebackStatus: 'NO_CLOSE_TRIGGER_DETECTED',
     breakevenApplied: 0, profitLockApplied: 0,
     intrabarAmbiguousDeferred: 0, intrabarLookaheadBlocked: 0, intrabarAmbiguityProof: [],
+    temporalObservationBlocked:0, temporalObservationProof:[], restartBaselineDeferred:0,
     closedThisTick: 0, closedTotal: safeArray(lastTradeExport?.closedTrades).length,
     lastError: '',
-    rule: 'Break-even at 50% progress, profit-lock at 75%, close at stop/target from real prices. Real outcomes only.'
+    rule: 'Break-even at 50% progress, profit-lock at 75%, and close only from a proven observation after entry. Entry-candle ranges and restart historical sweeps are quarantined.'
   };
   if (!open.length) { lastV1018LifecycleView = view; return view; }
   const priceCache = new Map();
@@ -11670,12 +12125,29 @@ async function v1018ServerPaperLifecycleTick() {
       }
       t.direction = direction;
       if (!Number.isFinite(v931Num(t.initialRisk, null)) || v931Num(t.initialRisk, null) <= 0) t.initialRisk = stopDist;
+      const temporalKey = textValue(t.tradeId || t.id || v1019OpenTradeDedupeKey(t));
+      if (!v10151LifecycleBaselineKeys.has(temporalKey)) {
+        v10151LifecycleBaselineKeys.add(temporalKey); view.restartBaselineDeferred += 1; view.temporalObservationBlocked += 1;
+        const baselineProof={ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', decision:'RESTART_BASELINE_ONLY_NO_HISTORICAL_EXIT_SWEEP', candleTime:priceProof?.candleTime||null, action:'DEFER_EXIT_AND_TRAILING' };
+        if (view.temporalObservationProof.length<40) view.temporalObservationProof.push(baselineProof);
+        if (view.skippedLifecycleChecks.length<20) view.skippedLifecycleChecks.push({ ...baselineProof, reason:baselineProof.decision });
+        continue;
+      }
+      const temporalDecision = v10151CandleObservationDecision(t, priceProof || {});
+      if (!temporalDecision.allowed) {
+        view.temporalObservationBlocked += 1;
+        const blocked={ tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', decision:temporalDecision.reason, openedAt:temporalDecision.openedAt||0, candleOpenTime:temporalDecision.candleOpenTime||0, candleCloseTime:temporalDecision.candleCloseTime||0, action:'BLOCK_EXIT_AND_TRAILING' };
+        if (view.temporalObservationProof.length<40) view.temporalObservationProof.push(blocked);
+        if (view.skippedLifecycleChecks.length<20) view.skippedLifecycleChecks.push({ ...blocked, reason:temporalDecision.reason });
+        continue;
+      }
+      t.firstEligibleExitAt = Math.max(v10151ToMs(t.firstEligibleExitAt), temporalDecision.openedAt+1);
       const candleHigh = v931Num(priceProof?.high, lastPrice);
       const candleLow = v931Num(priceProof?.low, lastPrice);
       const progress = isShort ? (entry - lastPrice) / targetDist : (lastPrice - entry) / targetDist;
       const proofRow = {
         tradeId:t.tradeId||t.id||'', pair:t.pair||t.symbol||'', timeframe:t.timeframe||t.tf||'', direction,
-        entry, initialStop, activeStopBefore:t.stop, initialRisk:stopDist, target, lastPrice, candleHigh, candleLow, priceSource: priceProof?.source || 'lastPriceOnly', candleTime: priceProof?.candleTime || null,
+        entry, initialStop, activeStopBefore:t.stop, initialRisk:stopDist, target, lastPrice, candleHigh, candleLow, priceSource: priceProof?.source || 'lastPriceOnly', candleTime: priceProof?.candleTime || null, candleOpenTime:temporalDecision.candleOpenTime, candleCloseTime:temporalDecision.candleCloseTime, openedAt:temporalDecision.openedAt, firstEligibleExitAt:t.firstEligibleExitAt, temporalObservationDecision:temporalDecision.reason,
         closeStopHit: isShort ? lastPrice >= t.stop : lastPrice <= t.stop,
         closeTargetHit: isShort ? lastPrice <= target : lastPrice >= target,
         rangeStopHit: isShort ? candleHigh >= t.stop : candleLow <= t.stop,
@@ -11741,8 +12213,9 @@ async function v1018ServerPaperLifecycleTick() {
         proofRow.pnlBps = resultFields.pnlBps;
         proofRow.resultR = resultFields.resultR;
         t.status = 'CLOSED';
-        t.closedAt = Date.now();
-        t.closedAtIso = new Date().toISOString();
+        v10151MarkCloseTemporalProof(t, temporalDecision, priceProof?.source || 'CLOSED_CANDLE_LIFECYCLE');
+        t.closedAt = t.exitObservedAt;
+        t.closedAtIso = t.exitObservedAtIso;
         t.exit = exitPrice;
         t.exitPrice = exitPrice;
         t.closeReason = closeReason;
@@ -11816,6 +12289,7 @@ async function v1018ServerPaperLifecycleTick() {
   view.closeExecutionProofJson = JSON.stringify(safeArray(view.closeExecutionProof).slice(0, 20));
   view.stopTargetTouchProofJson = JSON.stringify(safeArray(view.stopTargetTouchProof).slice(0, 20));
   view.intrabarAmbiguityProofJson = JSON.stringify(safeArray(view.intrabarAmbiguityProof).slice(0, 20));
+  view.temporalObservationProofJson = JSON.stringify(safeArray(view.temporalObservationProof).slice(0, 40));
   lastV1018LifecycleView = view;
   return view;
 }
@@ -12055,6 +12529,12 @@ async function collectReport() {
   report.alpsTradeContinuityVault = buildTradeVaultView();
   report.alpsCognition = await updateCognitionState(report, lastTradeExport);
   report.alpsAutonomousBridge = await updateAutonomousBridgeState(report, report.alpsCognition);
+  const v10151Intelligence = v10151RefreshIntelligence(report, true);
+  report.v10151TemporalEvidence = v10151Intelligence.temporal;
+  report.ahiRegimeIntelligence = v10151Intelligence.regime;
+  report.hypothesisDNA = v10151Intelligence.dna;
+  report.evidenceChamber = v10151Intelligence.chamber;
+  report.autonomyEligibility = v10151Intelligence.autonomy;
   report.autonomousBridgeInstall = await installAutonomousBridgeInPage(report.alpsAutonomousBridge).catch(e => ({ installed: false, error: e.message }));
   await installV930StableAutonomyInPage().catch(e => log('v9.3 stable autonomy install during report failed:', e.message));
   report = enrichReportV930(report, lastEngineHookView || report.engineHook || {});
@@ -12086,6 +12566,11 @@ async function collectReport() {
   report.currentHealth.paperSignals = v10116CountOpenTrades();
   report.currentHealth.staleCurrentHealthOpenDelta = 0;
   report.currentHealth.v10138LivePriceSentinel = v10148SentinelView();
+  report.currentHealth.v10151TemporalEvidence = report.v10151TemporalEvidence;
+  report.currentHealth.ahiRegimeIntelligence = report.ahiRegimeIntelligence;
+  report.currentHealth.hypothesisDNA = report.hypothesisDNA;
+  report.currentHealth.evidenceChamber = report.evidenceChamber;
+  report.currentHealth.autonomyEligibility = report.autonomyEligibility;
   report.v10118ReportAuthority = v10118ReportAuthorityView(report, 'collect-report-final-before-save');
   report.v10119ReportAuthority = report.v10118ReportAuthority;
   report.dataSource = 'CURRENT_HEALTH_AUTHORITY';
@@ -12115,6 +12600,9 @@ ${buildV952Markdown(report)}`;
   md = appendRecoveryMarkdown(md);
   md = scrubLegacyReportMarkdown(md);
   md = v10118NormalizeReportMarkdown(report, md);
+  md = `${md}
+
+${v10151BuildIntelligenceMarkdown(report)}`;
   lastReportMarkdown = md;
   try {
     const reportHealth = enhanceHealth(await getPageHealth());
@@ -12133,6 +12621,11 @@ ${buildV952Markdown(report)}`;
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades-vault.json'), JSON.stringify(buildTradeVaultView(), null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-temporal-evidence.json'), JSON.stringify(report.v10151TemporalEvidence || {}, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-ahi-regime.json'), JSON.stringify(report.ahiRegimeIntelligence || {}, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-hypothesis-dna.json'), JSON.stringify(report.hypothesisDNA || {}, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-evidence-chamber.json'), JSON.stringify(report.evidenceChamber || {}, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy-eligibility.json'), JSON.stringify(report.autonomyEligibility || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
   await v1014PersistRuntimeNonzeroSnapshot(report, 'collect-report-final').catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView, chartTruth: report.chartTruth || lastChartView || null, v10115OperationalTruth: report.v10115OperationalTruth || lastV10115OperationalTruthView, v10115SymbolStatus: report.v10115SymbolStatus || lastV10115SymbolStatusView, v10115FeatureGateDiagnostics: report.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView, v10115UnifiedLayerLog: report.v10115UnifiedLayerLog || lastV10115LayerLogView, v10115DeferredEntryQueue: report.v10115DeferredEntryQueue || lastV10115DeferredEntryQueueView, v10115ChartTruthSync: report.v10115ChartTruthSync, v10117LedgerConsistency: report.v10117LedgerConsistency || lastHealth?.v10117LedgerConsistency, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10149PersistentEvidenceLedger:v10149EvidenceView(), v10149BootReplayGuard:lastV10149BootReplayGuardView, v10149IntrabarTruthGuard:{ ambiguousDeferred:n(lastV1018LifecycleView?.intrabarAmbiguousDeferred,0), lookaheadBlocked:n(lastV1018LifecycleView?.intrabarLookaheadBlocked,0), proof:safeArray(lastV1018LifecycleView?.intrabarAmbiguityProof).slice(0,20) } }, null, 2)).catch(() => null);
@@ -12255,7 +12748,11 @@ async function shutdown() {
   process.exit(0);
 }
 
-if (String(process.env.ALPS_V10150_SELFTEST || '') === '1') {
+if (String(process.env.ALPS_V10151_SELFTEST || '') === '1') {
+  const selfTest = v10151RunSelfTest();
+  console.log(JSON.stringify(selfTest, null, 2));
+  process.exit(selfTest.pass ? 0 : 1);
+} else if (String(process.env.ALPS_V10150_SELFTEST || '') === '1') {
   const selfTest = v10150RunSelfTest();
   console.log(JSON.stringify(selfTest, null, 2));
   process.exit(selfTest.pass ? 0 : 1);

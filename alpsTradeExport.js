@@ -1,5 +1,5 @@
 /**
- * ALPS Runner Trade Export v1.2.2
+ * ALPS Runner Trade Export v1.3.0 — Temporal Evidence Fields
  *
  * Exposes real ALPS paper-forward open/closed trades for ALPS reports, including Paper Entry openedTrades export sync and server-authority paper ledger source preservation.
  * This module does not change strategy logic and does not open live execution.
@@ -82,6 +82,7 @@ function normalizeOpenTrade(trade, index = 0) {
   const tradeId = String(firstValue(trade, ['tradeId', 'id', 'signalId']) || buildId([pair, timeframe || 'tf', direction, openedAt || Date.now(), index]));
   return {
     tradeId,
+    key: String(firstValue(trade, ['key','__alpsV1019Key','__alpsV10138PendingKey']) || ''),
     pair,
     timeframe: timeframe || '',
     direction,
@@ -94,6 +95,14 @@ function normalizeOpenTrade(trade, index = 0) {
     pnlBps,
     status,
     openedAt,
+    entryObservedAt: normalizeTimestamp(firstValue(trade, ['entryObservedAt','entryTriggeredAt','openedAt'])),
+    firstEligibleExitAt: normalizeTimestamp(firstValue(trade, ['firstEligibleExitAt'])),
+    entryObservationSource: firstValue(trade, ['entryObservationSource','priceSource']) || '',
+    temporalEvidenceEpochId: firstValue(trade, ['temporalEvidenceEpochId']) || '',
+    temporalIntegrityStatus: firstValue(trade, ['temporalIntegrityStatus']) || '',
+    signalCandleTime: normalizeTimestamp(firstValue(trade, ['signalCandleTime','closedCandleTime'])),
+    entryFingerprint: firstValue(trade, ['entryFingerprint']) || '',
+    rMultiple: safeNumber(firstValue(trade, ['rMultiple'])),
     mfeBps: safeNumber(firstValue(trade, ['mfeBps'])),
     maeBps: safeNumber(firstValue(trade, ['maeBps'])),
     ariAction: firstValue(trade, ['ariAction']) || firstValue(trade?.ariDecision || {}, ['action']),
@@ -129,6 +138,7 @@ function normalizeClosedTrade(trade, index = 0) {
   const tradeId = String(firstValue(trade, ['tradeId', 'id', 'signalId']) || buildId([pair, timeframe || 'tf', direction, closedAt || openedAt || Date.now(), index]));
   return {
     tradeId,
+    key: String(firstValue(trade, ['key','__alpsV1019Key','__alpsV10138PendingKey']) || ''),
     pair,
     timeframe: timeframe || '',
     direction,
@@ -142,6 +152,19 @@ function normalizeClosedTrade(trade, index = 0) {
     status: 'CLOSED',
     openedAt,
     closedAt,
+    entryObservedAt: normalizeTimestamp(firstValue(trade, ['entryObservedAt','entryTriggeredAt','openedAt'])),
+    firstEligibleExitAt: normalizeTimestamp(firstValue(trade, ['firstEligibleExitAt'])),
+    exitObservedAt: normalizeTimestamp(firstValue(trade, ['exitObservedAt','exitTriggeredAt','closedAt'])),
+    entryObservationSource: firstValue(trade, ['entryObservationSource','priceSource']) || '',
+    exitObservationSource: firstValue(trade, ['exitObservationSource','priceSource']) || '',
+    exitCandleOpenTime: normalizeTimestamp(firstValue(trade, ['exitCandleOpenTime'])),
+    exitCandleCloseTime: normalizeTimestamp(firstValue(trade, ['exitCandleCloseTime'])),
+    temporalEvidenceEpochId: firstValue(trade, ['temporalEvidenceEpochId']) || '',
+    temporalIntegrityStatus: firstValue(trade, ['temporalIntegrityStatus']) || '',
+    temporalObservationDecision: firstValue(trade, ['temporalObservationDecision']) || '',
+    signalCandleTime: normalizeTimestamp(firstValue(trade, ['signalCandleTime','closedCandleTime'])),
+    entryFingerprint: firstValue(trade, ['entryFingerprint']) || '',
+    rMultiple: safeNumber(firstValue(trade, ['rMultiple'])),
     mfeBps: safeNumber(firstValue(trade, ['mfeBps'])),
     maeBps: safeNumber(firstValue(trade, ['maeBps'])),
     exitReason: firstValue(trade, ['exitReason','closeReason','closedBy']),
@@ -192,7 +215,7 @@ function buildTradeExport({ openTrades = [], closedTrades = [], sourceStats = {}
       closedTrades: closed.length,
       sourceStats
     },
-    note: 'Exported from ALPS server runner for ALPS reports. Fingerprints are not treated as executable trades.'
+    note: 'Exported from ALPS server runner for ALPS reports. v1.3 preserves post-entry temporal evidence fields and candidate keys; fingerprints remain non-executable evidence.'
   };
 }
 
