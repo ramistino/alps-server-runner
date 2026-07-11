@@ -28,9 +28,22 @@ const {
 } = require('./ALPS_closed_ledger_authority_v10147');
 
 const ROOT_DIR = path.resolve(process.env.ALPS_APP_DIR || path.join(__dirname, '..'));
-const DATA_DIR = path.resolve(process.env.ALPS_DATA_DIR || path.join(__dirname, 'data'));
-const REPORT_DIR = path.resolve(process.env.ALPS_REPORT_DIR || path.join(__dirname, 'reports'));
+// v10.1.49: route every critical ledger/state file to a Render Persistent Disk when available.
+// Recommended Render mount path: /var/data and ALPS_PERSISTENT_DIR=/var/data/alps.
+const EPHEMERAL_DATA_DIR = path.resolve(process.env.ALPS_DATA_DIR || path.join(__dirname, 'data'));
+const V10149_RENDER_PERSISTENT_ROOT = String(process.env.ALPS_RENDER_PERSISTENT_ROOT || '/var/data').trim();
+const V10149_EXPLICIT_PERSISTENT_DIR = String(process.env.ALPS_PERSISTENT_DIR || '').trim();
+const V10149_AUTO_PERSISTENT_DIR = (!V10149_EXPLICIT_PERSISTENT_DIR && V10149_RENDER_PERSISTENT_ROOT && fs.existsSync(V10149_RENDER_PERSISTENT_ROOT))
+  ? path.join(V10149_RENDER_PERSISTENT_ROOT, 'alps')
+  : '';
+const DATA_DIR = path.resolve(V10149_EXPLICIT_PERSISTENT_DIR || V10149_AUTO_PERSISTENT_DIR || EPHEMERAL_DATA_DIR);
+const REPORT_DIR = path.resolve(process.env.ALPS_REPORT_DIR || path.join(DATA_DIR, 'reports'));
 const PROFILE_DIR = path.resolve(process.env.ALPS_PROFILE_DIR || path.join(DATA_DIR, 'chromium-profile'));
+const V10149_RUNNING_ON_RENDER = !!(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL);
+const V10149_PERSISTENT_PATH_CONFIGURED = !!(V10149_EXPLICIT_PERSISTENT_DIR || V10149_AUTO_PERSISTENT_DIR);
+// Clean-start deployment: historical paper trades are intentionally not imported.
+// Future evidence remains persistent after the first successful boot on /var/data.
+const V10149_CLEAN_START = String(process.env.ALPS_IMPORT_LEGACY_EVIDENCE || '0') !== '1';
 const PORT = Number(process.env.PORT || process.env.ALPS_RUNNER_PORT || 8787);
 const HOST = process.env.HOST || '0.0.0.0';
 const TOKEN = String(process.env.ALPS_RUNNER_TOKEN || '').trim();
@@ -60,7 +73,7 @@ const STATE_AUTHORITY_FILE = path.join(DATA_DIR, 'state-authority-v10.json');
 const STATE_AUTHORITY_NONZERO_FILE = path.join(DATA_DIR, 'state-authority-v10-last-nonzero.json');
 const RUNTIME_NONZERO_FILE = path.join(DATA_DIR, 'runtime-last-nonzero-v1014.json');
 const V10143_CLOSED_LEDGER_FILE = path.join(DATA_DIR, 'closed-ledger-monotonic-v10143.json');
-const V10147_CLOSED_LEDGER_SEED_FLOOR = Math.max(0, Number(process.env.ALPS_CLOSED_LEDGER_SEED_FLOOR || 78));
+const V10147_CLOSED_LEDGER_SEED_FLOOR = Math.max(0, Number(process.env.ALPS_CLOSED_LEDGER_SEED_FLOOR || 0));
 const V10147_CLOSED_LEDGER_AUTHORITY_FILE = path.join(DATA_DIR, 'closed-ledger-authority-v10147.json');
 const v10147ClosedLedgerAuthority = createClosedLedgerAuthority({
   dataDir: DATA_DIR,
@@ -367,7 +380,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.48-sentinel-heartbeat-currenthealth-truth';
+const FINAL_V930_VERSION = 'v10.1.49-clean-start-persistent-runtime';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -791,7 +804,8 @@ function v10147AuthorityFields(actualCanonicalRows = v10143PersistentClosedRows.
     closedLedgerActualCanonicalRows: actualCanonicalRows,
     closedLedgerMissingHistoricalRows: missingHistoricalRows,
     closedLedgerRegressionBlocked: r.closedLedgerRegressionBlocked === true || actualCanonicalRows < publishedClosedTrades,
-    closedLedgerDroppedSinceLastReport: n(r.closedLedgerDroppedSinceLastReport, Math.max(0, publishedClosedTrades - actualCanonicalRows)),
+    closedLedgerDroppedSinceLastReport: n(lastV10143ClosedLedgerMonotonicGuardView?.closedLedgerDroppedSinceLastReport, 0),
+    closedLedgerSourceWindowDeficit: n(r.closedLedgerDroppedSinceLastReport, Math.max(0, publishedClosedTrades - actualCanonicalRows)),
     closedLedgerMonotonicStatus: r.status || (actualCanonicalRows < publishedClosedTrades ? 'MONOTONIC_HIGH_WATER_RETAINED_ROWS_RECOVERY_REQUIRED' : 'MONOTONIC_LEDGER_AUTHORITY_OK'),
     closedLedgerStatsCompleteness: missingHistoricalRows > 0 ? 'PARTIAL_ROWS_HIGH_WATER_COUNT_RETAINED' : 'FULL_CANONICAL_ROWS',
     closedLedgerAuthorityFile: V10147_CLOSED_LEDGER_AUTHORITY_FILE,
@@ -1062,6 +1076,327 @@ let v10148SentinelRuntime = {
   lastCheckResult: 'WAITING_FOR_FIRST_SENTINEL_TICK',
   noExitReason: 'WAITING_FOR_FIRST_SENTINEL_TICK'
 };
+
+
+// v10.1.49 — Persistent Evidence Ledger + Boot Replay Guard.
+// Stores canonical open/closed paper trades, pending entries, and consumed signal fingerprints on
+// Render Persistent Disk. It also performs a best-effort pre-cutover migration from the still-live
+// v10.1.48 dashboard endpoint during a rolling deploy. No real/testnet execution is enabled.
+const V10149_EVIDENCE_LEDGER_FILE = path.join(DATA_DIR, 'persistent-evidence-ledger-v10149.json');
+const V10149_EVIDENCE_GENERATION_FILE = path.join(DATA_DIR, 'persistent-evidence-generation-v10149.json');
+const V10149_EVIDENCE_SEED_FILE = path.join(__dirname, 'recovery', 'persistent-evidence-seed-v10149.json');
+const V10149_PREDEPLOY_DASHBOARD_SEED_FILE = path.join(__dirname, 'recovery', 'predeploy-dashboard-v10149.json');
+const V10149_ENTRY_FINGERPRINT_MAX = Math.max(5000, Number(process.env.ALPS_ENTRY_FINGERPRINT_MAX || 50000));
+const V10149_BOOT_REPLAY_WINDOW_MS = Math.max(60_000, Number(process.env.ALPS_BOOT_REPLAY_WINDOW_MS || 15 * 60 * 1000));
+const V10149_PROCESS_STARTED_AT_MS = Date.now();
+const V10149_PROCESS_BOOT_ID = `${process.pid}-${V10149_PROCESS_STARTED_AT_MS}-${crypto.randomBytes(3).toString('hex')}`;
+const V10149_SELF_MIGRATION_BASE = String(process.env.ALPS_PREDEPLOY_MIGRATION_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/,'');
+let v10149EvidenceLoaded = false;
+let v10149FingerprintMap = new Map();
+let v10149Generation = null;
+let lastV10149EvidenceView = null;
+let lastV10149BootReplayGuardView = {
+  schema:'alps.bootReplayGuard.v10149', version:FINAL_V930_VERSION, installed:true,
+  status:'WAITING_FOR_EVIDENCE_LOAD', checked:0, blockedConsumed:0, blockedStaleBootBaseline:0,
+  blockedMissingSignalTime:0, allowedFreshSignal:0, registeredOpenFingerprints:0, lastBlocked:[]
+};
+
+function v10149Num(value, fallback = null) {
+  const x = Number(value);
+  return Number.isFinite(x) ? x : fallback;
+}
+function v10149TimestampMs(value) {
+  let x = Number(value);
+  if (!Number.isFinite(x) && value) x = Date.parse(String(value));
+  if (!Number.isFinite(x) || x <= 0) return 0;
+  if (x < 1e11) x *= 1000;
+  return Math.trunc(x);
+}
+function v10149SignalCandleTime(row = {}, plan = {}) {
+  const snap = row?.featureSnapshot || plan?.featureSnapshot || {};
+  const values = [
+    plan.signalCandleTime, row.signalCandleTime, row.closedCandleTime, row.latestClosedCandleTs,
+    row.candleTime, row.signalAt, row.triggerAt, snap.time, snap.t, snap.openTime, snap.timestamp
+  ];
+  for (const value of values) {
+    const ms = v10149TimestampMs(value);
+    if (ms > 0) return ms;
+  }
+  return 0;
+}
+function v10149TimeframeMs(tf = '') {
+  const m = String(tf || '').toLowerCase().trim().match(/^(\d+)(m|h|d)$/);
+  if (!m) return 60 * 60 * 1000;
+  const n0 = Math.max(1, Number(m[1]));
+  return n0 * (m[2] === 'm' ? 60_000 : m[2] === 'h' ? 3_600_000 : 86_400_000);
+}
+function v10149Round(value, digits = 10) {
+  const x = Number(value);
+  return Number.isFinite(x) ? x.toFixed(digits) : '';
+}
+function v10149EntryFingerprint(row = {}, plan = {}) {
+  const pair = textValue(plan.pair || row.pair || row.symbol || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  const tf = textValue(plan.timeframe || row.timeframe || row.tf || '').toLowerCase();
+  const direction = normalizeDirection(plan.direction || row.direction || row.side || '');
+  const key = textValue(plan.key || row.key || row.__alpsV1019Key || row.__alpsV10138PendingKey || '').toUpperCase();
+  const strategy = textValue(plan.strategy || row.strategy || row.stratName || row.name || '').toUpperCase().replace(/[^A-Z0-9]+/g,'_').slice(0,120);
+  const signalCandleTime = v10149SignalCandleTime(row, plan);
+  const entry = v10149Round(plan.entry ?? row.entry ?? row.entryPrice, 10);
+  const stop = v10149Round(plan.stop ?? row.stop ?? row.stopPrice ?? row.initialStop, 10);
+  const target = v10149Round(plan.target ?? row.target ?? row.targetPrice ?? row.initialTarget, 10);
+  if (!(pair && tf && direction && (key || strategy) && signalCandleTime > 0)) return '';
+  const raw = [pair,tf,direction,key||strategy,String(signalCandleTime),entry,stop,target].join('|');
+  return `FP49|${crypto.createHash('sha256').update(raw).digest('hex')}`;
+}
+function v10149FingerprintConsumed(fp) { return !!(fp && v10149FingerprintMap.has(fp)); }
+function v10149RegisterFingerprint(fp, meta = {}) {
+  if (!fp) return false;
+  const previous = v10149FingerprintMap.get(fp) || {};
+  v10149FingerprintMap.set(fp, {
+    ...previous, ...meta, fingerprint:fp, version:FINAL_V930_VERSION,
+    consumedAt: previous.consumedAt || new Date().toISOString(),
+    processBootId: previous.processBootId || V10149_PROCESS_BOOT_ID,
+    paperOnly:true, liveCapitalExecution:false, testnetExecution:false
+  });
+  while (v10149FingerprintMap.size > V10149_ENTRY_FINGERPRINT_MAX) {
+    const first = v10149FingerprintMap.keys().next().value;
+    v10149FingerprintMap.delete(first);
+  }
+  lastV10149BootReplayGuardView.registeredOpenFingerprints = v10149FingerprintMap.size;
+  return true;
+}
+function v10149ReplayDecision(row = {}, plan = {}, stage = 'DIRECT_ENTRY') {
+  const signalCandleTime = v10149SignalCandleTime(row, plan);
+  const tf = textValue(plan.timeframe || row.timeframe || row.tf || '').toLowerCase();
+  const fp = v10149EntryFingerprint(row, plan);
+  const view = lastV10149BootReplayGuardView;
+  view.checked += 1;
+  if (fp && v10149FingerprintConsumed(fp)) {
+    view.blockedConsumed += 1;
+    const decision = { allow:false, reason:'BOOT_REPLAY_FINGERPRINT_ALREADY_CONSUMED', fingerprint:fp, signalCandleTime, stage };
+    view.lastBlocked = safeArray(view.lastBlocked).concat(decision).slice(-20);
+    view.status = 'BOOT_REPLAY_GUARD_BLOCKING_DUPLICATE_SIGNAL_INSTANCES';
+    return decision;
+  }
+  const bootAge = Date.now() - V10149_PROCESS_STARTED_AT_MS;
+  if (!signalCandleTime) {
+    if (bootAge <= V10149_BOOT_REPLAY_WINDOW_MS) {
+      view.blockedMissingSignalTime += 1;
+      const decision = { allow:false, reason:'BOOT_REPLAY_BLOCKED_MISSING_SIGNAL_CANDLE_TIME', fingerprint:'', signalCandleTime:0, stage };
+      view.lastBlocked = safeArray(view.lastBlocked).concat(decision).slice(-20);
+      view.status = 'BOOT_REPLAY_GUARD_BLOCKING_UNPROVEN_BOOT_SIGNALS';
+      return decision;
+    }
+    return { allow:true, reason:'POST_BOOT_MISSING_SIGNAL_TIME_ALLOWED_BY_EXISTING_FRESHNESS_GATES', fingerprint:'', signalCandleTime:0, stage };
+  }
+  const freshnessWindow = Math.max(v10149TimeframeMs(tf) * 1.5, 5 * 60_000);
+  if (bootAge <= V10149_BOOT_REPLAY_WINDOW_MS && signalCandleTime < V10149_PROCESS_STARTED_AT_MS - freshnessWindow) {
+    if (fp) v10149RegisterFingerprint(fp, { reason:'BOOT_BASELINE_STALE_SIGNAL_NOT_OPENED', stage, signalCandleTime });
+    view.blockedStaleBootBaseline += 1;
+    const decision = { allow:false, reason:'BOOT_REPLAY_STALE_SIGNAL_BASELINED_NOT_OPENED', fingerprint:fp, signalCandleTime, stage };
+    view.lastBlocked = safeArray(view.lastBlocked).concat(decision).slice(-20);
+    view.status = 'BOOT_REPLAY_GUARD_BASELINED_STALE_SIGNALS';
+    return decision;
+  }
+  view.allowedFreshSignal += 1;
+  if (!/BLOCKING|BASELINED/.test(view.status)) view.status = 'BOOT_REPLAY_GUARD_ACTIVE';
+  return { allow:true, reason:'FRESH_UNCONSUMED_SIGNAL_INSTANCE', fingerprint:fp, signalCandleTime, stage };
+}
+async function v10149ReadJson(file) {
+  for (const candidate of [file, `${file}.bak`]) {
+    try { return { value:JSON.parse(await fsp.readFile(candidate,'utf8')), source:candidate, recovered:candidate !== file }; } catch (_) {}
+  }
+  return { value:null, source:'', recovered:false };
+}
+async function v10149AtomicWrite(file, value) {
+  await fsp.mkdir(path.dirname(file), { recursive:true });
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  const payload = `${JSON.stringify(value,null,2)}\n`;
+  const h = await fsp.open(tmp,'w',0o600);
+  try { await h.writeFile(payload,'utf8'); await h.sync(); } finally { await h.close(); }
+  await fsp.rename(tmp,file);
+  await fsp.copyFile(file,`${file}.bak`).catch(()=>null);
+}
+async function v10149LoadGeneration() {
+  const read = await v10149ReadJson(V10149_EVIDENCE_GENERATION_FILE);
+  const previous = read.value && typeof read.value === 'object' ? read.value : {};
+  v10149Generation = {
+    schema:'alps.persistentEvidenceGeneration.v10149', version:FINAL_V930_VERSION,
+    ledgerGenerationId: previous.ledgerGenerationId || crypto.randomUUID(),
+    createdAt: previous.createdAt || new Date().toISOString(),
+    updatedAt:new Date().toISOString(), bootCount:Math.max(0,v10149Num(previous.bootCount,0))+1,
+    lastProcessBootId:V10149_PROCESS_BOOT_ID, dataDir:DATA_DIR,
+    persistentPathConfigured:V10149_PERSISTENT_PATH_CONFIGURED,
+    renderPersistentRootDetected:!!V10149_AUTO_PERSISTENT_DIR,
+    paperOnly:true, liveCapitalExecution:false, testnetExecution:false
+  };
+  await v10149AtomicWrite(V10149_EVIDENCE_GENERATION_FILE,v10149Generation);
+  return v10149Generation;
+}
+function v10149ClosedFromSeed(seed = {}) {
+  return safeArray(seed.closedTrades || seed.rows || seed?.tradeExport?.closedTrades || seed?.evidence?.closedTrades);
+}
+function v10149OpenFromSeed(seed = {}) {
+  return safeArray(seed.openTrades || seed?.tradeExport?.openTrades || seed?.evidence?.openTrades);
+}
+function v10149TradeExportFromDocument(doc = {}) {
+  if (!doc || typeof doc !== 'object') return null;
+  const candidates = [
+    doc.tradeExport, doc.alpsTradeExport, doc?.currentHealth?.alpsTradeExport,
+    doc?.currentHealth?.tradeExport, doc?.reportAuthority?.tradeExport, doc
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    if (Array.isArray(candidate.openTrades) || Array.isArray(candidate.closedTrades)) {
+      return {
+        openTrades:safeArray(candidate.openTrades),
+        closedTrades:safeArray(candidate.closedTrades),
+        pendingEntries:safeArray(candidate.pendingEntries)
+      };
+    }
+  }
+  return null;
+}
+async function v10149LoadEvidenceLedger() {
+  if (v10149EvidenceLoaded) return lastV10149EvidenceView;
+  v10149EvidenceLoaded = true;
+  await fsp.mkdir(DATA_DIR,{recursive:true});
+  await v10149LoadGeneration();
+  const primary = await v10149ReadJson(V10149_EVIDENCE_LEDGER_FILE);
+  let seed = {};
+  if (!V10149_CLEAN_START) {
+    try { seed = JSON.parse(await fsp.readFile(V10149_EVIDENCE_SEED_FILE,'utf8')); } catch (_) {}
+  }
+  let predeployDashboardSeed = null;
+  let predeployDashboardSeedLoaded = false;
+  if (!V10149_CLEAN_START) {
+    try {
+      const rawPredeploy = JSON.parse(await fsp.readFile(V10149_PREDEPLOY_DASHBOARD_SEED_FILE,'utf8'));
+      predeployDashboardSeed = v10149TradeExportFromDocument(rawPredeploy);
+      predeployDashboardSeedLoaded = !!predeployDashboardSeed;
+    } catch (_) {}
+  }
+  let legacyClosed = [];
+  if (!V10149_CLEAN_START) {
+    try { const j=JSON.parse(await fsp.readFile(V10143_CLOSED_LEDGER_FILE,'utf8')); legacyClosed=safeArray(j.rows||j.closedTrades); } catch (_) {}
+  }
+  let pendingDisk = [];
+  try { const j=JSON.parse(await fsp.readFile(V10138_PENDING_ENTRY_FILE,'utf8')); pendingDisk=safeArray(j.pendingEntries||j.rows); } catch (_) {}
+  const doc = primary.value && typeof primary.value === 'object' ? primary.value : {};
+  const closed = v10143MergeClosedTradeRows(
+    legacyClosed, v10149ClosedFromSeed(seed), safeArray(predeployDashboardSeed?.closedTrades), v10149ClosedFromSeed(doc)
+  );
+  const open = v1019MergeOpenTradeRows(
+    v10149OpenFromSeed(seed), safeArray(predeployDashboardSeed?.openTrades), v10149OpenFromSeed(doc)
+  );
+  v10143PersistentClosedRows = closed;
+  v10143ClosedLedgerLoaded = true;
+  lastTradeExport = buildTradeExport({ openTrades:open, closedTrades:closed });
+  v10138PendingEntries = v10138DedupPendingEntries([...pendingDisk, ...safeArray(seed.pendingEntries), ...safeArray(predeployDashboardSeed?.pendingEntries), ...safeArray(doc.pendingEntries)]);
+  v10138PendingEntriesLoaded = true;
+  for (const row of safeArray(seed.entryFingerprints).concat(safeArray(doc.entryFingerprints))) {
+    const fp = textValue(row?.fingerprint || ''); if (fp) v10149FingerprintMap.set(fp,row);
+  }
+  for (const trade of [...open, ...closed]) {
+    const fp = textValue(trade.entryFingerprint || '') || v10149EntryFingerprint(trade,trade);
+    if (fp) v10149RegisterFingerprint(fp,{ tradeId:trade.tradeId||trade.id||'', pair:trade.pair||trade.symbol||'', timeframe:trade.timeframe||trade.tf||'', signalCandleTime:v10149SignalCandleTime(trade,trade), reason:'RESTORED_EXISTING_TRADE_FINGERPRINT' });
+  }
+  lastV10149EvidenceView = {
+    schema:'alps.persistentEvidenceLedger.view.v10149', version:FINAL_V930_VERSION, installed:true,
+    status: V10149_PERSISTENT_PATH_CONFIGURED ? 'PERSISTENT_EVIDENCE_LOADED' : 'EPHEMERAL_EVIDENCE_LOADED_REDEPLOY_UNSAFE',
+    dataDir:DATA_DIR, evidenceFile:V10149_EVIDENCE_LEDGER_FILE,
+    persistentPathConfigured:V10149_PERSISTENT_PATH_CONFIGURED, safeForRedeploy:V10149_PERSISTENT_PATH_CONFIGURED || !V10149_RUNNING_ON_RENDER,
+    renderPersistentRootDetected:!!V10149_AUTO_PERSISTENT_DIR, explicitPersistentDir:!!V10149_EXPLICIT_PERSISTENT_DIR,
+    ledgerGenerationId:v10149Generation?.ledgerGenerationId||'', bootCount:v10149Generation?.bootCount||0,
+    source:primary.source || (predeployDashboardSeedLoaded ? V10149_PREDEPLOY_DASHBOARD_SEED_FILE : (seed && Object.keys(seed).length ? V10149_EVIDENCE_SEED_FILE : 'EMPTY')), recoveredFromBackup:primary.recovered,
+    predeployDashboardSeedFile:V10149_PREDEPLOY_DASHBOARD_SEED_FILE,
+    cleanStart:V10149_CLEAN_START, legacyEvidenceImportEnabled:!V10149_CLEAN_START,
+    predeployDashboardSeedLoaded,
+    predeployDashboardSeedOpenRows:safeArray(predeployDashboardSeed?.openTrades).length,
+    predeployDashboardSeedClosedRows:safeArray(predeployDashboardSeed?.closedTrades).length,
+    openRows:open.length, closedRows:closed.length, pendingEntries:v10138PendingEntries.length, entryFingerprints:v10149FingerprintMap.size,
+    migrationStatus:'NOT_ATTEMPTED', lastPersistAt:'', lastError:'', paperOnly:true, liveCapitalExecution:false, testnetExecution:false
+  };
+  return lastV10149EvidenceView;
+}
+async function v10149TryPreCutoverMigration() {
+  await v10149LoadEvidenceLedger();
+  if (V10149_CLEAN_START) {
+    lastV10149EvidenceView.migrationStatus='SKIPPED_CLEAN_START_NO_LEGACY_IMPORT';
+    return lastV10149EvidenceView;
+  }
+  if (!V10149_SELF_MIGRATION_BASE || typeof fetch !== 'function') {
+    lastV10149EvidenceView.migrationStatus='SKIPPED_NO_MIGRATION_URL'; return lastV10149EvidenceView;
+  }
+  const url = `${V10149_SELF_MIGRATION_BASE}/runner/dashboard.json`;
+  for (let attempt=1; attempt<=3; attempt++) {
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(()=>controller.abort(),30000) : null;
+      const res = await fetch(url, controller ? {signal:controller.signal, headers:{'cache-control':'no-cache'}} : {headers:{'cache-control':'no-cache'}});
+      if (timer) clearTimeout(timer);
+      if (!res.ok) throw new Error(`HTTP_${res.status}`);
+      const payload = await res.json();
+      const trade = v10149TradeExportFromDocument(payload);
+      if (!trade || (!Array.isArray(trade.openTrades) && !Array.isArray(trade.closedTrades))) throw new Error('TRADE_EXPORT_NOT_FOUND');
+      const migratedOpen = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, trade.openTrades);
+      const migratedClosed = v10143MergeClosedTradeRows(v10143PersistentClosedRows, lastTradeExport?.closedTrades, trade.closedTrades);
+      v10143PersistentClosedRows = migratedClosed;
+      lastTradeExport = buildTradeExport({openTrades:migratedOpen,closedTrades:migratedClosed});
+      lastV10149EvidenceView.migrationStatus='PRE_CUTOVER_TRADE_EXPORT_IMPORTED';
+      lastV10149EvidenceView.migrationUrl=url;
+      lastV10149EvidenceView.migratedOpenRows=safeArray(trade.openTrades).length;
+      lastV10149EvidenceView.migratedClosedRows=safeArray(trade.closedTrades).length;
+      await v10149PersistEvidenceLedger('pre-cutover-migration');
+      return lastV10149EvidenceView;
+    } catch (e) {
+      lastV10149EvidenceView.migrationStatus=`PRE_CUTOVER_MIGRATION_RETRY_${attempt}_FAILED`;
+      lastV10149EvidenceView.lastError=textValue(e&&e.message||e).slice(0,180);
+      if (attempt<3) await new Promise(r=>setTimeout(r,1500*attempt));
+    }
+  }
+  lastV10149EvidenceView.migrationStatus='PRE_CUTOVER_MIGRATION_UNAVAILABLE_SEED_RETAINED';
+  return lastV10149EvidenceView;
+}
+async function v10149PersistEvidenceLedger(reason='persistent-evidence-write') {
+  await v10149LoadEvidenceLedger();
+  try {
+    const open = v1019MergeOpenTradeRows(lastTradeExport?.openTrades,lastV948EntryEngineView?.openedTrades,lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
+    const closed = v10143MergeClosedTradeRows(v10143PersistentClosedRows,lastTradeExport?.closedTrades,lastV948EntryEngineView?.closedTrades,lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+    v10143PersistentClosedRows=closed;
+    lastTradeExport=buildTradeExport({openTrades:open,closedTrades:closed});
+    const doc={
+      schema:'alps.persistentEvidenceLedger.v10149',version:FINAL_V930_VERSION,reason,updatedAt:new Date().toISOString(),
+      ledgerGenerationId:v10149Generation?.ledgerGenerationId||'',processBootId:V10149_PROCESS_BOOT_ID,
+      dataDir:DATA_DIR,persistentPathConfigured:V10149_PERSISTENT_PATH_CONFIGURED,
+      paperOnly:true,liveCapitalExecution:false,testnetExecution:false,
+      openTrades:open,closedTrades:closed,pendingEntries:v10138DedupPendingEntries(v10138PendingEntries),
+      entryFingerprints:[...v10149FingerprintMap.values()].slice(-V10149_ENTRY_FINGERPRINT_MAX),
+      counts:{open:open.length,closed:closed.length,pending:v10138PendingEntries.length,entryFingerprints:v10149FingerprintMap.size}
+    };
+    await v10149AtomicWrite(V10149_EVIDENCE_LEDGER_FILE,doc);
+    lastV10149EvidenceView={...(lastV10149EvidenceView||{}),status:V10149_PERSISTENT_PATH_CONFIGURED?'PERSISTENT_EVIDENCE_WRITE_OK':'EPHEMERAL_EVIDENCE_WRITE_OK_REDEPLOY_UNSAFE',safeForRedeploy:V10149_PERSISTENT_PATH_CONFIGURED||!V10149_RUNNING_ON_RENDER,openRows:open.length,closedRows:closed.length,pendingEntries:v10138PendingEntries.length,entryFingerprints:v10149FingerprintMap.size,lastPersistAt:doc.updatedAt,lastPersistReason:reason,lastError:''};
+    return {ok:true,status:lastV10149EvidenceView.status,openRows:open.length,closedRows:closed.length};
+  } catch(e) {
+    lastV10149EvidenceView={...(lastV10149EvidenceView||{}),status:'PERSISTENT_EVIDENCE_WRITE_FAILED',safeForRedeploy:false,lastError:textValue(e&&e.message||e).slice(0,220)};
+    return {ok:false,status:'PERSISTENT_EVIDENCE_WRITE_FAILED',error:lastV10149EvidenceView.lastError};
+  }
+}
+function v10149EvidenceView() {
+  return {
+    schema:'alps.persistentEvidenceLedger.view.v10149',version:FINAL_V930_VERSION,installed:true,
+    ...(lastV10149EvidenceView||{}),dataDir:DATA_DIR,evidenceFile:V10149_EVIDENCE_LEDGER_FILE,
+    persistentPathConfigured:V10149_PERSISTENT_PATH_CONFIGURED,
+    cleanStart:V10149_CLEAN_START, legacyEvidenceImportEnabled:!V10149_CLEAN_START,
+    predeployDashboardSeedFile:V10149_PREDEPLOY_DASHBOARD_SEED_FILE,
+    safeForRedeploy:(lastV10149EvidenceView?.safeForRedeploy ?? (V10149_PERSISTENT_PATH_CONFIGURED||!V10149_RUNNING_ON_RENDER)),
+    openRows:v1019MergeOpenTradeRows(lastTradeExport?.openTrades).length,
+    closedRows:v10143PersistentClosedRows.length,pendingEntries:v10138PendingEntries.length,
+    entryFingerprints:v10149FingerprintMap.size,bootReplayGuard:lastV10149BootReplayGuardView,
+    paperOnly:true,liveCapitalExecution:false,testnetExecution:false,
+    rule:'Redeploy-safe truth requires a Render Persistent Disk. Canonical open/closed rows, pending entries, and consumed signal fingerprints are written atomically with a backup.'
+  };
+}
 
 function v10138NowIso() { return new Date().toISOString(); }
 function v10148IsoMs(value) {
@@ -1340,6 +1675,8 @@ function v10138AddPendingEntry(c = {}, plan = {}, reason = 'OUTSIDE_ZONE_PENDING
     zoneLow: v10138Num(plan.zoneLow, null), zoneHigh: v10138Num(plan.zoneHigh, null),
     createdAt: Date.now(), createdAtIso: v10138NowIso(), expiresAt: Date.now() + V10138_PENDING_ENTRY_TTL_MS,
     currentPriceAtQueue: v10138Num(plan.currentPrice, null), reason,
+    signalCandleTime: v10149SignalCandleTime(c, plan),
+    entryFingerprint: v10149EntryFingerprint(c, plan),
     source: textValue(c.__v1017cPaperEntryAuthoritySource || c.source || 'SERVER_AUTHORITY_PENDING_ENTRY_V10138')
   };
   const risk = v10137ValidInitialRiskPlan(pending.direction, pending.entry, pending.stop, pending.target);
@@ -1348,6 +1685,10 @@ function v10138AddPendingEntry(c = {}, plan = {}, reason = 'OUTSIDE_ZONE_PENDING
   if (!(pending.pair && pending.timeframe && (pending.direction === 'LONG' || pending.direction === 'SHORT') && risk.ok && Number.isFinite(pending.zoneLow) && Number.isFinite(pending.zoneHigh))) return { added:false, pending, reason:'PENDING_ENTRY_PLAN_INVALID' };
   const key = v10138PendingKey(pending);
   if (!key) return { added:false, pending, reason:'PENDING_ENTRY_KEY_INVALID' };
+  const replay = v10149ReplayDecision(c, pending, 'PENDING_ENTRY_QUEUE');
+  pending.bootReplayDecision = replay.reason;
+  if (!replay.allow) { v10149PersistEvidenceLedger('boot-replay-block-pending').catch(()=>null); return { added:false, pending, reason:replay.reason }; }
+  if (replay.fingerprint) pending.entryFingerprint = replay.fingerprint;
   const openKeys = v10138ExistingOpenKeys();
   if (openKeys.has(key) || openKeys.has(v1019OpenTradeDedupeKey(pending))) return { added:false, pending, reason:'DUPLICATE_OPEN_TRADE_EXISTS' };
   v10138PendingEntries = v10138DedupPendingEntries(v10138PendingEntries.filter(x => v10138PendingKey(x) !== key).concat(pending));
@@ -1408,6 +1749,8 @@ function v10138BuildPaperTradeFromPending(pending, livePriceProof) {
     initialTarget:pending.target, openedTarget:pending.target, target:pending.target, targetPrice:pending.target,
     initialRisk:risk.initialRisk, riskGuardStatus:'VALID_INITIAL_RISK', rMultiple:pending.rMultiple,
     zoneLow:pending.zoneLow, zoneHigh:pending.zoneHigh, pendingEntryCreatedAt:pending.createdAt, pendingEntryReason:pending.reason,
+    signalCandleTime: pending.signalCandleTime || 0,
+    entryFingerprint: pending.entryFingerprint || v10149EntryFingerprint(pending,pending),
     entryTriggeredAt:Date.now(), entryTriggeredAtIso:v10138NowIso(), entryTriggerPrice:v10138Num(livePriceProof?.price, pending.entry), entryTriggerReason:'LIVE_PRICE_ENTERED_ENTRY_ZONE', priceSource:livePriceProof?.source || 'LIVE_PRICE_SENTINEL',
     status:'OPEN', paperOnly:true, liveCapitalExecution:false, source:'SERVER_AUTHORITY_LIVE_PRICE_SENTINEL_V10138', __alpsSource:'SERVER_AUTHORITY_LIVE_PRICE_SENTINEL_V10138',
     breakEvenTriggerPct:50, lockProfitTriggerPct:75,
@@ -1425,6 +1768,9 @@ function v10138AppendOpenTrade(trade) {
   lastV948EntryEngineView.openedTrades.push(trade);
   const mergedOpen = v1019MergeOpenTradeRows(lastTradeExport?.openTrades, lastV948EntryEngineView.openedTrades, lastV1017cPaperEntryAuthorityBridgeView?.openedTrades);
   lastTradeExport = buildTradeExport({ openTrades: mergedOpen, closedTrades: safeArray(lastTradeExport?.closedTrades) });
+  const fp = textValue(trade.entryFingerprint || '') || v10149EntryFingerprint(trade,trade);
+  if (fp) { trade.entryFingerprint = fp; v10149RegisterFingerprint(fp,{ tradeId:trade.tradeId||trade.id||'', pair:trade.pair||'', timeframe:trade.timeframe||'', signalCandleTime:v10149SignalCandleTime(trade,trade), reason:'PAPER_ENTRY_OPENED' }); }
+  v10149PersistEvidenceLedger('open-trade-appended').catch(()=>null);
   return true;
 }
 function v10138CloseTradeInLedger(t, exitPrice, closeReason, priceProof, view) {
@@ -1454,7 +1800,8 @@ async function v10138PersistTradeLedger(reason='v10138-persist-trade-ledger') {
     await v10147ReconcileClosedLedgerBeforePublish(reason + '-immediate-authority-write');
     await fsp.mkdir(REPORT_DIR, { recursive: true });
     await fsp.writeFile(path.join(REPORT_DIR, 'latest-trades.json'), JSON.stringify(lastTradeExport, null, 2));
-    return { ok:true, status:'CLOSE_WRITEBACK_PERSISTED', reason, monotonicClosedTrades:v10143PersistentClosedRows.length, canonicalOpen:canonicalOpenRows.length };
+    const evidence = await v10149PersistEvidenceLedger(reason + '-persistent-evidence');
+    return { ok:evidence.ok !== false, status:evidence.ok === false ? 'CLOSE_WRITEBACK_PERSISTENT_EVIDENCE_FAILED' : 'CLOSE_WRITEBACK_PERSISTED', reason, monotonicClosedTrades:v10143PersistentClosedRows.length, canonicalOpen:canonicalOpenRows.length, persistentEvidenceStatus:evidence.status };
   } catch (e) { return { ok:false, status:'CLOSE_WRITEBACK_PERSIST_FAILED', error:textValue(e && e.message || e).slice(0,180), reason }; }
 }
 function v10138TestnetSafetyStatus() {
@@ -1585,15 +1932,24 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
       p.lastLivePrice = price; p.lastCheckedAt = Date.now(); p.lastCheckedAtIso = v10138NowIso(); p.lastTriggerStatus = trigger.reason;
       const proof = { key:v10138PendingKey(p), pair:p.pair, timeframe:p.timeframe, direction:p.direction, livePrice:price, entry:p.entry, zoneLow:p.zoneLow, zoneHigh:p.zoneHigh, status:trigger.reason, priceSource:priceProof.source, priceAt:priceProof.atIso };
       if (trigger.triggered) {
-        const trade = v10138BuildPaperTradeFromPending(p, priceProof);
-        if (trade && v10138AppendOpenTrade(trade)) { view.entryTriggersThisTick += 1; view.refillOpened += 1; proof.action = 'PENDING_ENTRY_TRIGGERED'; proof.tradeId = trade.tradeId; await v10138TestnetBridgeMaybeSend(trade, 'ENTRY', priceProof).then(x => { proof.testnetOrder = x; }).catch(() => null); }
-        else { proof.action = 'PENDING_ENTRY_BLOCKED_DUPLICATE_OR_INVALID'; view.blockReasons.PENDING_ENTRY_BLOCKED_DUPLICATE_OR_INVALID = (view.blockReasons.PENDING_ENTRY_BLOCKED_DUPLICATE_OR_INVALID||0)+1; }
+        const replay = v10149ReplayDecision(p, p, 'PENDING_ENTRY_TRIGGER');
+        proof.bootReplayDecision = replay.reason;
+        if (!replay.allow) {
+          proof.action = 'PENDING_ENTRY_BLOCKED_BOOT_REPLAY';
+          view.blockReasons[replay.reason] = (view.blockReasons[replay.reason]||0)+1;
+        } else {
+          if (replay.fingerprint) p.entryFingerprint = replay.fingerprint;
+          const trade = v10138BuildPaperTradeFromPending(p, priceProof);
+          if (trade && v10138AppendOpenTrade(trade)) { view.entryTriggersThisTick += 1; view.refillOpened += 1; proof.action = 'PENDING_ENTRY_TRIGGERED'; proof.tradeId = trade.tradeId; await v10138TestnetBridgeMaybeSend(trade, 'ENTRY', priceProof).then(x => { proof.testnetOrder = x; }).catch(() => null); }
+          else { proof.action = 'PENDING_ENTRY_BLOCKED_DUPLICATE_OR_INVALID'; view.blockReasons.PENDING_ENTRY_BLOCKED_DUPLICATE_OR_INVALID = (view.blockReasons.PENDING_ENTRY_BLOCKED_DUPLICATE_OR_INVALID||0)+1; }
+        }
       } else { stillPending.push(p); proof.action = 'PENDING_ENTRY_STILL_WAITING'; if (/MISSED_ZONE/.test(trigger.reason)) view.blockReasons.MISSED_ZONE_WINDOW_BETWEEN_POLLS = (view.blockReasons.MISSED_ZONE_WINDOW_BETWEEN_POLLS||0)+1; }
       if (view.pendingProof.length < 40) view.pendingProof.push(proof);
     } catch (e) { view.blockReasons.PENDING_ENTRY_SENTINEL_EXCEPTION = (view.blockReasons.PENDING_ENTRY_SENTINEL_EXCEPTION||0)+1; }
   }
   v10138PendingEntries = v10138DedupPendingEntries(stillPending);
   await v10138PersistPendingEntries('live-price-sentinel-post-tick').then(x => { view.pendingPersistStatus = x.status; }).catch(() => { view.pendingPersistStatus = 'PENDING_ENTRIES_PERSIST_FAILED'; });
+  if (view.entryTriggersThisTick > 0) await v10149PersistEvidenceLedger('live-price-sentinel-entry-open').catch(()=>null);
   view.pendingEntriesAfter = v10138PendingEntries.length;
   view.refillEligibleCandidates = view.watchedPendingEntries;
   if (!view.refillOpened) view.noRefillReason = view.watchedPendingEntries ? 'PENDING_ENTRIES_WAITING_FOR_LIVE_ENTRY_ZONE' : 'NO_PENDING_ENTRIES_AVAILABLE';
@@ -5825,6 +6181,7 @@ async function loadRecoveryState() {
 
 async function loadRecoverySeed() {
   if (!recoveryState) recoveryState = emptyRecoveryState();
+  if (V10149_CLEAN_START) { recoveryState.notes.push('Legacy recovery metrics intentionally skipped for clean start.'); return; }
   if (recoveryState.seed) return;
   try {
     const seed = JSON.parse(await fsp.readFile(RECOVERY_SEED_FILE, 'utf8'));
@@ -5886,7 +6243,7 @@ async function loadTradeVaultState() {
     tradeVaultState = emptyTradeVaultState();
   }
 
-  if (!tradeVaultState.lastNonZero) {
+  if (!tradeVaultState.lastNonZero && !V10149_CLEAN_START) {
     try {
       let seed = null;
       try {
@@ -8231,6 +8588,8 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
       const stop = direction === 'SHORT' ? entry + stopDistance : entry - stopDistance;
       const target = direction === 'SHORT' ? entry - stopDistance * rr : entry + stopDistance * rr;
       const riskPlanForPending = v10137ValidInitialRiskPlan(direction, entry, stop, target);
+      const replayDecision = v10149ReplayDecision(c, { key, pair, timeframe:tf, direction, strategy:textValue(c.strategy || c.stratName || c.name), entry, stop, target, signalCandleTime:v10149SignalCandleTime(c,c) }, 'SERVER_ENTRY_SCAN');
+      if (!replayDecision.allow) { addReject(replayDecision.reason, c, { entry, stop, target, direction, signalCandleTime:replayDecision.signalCandleTime, entryFingerprint:replayDecision.fingerprint }); continue; }
       if (current < zoneLow || current > zoneHigh) {
         const pendingResult = riskPlanForPending.ok ? v10138AddPendingEntry(c, { key, pair, timeframe:tf, strategy:textValue(c.strategy || c.stratName || c.name), exit:textValue(c.exit || c.exitName || ''), direction, entry, stop, target, initialStop:stop, initialTarget:target, initialRisk:riskPlanForPending.initialRisk, rMultiple:rr, currentPrice:current, zoneLow, zoneHigh }, 'OUTSIDE_ZONE_PENDING_ENTRY_WATCH') : { added:false, reason:'INVALID_PENDING_RISK_PLAN' };
         view.pendingEntriesQueued = (view.pendingEntriesQueued || 0) + (pendingResult.added ? 1 : 0);
@@ -8280,7 +8639,9 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
         exitManagement: { breakEvenAtTargetPct: 50, profitLockAtTargetPct: 75, lockStopToTargetPct: 50, mode:'AUTO_BREAKEVEN_AND_PROFIT_LOCK' },
         stopLogic: 'MOVE_STOP_TO_ENTRY_AT_50_AND_LOCK_50_PERCENT_TARGET_AT_75',
         zoneLow, zoneHigh,
-        atrAtOpen: Number.isFinite(atr) ? atr : null
+        atrAtOpen: Number.isFinite(atr) ? atr : null,
+        signalCandleTime: replayDecision.signalCandleTime || v10149SignalCandleTime(c,c),
+        entryFingerprint: replayDecision.fingerprint || v10149EntryFingerprint(c,{key,pair,timeframe:tf,direction,entry,stop,target})
       };
       if (!lastV948EntryEngineView || typeof lastV948EntryEngineView !== 'object') lastV948EntryEngineView = { openedTrades: [] };
       if (!Array.isArray(lastV948EntryEngineView.openedTrades)) lastV948EntryEngineView.openedTrades = [];
@@ -8290,7 +8651,9 @@ async function v1017cPaperEntryAuthorityBridge(healthTruth = {}, reason = 'v1017
       openedKeys.add(v1019OpenTradeDedupeKey(paperTrade));
       view.opened += 1;
       view.openedTrades = safeArray(view.openedTrades); view.openedTrades.push(paperTrade);
+      if (paperTrade.entryFingerprint) v10149RegisterFingerprint(paperTrade.entryFingerprint,{ tradeId:paperTrade.tradeId, pair, timeframe:tf, signalCandleTime:paperTrade.signalCandleTime, reason:'SERVER_AUTHORITY_DIRECT_OPEN' });
       try { lastTradeExport = buildTradeExport({ openTrades: safeArray(lastV948EntryEngineView.openedTrades), closedTrades: safeArray(lastTradeExport?.closedTrades) }); } catch (_) {}
+      v10149PersistEvidenceLedger('server-authority-direct-open').catch(()=>null);
       log(`v10.1.9 SERVER PAPER OPEN: ${pair} ${tf} ${direction} entry=${entry} stop=${stop} target=${target} rr=${rr} (paper-only)`);
     }
     finalOpenTrades = v1019MergeOpenTradeRows(existingOpenTradesBeforeScan, view.openedTrades);
@@ -8688,8 +9051,10 @@ function v10128BuildHealthLite(source = 'health-lite') {
     n(base?.paperEntryVisibility?.candidatesSeen || base?.paperEntryVisibilityCandidatesSeen, 0)
   );
   const forwardRunnerSync = v10132ForwardActivityView({ base, nativeRows, latchRows, paperEntrySeen, canonicalOpen: canonicalOpenCountLite });
+  const canonicalRejectedLite = Math.max(n(base.rejected,0), n(base.rejectedSignals,0), n(lastV948EntryEngineView?.rejected,0), n(lastV1017cPaperEntryAuthorityBridgeView?.rejected,0), n(lastV952RejectedAuditView?.totalRejected,0));
+  const evidenceViewLite = v10149EvidenceView();
   const healthLite = {
-    schema: 'alps.healthLite.v10148',
+    schema: 'alps.healthLite.v10149',
     version: FINAL_V930_VERSION,
     generatedAt: new Date().toISOString(),
     source,
@@ -8727,6 +9092,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     closedLedgerMissingHistoricalRows: closedLedgerAuthorityFieldsLite.closedLedgerMissingHistoricalRows,
     closedLedgerRegressionBlocked: closedLedgerAuthorityFieldsLite.closedLedgerRegressionBlocked,
     closedLedgerDroppedSinceLastReport: closedLedgerAuthorityFieldsLite.closedLedgerDroppedSinceLastReport,
+    closedLedgerSourceWindowDeficit: closedLedgerAuthorityFieldsLite.closedLedgerSourceWindowDeficit,
     closedLedgerStatsCompleteness: closedLedgerAuthorityFieldsLite.closedLedgerStatsCompleteness,
     closedLedgerAuthority: lastV10147ClosedLedgerAuthorityResult ? {
       schema: lastV10147ClosedLedgerAuthorityResult.schema,
@@ -8749,8 +9115,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
     staleCurrentHealthOpenAuditDelta: staleCurrentHealthOpenDeltaLite,
     duplicateOpenDelta: serverLedgerAuthorityLite ? 0 : Math.max(0, observedOpenSnapshot - canonicalOpenCountLite),
     canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST',
-    rejected: n(base.rejected,0),
-    rejectedSignals: n(base.rejectedSignals,0),
+    rejected: canonicalRejectedLite,
+    rejectedSignals: canonicalRejectedLite,
     appUrl: lastHealth?.appUrl || base.appUrl || '',
     appVersion: FINAL_V930_VERSION,
     reportTitle: `ALPS Operational Truth Report — ${FINAL_V930_VERSION}`,
@@ -8796,6 +9162,24 @@ function v10128BuildHealthLite(source = 'health-lite') {
     lastNonZeroChartCandles: safeArray(lastNonZeroChartView?.candles).length,
     v1018ServerPaperLifecycle: lastV1018LifecycleView || null,
     effectivePatchVersion: FINAL_V930_VERSION,
+    persistentEvidenceStatus: evidenceViewLite.status || '',
+    persistentEvidenceSafeForRedeploy: evidenceViewLite.safeForRedeploy === true,
+    persistentEvidenceDataDir: evidenceViewLite.dataDir || DATA_DIR,
+    persistentEvidenceOpenRows: evidenceViewLite.openRows || 0,
+    persistentEvidenceClosedRows: evidenceViewLite.closedRows || 0,
+    persistentEvidencePendingEntries: evidenceViewLite.pendingEntries || 0,
+    persistentEvidenceFingerprints: evidenceViewLite.entryFingerprints || 0,
+    bootReplayGuardStatus: lastV10149BootReplayGuardView.status,
+    v10149PersistentEvidenceLedger: evidenceViewLite,
+    v10149BootReplayGuard: lastV10149BootReplayGuardView,
+    v10149IntrabarTruthGuard: {
+      schema:'alps.intrabarTruthGuard.v10149', version:FINAL_V930_VERSION, installed:true,
+      status:n(lastV1018LifecycleView?.intrabarAmbiguousDeferred,0)>0?'AMBIGUOUS_INTRABAR_SEQUENCE_DEFERRED':'NO_UNRESOLVED_INTRABAR_AMBIGUITY_THIS_TICK',
+      ambiguousDeferred:n(lastV1018LifecycleView?.intrabarAmbiguousDeferred,0),
+      lookaheadBlocked:n(lastV1018LifecycleView?.intrabarLookaheadBlocked,0),
+      proof:safeArray(lastV1018LifecycleView?.intrabarAmbiguityProof).slice(0,20),
+      rule:'Stop/target order is never guessed from one OHLC candle. Trailing changes become effective only after the candle used to calculate them.'
+    },
     v10131ReportArtifactCurrentHealthPrune: {
       installed: true,
       purpose: 'Small circular-safe CORS live health payload for Netlify dashboards. Also keeps report artifacts aligned with canonical currentHealth and prunes duplicate summary rows.',
@@ -8851,8 +9235,8 @@ function v10128BuildHealthLite(source = 'health-lite') {
       schema: 'alps.finalHealthGate.v10138.liveLiteOverride',
       version: FINAL_V930_VERSION,
       installed: true,
-      status: ((lastV10143ClosedLedgerMonotonicGuardView?.status || '').startsWith('CRITICAL') || (v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0)) ? 'WARN' : (forwardRunnerSync.effectiveFwRunning && (canonicalOpenCountLite > 0 || publishedClosedTradesLite > 0) ? 'PASS' : 'WARN'),
-      nextRequiredAction: (lastV10143ClosedLedgerMonotonicGuardView?.status || '').startsWith('CRITICAL') ? 'REPAIR_CLOSED_LEDGER_PERSISTENCE' : ((v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0) ? 'RUN_POST_LEDGER_SENTINEL_SYNC' : (forwardRunnerSync.effectiveFwRunning && (canonicalOpenCountLite > 0 || publishedClosedTradesLite > 0) ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction)),
+      status: (!evidenceViewLite.safeForRedeploy || (lastV10143ClosedLedgerMonotonicGuardView?.status || '').startsWith('CRITICAL') || (v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0)) ? 'WARN' : (forwardRunnerSync.effectiveFwRunning && (canonicalOpenCountLite > 0 || publishedClosedTradesLite > 0) ? 'PASS' : 'WARN'),
+      nextRequiredAction: !evidenceViewLite.safeForRedeploy ? 'CONFIGURE_RENDER_PERSISTENT_DISK_BEFORE_NEXT_REDEPLOY' : ((lastV10143ClosedLedgerMonotonicGuardView?.status || '').startsWith('CRITICAL') ? 'REPAIR_CLOSED_LEDGER_PERSISTENCE' : ((v10140SentinelBindingGuardView().status !== 'SENTINEL_BOUND_TO_OPEN_LEDGER' && canonicalOpenCountLite > 0) ? 'RUN_POST_LEDGER_SENTINEL_SYNC' : (forwardRunnerSync.effectiveFwRunning && (canonicalOpenCountLite > 0 || publishedClosedTradesLite > 0) ? 'OBSERVE_TRADE_LIFECYCLE' : forwardRunnerSync.nextRequiredAction))),
       rule: 'Health-lite final gate trusts currentHealth authority: native pool/latch + paper entry/ledger proof means effective forward is active even if the raw browser flag is false.'
     }
   };
@@ -8861,7 +9245,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10148',
+    schema: 'alps.currentHealthLite.snapshot.v10149',
     version: FINAL_V930_VERSION,
     source,
     status: healthLite.status,
@@ -8902,6 +9286,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     uniqueClosedTrades: actualCanonicalClosedRowsLite,
     semanticDuplicateClosed: lastV10143ClosedLedgerMonotonicGuardView?.semanticDuplicateClosed || 0,
     closedLedgerDroppedSinceLastReport: healthLite.closedLedgerDroppedSinceLastReport,
+    closedLedgerSourceWindowDeficit: healthLite.closedLedgerSourceWindowDeficit,
     sentinelCanonicalOpenStatus: lastV10143StaleOpenPurgeGuardView?.status || '',
     observedPaperSignals: healthLite.observedPaperSignals,
     observedOpenPositions: healthLite.observedOpenPositions,
@@ -8909,6 +9294,20 @@ function v10128BuildHealthLite(source = 'health-lite') {
     staleCurrentHealthOpenDelta: healthLite.staleCurrentHealthOpenDelta || 0,
     canonicalOpenSource: healthLite.canonicalOpenSource,
     rejected: healthLite.rejected,
+    rejectedSignals: healthLite.rejectedSignals,
+    persistentEvidenceStatus: healthLite.persistentEvidenceStatus,
+    persistentEvidenceSafeForRedeploy: healthLite.persistentEvidenceSafeForRedeploy,
+    persistentEvidenceDataDir: healthLite.persistentEvidenceDataDir,
+    persistentEvidenceOpenRows: healthLite.persistentEvidenceOpenRows,
+    persistentEvidenceClosedRows: healthLite.persistentEvidenceClosedRows,
+    persistentEvidencePendingEntries: healthLite.persistentEvidencePendingEntries,
+    persistentEvidenceFingerprints: healthLite.persistentEvidenceFingerprints,
+    bootReplayGuardStatus: healthLite.bootReplayGuardStatus,
+    bootReplayBlockedConsumed: n(lastV10149BootReplayGuardView.blockedConsumed,0),
+    bootReplayBlockedStale: n(lastV10149BootReplayGuardView.blockedStaleBootBaseline,0),
+    intrabarAmbiguousDeferred: n(healthLite.v10149IntrabarTruthGuard?.ambiguousDeferred,0),
+    intrabarLookaheadBlocked: n(healthLite.v10149IntrabarTruthGuard?.lookaheadBlocked,0),
+    intrabarTruthStatus: healthLite.v10149IntrabarTruthGuard?.status || '',
     serverPaperLedgerOpen: healthLite.serverPaperLedger.openTrades,
     serverPaperLedgerClosed: healthLite.serverPaperLedger.closedTrades,
     paperLedgerStatus: healthLite.paperLedger.status,
@@ -10977,6 +11376,7 @@ async function v1018ServerPaperLifecycleTick() {
     priceChecks: 0, priceCheckSkips: 0, skippedLifecycleChecks: [],
     closeExecutionProof: [], stopTargetTouchProof: [], closeWritebackStatus: 'NO_CLOSE_TRIGGER_DETECTED',
     breakevenApplied: 0, profitLockApplied: 0,
+    intrabarAmbiguousDeferred: 0, intrabarLookaheadBlocked: 0, intrabarAmbiguityProof: [],
     closedThisTick: 0, closedTotal: safeArray(lastTradeExport?.closedTrades).length,
     lastError: '',
     rule: 'Break-even at 50% progress, profit-lock at 75%, close at stop/target from real prices. Real outcomes only.'
@@ -11058,30 +11458,53 @@ async function v1018ServerPaperLifecycleTick() {
         distanceToTarget: Number.isFinite(lastPrice) ? Number(Math.abs(target - lastPrice).toFixed(8)) : null,
         closeReasonPreview: '', closeWritebackStatus: 'NOT_CLOSED_THIS_TICK'
       };
-      // Break-even at 50% progress (only tightens the stop, never loosens):
-      if (progress >= 0.5 && !t.breakevenApplied) {
-        const newStop = t.entry;
-        if ((isShort && newStop < t.stop) || (!isShort && newStop > t.stop)) { t.stop = newStop; }
-        t.breakevenApplied = true; view.breakevenApplied += 1;
-      }
-      // Profit-lock at 75% progress — lock in half the original stop distance beyond entry:
-      if (progress >= 0.75 && !t.profitLockApplied) {
-        const lock = isShort ? t.entry - stopDist * 0.5 : t.entry + stopDist * 0.5;
-        if ((isShort && lock < t.stop) || (!isShort && lock > t.stop)) { t.stop = lock; }
-        t.profitLockApplied = true; view.profitLockApplied += 1;
-      }
-      // Close checks use the last CLOSED candle high/low, not only close price. Stop-first is conservative when both stop and target touched inside the same closed candle.
+      // v10.1.49 intrabar truth: evaluate the current CLOSED candle against the stop that was
+      // active BEFORE this candle. A stop moved from this candle's final close cannot be applied
+      // retroactively to the same candle. If stop and target were both touched and lower-timeframe
+      // order is unavailable, keep the paper trade open and mark the sequence ambiguous.
+      const stopBeforeTrail = activeStop;
+      const rangeStopBeforeTrail = isShort ? candleHigh >= stopBeforeTrail : candleLow <= stopBeforeTrail;
+      const rangeTargetBeforeTrail = isShort ? candleLow <= target : candleHigh >= target;
+      const intrabarAmbiguous = rangeStopBeforeTrail && rangeTargetBeforeTrail;
       let closeReason = '';
+      if (intrabarAmbiguous) {
+        proofRow.intrabarSequenceStatus = 'AMBIGUOUS_INTRABAR_SEQUENCE';
+        proofRow.closeWritebackStatus = 'DEFERRED_AWAITING_LIVE_OR_LOWER_TIMEFRAME_ORDER';
+        proofRow.closeReasonPreview = 'AMBIGUOUS_INTRABAR_SEQUENCE_DEFERRED';
+        if (textValue(t.lastAmbiguousCandleTime || '') !== textValue(priceProof?.candleTime || '')) {
+          view.intrabarAmbiguousDeferred += 1;
+          t.intrabarAmbiguousCount = n(t.intrabarAmbiguousCount,0) + 1;
+          t.lastAmbiguousCandleTime = priceProof?.candleTime || null;
+          t.lastIntrabarAmbiguityAt = new Date().toISOString();
+        }
+        if (view.intrabarAmbiguityProof.length < 20) view.intrabarAmbiguityProof.push({ ...proofRow, stopBeforeTrail, target, decision:'DEFER_NO_UNPROVEN_STOP_OR_TARGET_RESULT' });
+      } else if (rangeStopBeforeTrail) {
+        closeReason = t.breakevenApplied || t.profitLockApplied ? 'TRAILED_STOP_HIT' : 'STOP_HIT';
+      } else if (rangeTargetBeforeTrail) {
+        closeReason = 'TARGET_HIT';
+      }
+      // Apply trailing only for the NEXT observation after this candle survives without a proven exit.
+      if (!closeReason && !intrabarAmbiguous) {
+        if (progress >= 0.5 && !t.breakevenApplied) {
+          const newStop = t.entry;
+          if ((isShort && newStop < t.stop) || (!isShort && newStop > t.stop)) { t.stop = newStop; }
+          t.breakevenApplied = true; view.breakevenApplied += 1; view.intrabarLookaheadBlocked += 1;
+        }
+        if (progress >= 0.75 && !t.profitLockApplied) {
+          const lock = isShort ? t.entry - stopDist * 0.5 : t.entry + stopDist * 0.5;
+          if ((isShort && lock < t.stop) || (!isShort && lock > t.stop)) { t.stop = lock; }
+          t.profitLockApplied = true; view.profitLockApplied += 1; view.intrabarLookaheadBlocked += 1;
+        }
+      }
+      proofRow.stopBeforeTrail = stopBeforeTrail;
       proofRow.stopAfterTrail = t.stop;
       proofRow.rangeStopHitAfterTrail = isShort ? candleHigh >= t.stop : candleLow <= t.stop;
-      proofRow.rangeTargetHitAfterTrail = isShort ? candleLow <= t.target : candleHigh >= t.target;
+      proofRow.rangeTargetHitAfterTrail = rangeTargetBeforeTrail;
       proofRow.closeStopHitAfterTrail = isShort ? lastPrice >= t.stop : lastPrice <= t.stop;
-      proofRow.closeTargetHitAfterTrail = isShort ? lastPrice <= t.target : lastPrice >= t.target;
-      if (proofRow.rangeStopHitAfterTrail) closeReason = t.breakevenApplied || t.profitLockApplied ? 'TRAILED_STOP_HIT' : 'STOP_HIT';
-      else if (proofRow.rangeTargetHitAfterTrail) closeReason = 'TARGET_HIT';
-      proofRow.closeReasonPreview = closeReason || 'NO_STOP_TARGET_TOUCH_ON_CLOSED_CANDLE';
+      proofRow.closeTargetHitAfterTrail = isShort ? lastPrice <= target : lastPrice >= target;
+      if (!proofRow.closeReasonPreview) proofRow.closeReasonPreview = closeReason || 'NO_STOP_TARGET_TOUCH_ON_CLOSED_CANDLE';
       if (view.closeExecutionProof.length < 20) view.closeExecutionProof.push(proofRow);
-      if ((proofRow.rangeStopHitAfterTrail || proofRow.rangeTargetHitAfterTrail) && view.stopTargetTouchProof.length < 20) view.stopTargetTouchProof.push(proofRow);
+      if ((rangeStopBeforeTrail || rangeTargetBeforeTrail) && view.stopTargetTouchProof.length < 20) view.stopTargetTouchProof.push(proofRow);
       if (closeReason) {
         const exitPrice = closeReason === 'TARGET_HIT' ? t.target : t.stop;
         const resultFields = v10137CloseResultFields({ direction:t.direction, entry:t.entry, exitPrice, initialRisk:stopDist, closeReason });
@@ -11155,7 +11578,8 @@ async function v1018ServerPaperLifecycleTick() {
         for (const row of safeArray(lastTradeExport.closedTrades)) {
           if (!row.closeWritebackStatus) row.closeWritebackStatus = 'CLOSE_WRITEBACK_PERSISTED';
         }
-        view.closeWritebackStatus = 'CLOSE_WRITEBACK_PERSISTED';
+        const evidenceWrite = await v10149PersistEvidenceLedger('closed-candle-lifecycle-close');
+        view.closeWritebackStatus = evidenceWrite.ok === false ? 'CLOSE_WRITEBACK_PERSISTENT_EVIDENCE_FAILED' : 'CLOSE_WRITEBACK_PERSISTED';
       } catch (persistErr) { view.closeWritebackStatus = 'CLOSE_WRITEBACK_PERSIST_FAILED'; view.lastError = ('PERSIST_AFTER_CLOSE_FAILED: ' + textValue(persistErr.message)).slice(0, 160); }
     } catch (e) { view.lastError = textValue(e && e.message || e).slice(0, 160); }
   }
@@ -11164,6 +11588,7 @@ async function v1018ServerPaperLifecycleTick() {
   view.skippedLifecycleChecksJson = JSON.stringify(safeArray(view.skippedLifecycleChecks).slice(0, 20));
   view.closeExecutionProofJson = JSON.stringify(safeArray(view.closeExecutionProof).slice(0, 20));
   view.stopTargetTouchProofJson = JSON.stringify(safeArray(view.stopTargetTouchProof).slice(0, 20));
+  view.intrabarAmbiguityProofJson = JSON.stringify(safeArray(view.intrabarAmbiguityProof).slice(0, 20));
   lastV1018LifecycleView = view;
   return view;
 }
@@ -11483,7 +11908,7 @@ ${buildV952Markdown(report)}`;
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-autonomy.json'), JSON.stringify(report.alpsAutonomousBridge || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
   await v1014PersistRuntimeNonzeroSnapshot(report, 'collect-report-final').catch(() => null);
-  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView, chartTruth: report.chartTruth || lastChartView || null, v10115OperationalTruth: report.v10115OperationalTruth || lastV10115OperationalTruthView, v10115SymbolStatus: report.v10115SymbolStatus || lastV10115SymbolStatusView, v10115FeatureGateDiagnostics: report.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView, v10115UnifiedLayerLog: report.v10115UnifiedLayerLog || lastV10115LayerLogView, v10115DeferredEntryQueue: report.v10115DeferredEntryQueue || lastV10115DeferredEntryQueueView, v10115ChartTruthSync: report.v10115ChartTruthSync, v10117LedgerConsistency: report.v10117LedgerConsistency || lastHealth?.v10117LedgerConsistency, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView }, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView, chartTruth: report.chartTruth || lastChartView || null, v10115OperationalTruth: report.v10115OperationalTruth || lastV10115OperationalTruthView, v10115SymbolStatus: report.v10115SymbolStatus || lastV10115SymbolStatusView, v10115FeatureGateDiagnostics: report.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView, v10115UnifiedLayerLog: report.v10115UnifiedLayerLog || lastV10115LayerLogView, v10115DeferredEntryQueue: report.v10115DeferredEntryQueue || lastV10115DeferredEntryQueueView, v10115ChartTruthSync: report.v10115ChartTruthSync, v10117LedgerConsistency: report.v10117LedgerConsistency || lastHealth?.v10117LedgerConsistency, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10149PersistentEvidenceLedger:v10149EvidenceView(), v10149BootReplayGuard:lastV10149BootReplayGuardView, v10149IntrabarTruthGuard:{ ambiguousDeferred:n(lastV1018LifecycleView?.intrabarAmbiguousDeferred,0), lookaheadBlocked:n(lastV1018LifecycleView?.intrabarLookaheadBlocked,0), proof:safeArray(lastV1018LifecycleView?.intrabarAmbiguityProof).slice(0,20) } }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
@@ -11565,10 +11990,13 @@ async function maybeNotify(h) {
 async function main() {
   await ensureDirs();
   await loadRecoveryState();
+  await v10149LoadEvidenceLedger();
+  await v10149TryPreCutoverMigration();
   await v10148LoadSentinelRuntime();
   await v10147ReconcileClosedLedgerBeforePublish('startup-before-server-listen').catch(e => {
     lastHealth = { ...(lastHealth || {}), closedLedgerAuthorityStatus:'STARTUP_AUTHORITY_RECONCILE_FAILED', closedLedgerAuthorityError:textValue(e && e.message || e).slice(0,220) };
   });
+  await v10149PersistEvidenceLedger('startup-before-server-listen');
   await createServer();
   v10148StartSentinelLoop();
   const launched = await launchAppPage();
@@ -11593,6 +12021,7 @@ async function shutdown() {
   try { v10148StopSentinelLoop(); } catch (_) {}
   try { if (page && !page.isClosed()) await collectReport().catch(() => null); } catch (_) {}
   try { await saveRecoveryState(); } catch (_) {}
+  try { await v10149PersistEvidenceLedger('graceful-shutdown'); } catch (_) {}
   try { if (context) await context.close(); } catch (_) {}
   context = null;
   page = null;

@@ -6,7 +6,7 @@
  *
  * Scope:
  * - Paper-only ledger continuity.
- * - Never decreases the published closedTrades high-water mark.
+ * - Never decreases the published closedTrades high-water mark within the new clean evidence epoch.
  * - Never removes canonical closed-trade rows.
  * - Does not modify strategies, pairs, timeframes, entries, exits, or dashboard logic.
  * - Does not enable testnet or live-capital execution.
@@ -97,55 +97,17 @@ function preferRicherRow(a = {}, b = {}) {
   return score(b) > score(a) ? { ...a, ...b } : { ...b, ...a };
 }
 
-function semanticFallbackKey(row = {}) {
-  return [
-    'SEM',
-    normalizeUpper(row.pair || row.symbol || row.baseSymbol),
-    normalizeUpper(row.timeframe || row.tf),
-    normalizeUpper(row.direction || row.side),
-    normalizeUpper(row.strategy || row.stratName || row.setup || row.setupType),
-    roundKeyNumber(row.entry),
-    roundKeyNumber(row.exit || row.exitPrice),
-    normalizeCloseReason(row.closeReason || row.exitReason || row.reason),
-    normalizeText(row.openedAt || row.openTime || row.entryTime),
-    normalizeText(row.closedAt || row.closeTime || row.exitTime),
-  ].join('|');
-}
-
 function dedupeClosedRows(rows) {
-  const out = [];
-  const indexById = new Map();
-  const indexBySemantic = new Map();
+  const map = new Map();
   for (const raw of asArray(rows)) {
     if (!raw || typeof raw !== 'object') continue;
     const row = { ...raw, status: 'CLOSED' };
-    const tradeId = canonicalTradeId(row).toUpperCase();
-    const idKey = tradeId ? `ID|${tradeId}` : '';
-    const semanticKey = semanticFallbackKey(row);
-    if (!idKey && (!semanticKey || semanticKey === 'SEM||||||||||')) continue;
-
-    let index = idKey && indexById.has(idKey) ? indexById.get(idKey) : undefined;
-    if (index === undefined && semanticKey && indexBySemantic.has(semanticKey)) {
-      index = indexBySemantic.get(semanticKey);
-    }
-
-    if (index === undefined) {
-      index = out.length;
-      out.push(row);
-    } else {
-      out[index] = preferRicherRow(out[index], row);
-    }
-
-    if (idKey) indexById.set(idKey, index);
-    if (semanticKey) indexBySemantic.set(semanticKey, index);
-
-    const merged = out[index] || {};
-    const mergedId = canonicalTradeId(merged).toUpperCase();
-    const mergedSemantic = semanticFallbackKey(merged);
-    if (mergedId) indexById.set(`ID|${mergedId}`, index);
-    if (mergedSemantic) indexBySemantic.set(mergedSemantic, index);
+    const key = semanticClosedKey(row);
+    if (!key || key === 'SEM||||||||||') continue;
+    if (!map.has(key)) map.set(key, row);
+    else map.set(key, preferRicherRow(map.get(key), row));
   }
-  return out;
+  return [...map.values()];
 }
 
 function sha256(value) {
@@ -233,7 +195,7 @@ function createClosedLedgerAuthority(options = {}) {
     0,
     finiteNumber(
       options.seedFloor,
-      finiteNumber(process.env.ALPS_CLOSED_LEDGER_SEED_FLOOR, 78)
+      finiteNumber(process.env.ALPS_CLOSED_LEDGER_SEED_FLOOR, 0)
     )
   );
 

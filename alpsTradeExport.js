@@ -1,5 +1,5 @@
 /**
- * ALPS Runner Trade Export v1.2.3
+ * ALPS Runner Trade Export v1.2.2
  *
  * Exposes real ALPS paper-forward open/closed trades for ALPS reports, including Paper Entry openedTrades export sync and server-authority paper ledger source preservation.
  * This module does not change strategy logic and does not open live execution.
@@ -156,48 +156,24 @@ function normalizeClosedTrade(trade, index = 0) {
   };
 }
 
-function normalizeCloseReason(value) {
-  const raw = String(value || '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
-  if (raw === 'LIVE_TARGET_HIT') return 'TARGET_HIT';
-  if (raw === 'LIVE_STOP_HIT') return 'STOP_HIT';
-  if (raw === 'LIVE_TRAILED_STOP_HIT' || raw === 'TRAILING_STOP_HIT') return 'TRAILED_STOP_HIT';
-  return raw;
-}
-
 function dedupe(rows) {
+  const seen = new Set();
   const out = [];
-  const indexById = new Map();
-  const indexBySemantic = new Map();
   for (const row of rows) {
     if (!row) continue;
-    const tradeId = String(row.tradeId || '').trim().toUpperCase();
-    const idKey = tradeId ? `TRADEID|${tradeId}|${row.status || ''}` : '';
-    const semanticKey = [
-      'SEMANTIC',
+    const key = [
+      row.tradeId,
       row.pair,
       row.timeframe,
       row.direction,
       row.entry,
       row.exit || row.current || '',
-      row.result || '',
-      normalizeCloseReason(row.closeReason || row.exitReason || ''),
+      row.pnlPct || '',
       row.status
     ].join('|');
-
-    let index = idKey && indexById.has(idKey) ? indexById.get(idKey) : undefined;
-    if (index === undefined && semanticKey && indexBySemantic.has(semanticKey)) {
-      index = indexBySemantic.get(semanticKey);
-    }
-
-    if (index === undefined) {
-      index = out.length;
-      out.push(row);
-    } else {
-      out[index] = { ...out[index], ...row };
-    }
-
-    if (idKey) indexById.set(idKey, index);
-    if (semanticKey) indexBySemantic.set(semanticKey, index);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
   }
   return out;
 }

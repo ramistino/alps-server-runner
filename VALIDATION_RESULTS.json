@@ -1,30 +1,17 @@
 {
-  "build": "v10.1.47-closed-ledger-high-water-sentinel-rebind",
-  "syntax": {
-    "runner.js": "PASS",
-    "alpsTradeExport.js": "PASS",
-    "ALPS_closed_ledger_authority_v10147.js": "PASS"
-  },
-  "authoritySimulation": {
-    "66RowsPublishes": 78,
-    "54RowShrinkingSourceRetainsCanonical": 66,
-    "54RowShrinkingSourcePublishes": 78,
-    "80RowsPublishes": 80,
-    "restartWithEmptySourceRetains": 80
-  },
-  "deduplication": {
-    "sameTradeIdLiveAndClosedCandleAlias": "PASS_ONE_ROW",
-    "differentTradeIdSameSemanticTrade": "PASS_ONE_ROW"
-  },
-  "healthContract": {
-    "healthSchema": "alps.healthLite.v10147",
-    "currentHealthSchema": "alps.currentHealthLite.snapshot.v10147",
-    "highWaterFloor": 78,
-    "partialStatsDisclosure": "PASS"
-  },
-  "executionBoundary": {
-    "paperOnly": true,
-    "testnetEnabled": false,
-    "liveCapitalExecution": false
+  "schema": "alps.cleanStartValidation.v10149",
+  "version": "v10.1.49-clean-start-persistent-runtime",
+  "results": {
+    "nodeSyntaxRunner": "PASS",
+    "nodeSyntaxTradeExport": "PASS",
+    "nodeSyntaxClosedLedgerAuthority": "PASS",
+    "cleanStartFlagPresent": "PASS",
+    "legacyMigrationSkipped": "PASS",
+    "closedLedgerDefaultFloorZero": "PASS",
+    "authorityDefaultFloorZero": "PASS",
+    "emptyHistoricalSeed": "PASS",
+    "paperOnlyBoundary": "PASS",
+    "testnetExecution": "DISABLED",
+    "liveCapitalExecution": "DISABLED"
   }
 }
