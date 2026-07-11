@@ -380,7 +380,7 @@ let lastRecoveryForwardCoreView = null;
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.49-clean-start-persistent-runtime';
+const FINAL_V930_VERSION = 'v10.1.50-live-feature-materializer-truth';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -2216,43 +2216,32 @@ function v10115BuildSymbolStatus(currentHealth = {}, report = {}) {
 }
 
 function v10115BuildFeatureGateDiagnostics(materializer = lastV1017FeatureMaterializerView || {}) {
-  const groups = [];
-  groups.push(...safeArray(materializer.candleGroups));
-  groups.push(...safeArray(lastV1017FeatureMaterializerView?.candleGroups));
-  groups.push(...safeArray(lastV1012ServerCandleBootstrapView?.candleGroups));
-  groups.push(...safeArray(lastV10115IndexedDbCandleBankView?.groups));
-  if (lastChartView && safeArray(lastChartView.candles).length) groups.push({ pair:lastChartView.pair, timeframe:lastChartView.timeframe, rows:lastChartView.candles.length, source:lastChartView.source || 'chartTruth' });
-  const featureRows = Math.max(
-    safeArray(materializer.featureRows).length,
-    safeArray(lastV1017FeatureMaterializerView?.featureRows).length,
-    safeArray(lastV1012ServerCandleBootstrapView?.featureRows).length,
-    n(materializer.featureRowsFound, 0),
-    n(lastV1017FeatureMaterializerView?.featureRowsFound, 0),
-    n(lastV1012ServerCandleBootstrapView?.featureRowsFound, 0),
-    n(lastDiscoveryOutputView?.featureRowsFound, 0)
-  );
-  const byKey = new Map();
-  for (const g of groups) {
-    const pair = v10115CanonicalSymbol(g.pair || g.symbol || g.requestedSymbol || g.sourceSymbol || textValue(g.path || '').match(/(BTCUSDT|ETHUSDT|SOLUSDT|BNBUSDT|XRPUSDT|DOGEUSDT|XAUTUSDT|XAUUSDT|PAXGUSDT)/i)?.[1] || '');
-    const timeframe = textValue(g.timeframe || g.tf || textValue(g.path || '').match(/(5m|15m|30m|1h|4h)/i)?.[1] || '').toLowerCase();
-    const candleRows = n(g.rows || safeArray(g.candles).length || safeArray(g.rowsArray).length, 0);
-    if (!pair || !timeframe) continue;
-    const k = pair+'_'+timeframe;
-    const prev = byKey.get(k);
-    const row = { pair, timeframe, candleRows, source:g.path || g.source || g.sourceName || g.status || '', sourceSymbol:g.sourceSymbol || '', usedIndexedDb:/^indexedDB/i.test(textValue(g.path || g.source || '')) };
-    if (!prev || row.candleRows > prev.candleRows) byKey.set(k, row);
-  }
-  const rows = Array.from(byKey.values()).map(row => {
-    let status = 'NO_CANDLES';
-    if (row.candleRows >= 120 && featureRows > 0) status = 'FEATURES_READY_OR_GLOBAL';
-    else if (row.candleRows >= 120) status = 'NO_FEATURES_FOR_PAIRFRAME';
-    else if (row.candleRows > 0) status = 'INSUFFICIENT_CANDLES';
-    return { ...row, status, reason: status === 'NO_FEATURES_FOR_PAIRFRAME' ? 'Candles exist but feature builder did not emit rows for this pair/timeframe.' : '' };
-  }).sort((a,b)=>a.pair.localeCompare(b.pair) || a.timeframe.localeCompare(b.timeframe));
-  const candlesVisible = rows.some(x=>x.candleRows>0);
-  const view = { schema:'alps.v10115FeatureGateDiagnostics.view.v1', version: FINAL_V930_VERSION, installed:true, candlesVisible, pairFrameDiagnostics: rows.slice(0, 120), featureRowsFound: featureRows, closedCandlePairFrames: rows.filter(x=>x.candleRows>=120).length, status: featureRows > 0 ? 'FEATURE_ROWS_AVAILABLE' : (rows.some(x=>x.candleRows>=120) ? 'NOFEATURES_WITH_CANDLES_AVAILABLE' : 'WAITING_FOR_CANDLES'), rule:'Candles and feature generation are separated. v10.1.17 reads v1012 server candle groups and IndexedDB groups, so real candle visibility cannot report zero while feature rows exist.' };
+  const coverage = v10150FeatureCoverageSnapshot(materializer, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES);
+  const rows = safeArray(coverage.detail).map(x => ({
+    pair:x.pair, timeframe:x.timeframe, candleRows:x.candleRows,
+    featureReady:x.featureReady, fresh:x.fresh,
+    latestClosedCandleTs:x.latestClosedCandleTs,
+    ageMs:x.ageMs,
+    source:x.candleSource || x.featureSource || '',
+    status:x.fresh ? 'FEATURES_READY_FRESH' : (x.candleRows < 120 ? 'INSUFFICIENT_OR_MISSING_CANDLES' : (!x.featureReady ? 'NO_FEATURES_FOR_PAIRFRAME' : 'FEATURES_STALE')),
+    reason:x.fresh ? '' : (x.candleRows < 120 ? 'At least 120 real closed candles are required.' : (!x.featureReady ? 'Real candles exist but the feature builder did not emit a feature row.' : 'Feature/candle evidence is older than the timeframe freshness allowance.'))
+  }));
+  const candlesVisible = coverage.candlePairFrames > 0;
+  const status = coverage.complete ? 'FEATURE_ROWS_35_OF_35_READY' : (coverage.featurePairFrames > 0 ? 'PARTIAL_FEATURE_COVERAGE' : (candlesVisible ? 'NOFEATURES_WITH_CANDLES_AVAILABLE' : 'WAITING_FOR_CANDLES'));
+  const view = {
+    schema:'alps.v10115FeatureGateDiagnostics.view.v10150', version:FINAL_V930_VERSION, installed:true,
+    candlesVisible, pairFrameDiagnostics:rows, featureRowsFound:coverage.featureRowsFound,
+    featurePairFrames:coverage.featurePairFrames, freshFeaturePairFrames:coverage.freshFeaturePairFrames,
+    requiredFeaturePairFrames:coverage.requiredPairFrames, closedCandlePairFrames:coverage.candlePairFrames,
+    missingCandlePairFrames:coverage.missingCandlePairFrames,
+    missingFeaturePairFrames:coverage.missingFeaturePairFrames,
+    staleFeaturePairFrames:coverage.staleFeaturePairFrames,
+    featureDataFresh:coverage.complete, status,
+    candidateRowsDoNotSatisfyFeatureGate:true,
+    rule:'Feature readiness is based only on fresh real closed-candle feature rows for all 35 required pair-frames. Candidate/native/latch counts are reported separately and can never satisfy this gate.'
+  };
   lastV10115FeatureGateDiagnosticsView = view;
-  v10115LayerLog('featureGate', view.status, { featureRowsFound: view.featureRowsFound, pairFrames: rows.length, candlesVisible });
+  v10115LayerLog('featureGate', view.status, { featureRowsFound:view.featureRowsFound, featurePairFrames:view.featurePairFrames, freshFeaturePairFrames:view.freshFeaturePairFrames, requiredFeaturePairFrames:view.requiredFeaturePairFrames, pairFrames:rows.length, candlesVisible });
   return view;
 }
 
@@ -7513,7 +7502,7 @@ function enhanceHealth(h = {}) {
   out.syntheticIndicatorEngine = out.indicatorResearch;
   out.runnerWatchdog = lastRunnerWatchdogView || buildRunnerWatchdogView(out);
   out = v1000ApplyStateAuthorityToView(out, 'enhance-health-output');
-  return v953HealthTruthFromCurrentHealth(out, 'enhance-health');
+  return v10150ApplyFeatureRuntimeTruth(v953HealthTruthFromCurrentHealth(out, 'enhance-health'));
 }
 
 function bootProgressSignature(h = {}) {
@@ -8188,6 +8177,160 @@ async function v1015HealthMarketDataBootstrap(healthTruth = {}, reason = 'health
 }
 
 
+
+// v10.1.50 — Live Feature Materializer Truth
+// Candidate rows, forward-latch rows, and feature rows are different layers. Existing candidates must
+// never satisfy or skip the live feature gate. Readiness requires fresh closed-candle features for every
+// configured pair/timeframe (7 pairs × 5 frames = 35 pair-frames in the current ALPS universe).
+const V10150_REQUIRED_SYMBOLS = Object.freeze(['BTCUSDT','ETHUSDT','SOLUSDT','BNBUSDT','XRPUSDT','DOGEUSDT','XAUTUSDT']);
+const V10150_REQUIRED_FRAMES = Object.freeze(['5m','15m','30m','1h','4h']);
+function v10150PairFrameKey(pair, timeframe) {
+  const p = v10115CanonicalSymbol(pair || '');
+  const tf = textValue(timeframe || '').toLowerCase();
+  if (!V10150_REQUIRED_SYMBOLS.includes(p) || !V10150_REQUIRED_FRAMES.includes(tf)) return '';
+  return `${p}|${tf}`;
+}
+function v10150AllowedFeatureAgeMs(timeframe) {
+  const tfMs = v1012TfMs(timeframe);
+  return Math.max(20 * 60 * 1000, tfMs * 3);
+}
+function v10150FeatureCoverageSnapshot(materializer = {}, symbols = V10150_REQUIRED_SYMBOLS, frames = V10150_REQUIRED_FRAMES, options = {}) {
+  const includeLast = options.includeLast !== false;
+  const requiredSymbols = [...new Set(safeArray(symbols).map(v10115CanonicalSymbol).filter(x => V10150_REQUIRED_SYMBOLS.includes(x)))];
+  const finalSymbols = requiredSymbols.length ? requiredSymbols : [...V10150_REQUIRED_SYMBOLS];
+  const requiredFrames = [...new Set(safeArray(frames).map(x => textValue(x).toLowerCase()).filter(x => V10150_REQUIRED_FRAMES.includes(x)))];
+  const finalFrames = requiredFrames.length ? requiredFrames : [...V10150_REQUIRED_FRAMES];
+  const requiredKeys = [];
+  for (const pair of finalSymbols) for (const timeframe of finalFrames) requiredKeys.push(v10150PairFrameKey(pair, timeframe));
+  const requiredSet = new Set(requiredKeys.filter(Boolean));
+  const views = [materializer || {}];
+  if (includeLast) {
+    if (lastV1017FeatureMaterializerView && lastV1017FeatureMaterializerView !== materializer) views.push(lastV1017FeatureMaterializerView);
+    if (lastV1012ServerCandleBootstrapView && lastV1012ServerCandleBootstrapView !== materializer) views.push(lastV1012ServerCandleBootstrapView);
+  }
+  const candleByKey = new Map();
+  const featureByKey = new Map();
+  let featureRowCount = 0;
+  for (const view of views) {
+    for (const g of safeArray(view?.candleGroups)) {
+      const pair = g?.pair || g?.requestedSymbol || g?.symbol || g?.sourceSymbol || '';
+      const timeframe = g?.timeframe || g?.tf || '';
+      const key = v10150PairFrameKey(pair, timeframe);
+      if (!key || !requiredSet.has(key)) continue;
+      const rawRows = Array.isArray(g?.rows) ? g.rows.length : n(g?.rows || safeArray(g?.candles).length || safeArray(g?.rowsArray).length, 0);
+      const latest = Math.max(n(g?.latestClosedCandleTs, 0), n(g?.latestCandleTs, 0), n(g?.time, 0), n((safeArray(g?.candles).slice(-1)[0] || {})?.t, 0));
+      const prev = candleByKey.get(key);
+      if (!prev || rawRows > prev.rows || (rawRows === prev.rows && latest > prev.latestClosedCandleTs)) {
+        candleByKey.set(key, { key, pair:v10115CanonicalSymbol(pair), timeframe:textValue(timeframe).toLowerCase(), rows:rawRows, latestClosedCandleTs:latest, source:g?.sourceName || g?.source || g?.path || g?.status || '' });
+      }
+    }
+    for (const f of safeArray(view?.featureRows)) {
+      featureRowCount += 1;
+      const pair = f?.pair || f?.symbol || f?.baseSymbol || textValue(f?.__alpsV1017Source || '').split('_')[0] || '';
+      const timeframe = f?.timeframe || f?.tf || textValue(f?.__alpsV1017Source || '').split('_')[1] || '';
+      const key = v10150PairFrameKey(pair, timeframe);
+      if (!key || !requiredSet.has(key)) continue;
+      const latest = Math.max(n(f?.time, 0), n(f?.latestClosedCandleTs, 0), n(f?.closedCandleTime, 0));
+      const prev = featureByKey.get(key);
+      if (!prev || latest >= prev.latestClosedCandleTs) featureByKey.set(key, { key, pair:v10115CanonicalSymbol(pair), timeframe:textValue(timeframe).toLowerCase(), latestClosedCandleTs:latest, source:f?.__alpsV1017Source || f?.__alpsV1012Source || f?.source || 'featureRows' });
+    }
+  }
+  const now = Date.now();
+  const detail = requiredKeys.filter(Boolean).map(key => {
+    const [pair, timeframe] = key.split('|');
+    const candle = candleByKey.get(key) || null;
+    const feature = featureByKey.get(key) || null;
+    const latestClosedCandleTs = Math.max(n(candle?.latestClosedCandleTs,0), n(feature?.latestClosedCandleTs,0));
+    const ageMs = latestClosedCandleTs > 0 ? Math.max(0, now - latestClosedCandleTs) : null;
+    const candlesReady = n(candle?.rows,0) >= 120;
+    const featureReady = !!feature;
+    const fresh = candlesReady && featureReady && latestClosedCandleTs > 0 && latestClosedCandleTs <= now && ageMs <= v10150AllowedFeatureAgeMs(timeframe);
+    return { key, pair, timeframe, candleRows:n(candle?.rows,0), featureReady, latestClosedCandleTs:latestClosedCandleTs || null, ageMs, fresh, candleSource:candle?.source || '', featureSource:feature?.source || '' };
+  });
+  const candlePairFrames = detail.filter(x => x.candleRows >= 120).length;
+  const featurePairFrames = detail.filter(x => x.featureReady).length;
+  const freshFeaturePairFrames = detail.filter(x => x.fresh).length;
+  const missingCandlePairFrames = detail.filter(x => x.candleRows < 120).map(x => x.key);
+  const missingFeaturePairFrames = detail.filter(x => !x.featureReady).map(x => x.key);
+  const staleFeaturePairFrames = detail.filter(x => x.candleRows >= 120 && x.featureReady && !x.fresh).map(x => x.key);
+  const latestClosedCandleTs = detail.reduce((mx,x) => Math.max(mx,n(x.latestClosedCandleTs,0)),0) || null;
+  const totalCandleRows = detail.reduce((sum,x) => sum + n(x.candleRows,0),0);
+  const requiredPairFrames = detail.length;
+  const complete = requiredPairFrames > 0 && freshFeaturePairFrames === requiredPairFrames;
+  return {
+    schema:'alps.featureCoverageTruth.v10150', version:FINAL_V930_VERSION, requiredSymbols:finalSymbols, requiredFrames:finalFrames,
+    requiredPairFrames, candlePairFrames, featurePairFrames, freshFeaturePairFrames,
+    featureRowsFound:featurePairFrames, featureRowCount, totalCandleRows, latestClosedCandleTs,
+    missingCandlePairFrames, missingFeaturePairFrames, staleFeaturePairFrames,
+    complete, featureDataFresh:complete,
+    status: complete ? 'FEATURE_COVERAGE_COMPLETE_35_OF_35' : (featurePairFrames > 0 ? 'FEATURE_COVERAGE_PARTIAL' : 'FEATURE_ROWS_MISSING'),
+    detail
+  };
+}
+function v10150ShouldRunFeatureMaterializer(healthTruth = {}, materializer = lastV1017FeatureMaterializerView || {}) {
+  const coverage = v10150FeatureCoverageSnapshot(materializer, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES);
+  return { shouldRun: !coverage.complete, coverage, candidateRowsIgnoredForFeatureGate: Math.max(n(healthTruth?.candidates,0), n(healthTruth?.officialCandidates,0), n(healthTruth?.nativeForwardPool?.totalCandidates,0), n(healthTruth?.forwardLatch?.size,0), safeArray(v1000ActiveRows()).length) };
+}
+function v10150ApplyFeatureRuntimeTruth(view = {}, materializerOverride = null, options = {}) {
+  const out = { ...(view || {}) };
+  const materializer = materializerOverride || out.v1017FeatureMaterializer || lastV1017FeatureMaterializerView || {};
+  const coverage = v10150FeatureCoverageSnapshot(materializer, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES, { includeLast: options.includeLast !== false });
+  const candidateRows = Math.max(n(out.candidates,0), n(out.officialCandidates,0), n(out?.nativeForwardPool?.totalCandidates,0), n(out?.forwardLatch?.size,0), safeArray(v1000ActiveRows()).length);
+  const effectiveForward = !!(out.fwRunning || out.effectiveFwRunning || candidateRows > 0);
+  const hasMaterializerEvidence = !!materializerOverride || coverage.featurePairFrames > 0 || /FEATURE|MATERIALIZER|CANDLE/i.test(textValue(materializer?.status || ''));
+  const ready = coverage.complete && candidateRows > 0;
+  out.featureRowsFound = coverage.featureRowsFound;
+  out.featurePairFrames = coverage.featurePairFrames;
+  out.freshFeaturePairFrames = coverage.freshFeaturePairFrames;
+  out.requiredFeaturePairFrames = coverage.requiredPairFrames;
+  out.featureCoverageStatus = coverage.status;
+  out.featureDataFresh = coverage.featureDataFresh;
+  out.missingFeaturePairFrames = coverage.missingFeaturePairFrames;
+  out.staleFeaturePairFrames = coverage.staleFeaturePairFrames;
+  out.dataPairFrames = Math.max(n(out.dataPairFrames,0), coverage.candlePairFrames);
+  out.v10150FeatureRuntimeTruth = {
+    ...coverage,
+    candidateRows,
+    candidateRowsDoNotSatisfyFeatureGate:true,
+    engineReady:ready,
+    labRunning:ready && effectiveForward,
+    source:'REAL_CLOSED_CANDLE_FEATURE_COVERAGE_ONLY',
+    rule:'Candidate/native/latch rows never satisfy the feature gate. engineReady and labRunning require fresh real closed-candle feature coverage across all 35 pair-frames.'
+  };
+  if (hasMaterializerEvidence) {
+    out.engineReady = ready;
+    out.labRunning = ready && effectiveForward;
+    if (out.labRunning) out.status = 'LAB_RUNNING';
+    else if (textValue(out.status).toUpperCase() === 'LAB_RUNNING') out.status = 'LOADED';
+  }
+  return out;
+}
+function v10150RunSelfTest() {
+  const now = Date.now();
+  const groups = [];
+  const features = [];
+  for (const pair of V10150_REQUIRED_SYMBOLS) {
+    for (const timeframe of V10150_REQUIRED_FRAMES) {
+      const tfMs = v1012TfMs(timeframe);
+      groups.push({ pair, timeframe, rows:700, latestClosedCandleTs:now - Math.max(tfMs, 60_000), source:'SELFTEST_REAL_CLOSED_CANDLES' });
+      features.push({ pair, timeframe, time:now - Math.max(tfMs, 60_000), source:'SELFTEST_FEATURE' });
+    }
+  }
+  const candidateOnly = v10150FeatureCoverageSnapshot({ candleGroups:[], featureRows:[], candidates:1784 }, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES, { includeLast:false });
+  const complete = v10150FeatureCoverageSnapshot({ candleGroups:groups, featureRows:features }, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES, { includeLast:false });
+  const partial = v10150FeatureCoverageSnapshot({ candleGroups:groups.slice(0,34), featureRows:features.slice(0,34) }, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES, { includeLast:false });
+  const applied = v10150ApplyFeatureRuntimeTruth({ candidates:1784, officialCandidates:1784, fwRunning:true, status:'LOADED' }, { candleGroups:groups, featureRows:features, status:'SELFTEST' }, { includeLast:false });
+  const results = {
+    candidateRowsDoNotCountAsFeatures: candidateOnly.featurePairFrames === 0 && candidateOnly.complete === false,
+    completeCoverageIs35: complete.requiredPairFrames === 35 && complete.featurePairFrames === 35 && complete.freshFeaturePairFrames === 35 && complete.complete === true,
+    partialCoverageDoesNotPass: partial.complete === false && partial.featurePairFrames === 34,
+    fullCoveragePromotesRuntimeTruth: applied.engineReady === true && applied.labRunning === true && applied.status === 'LAB_RUNNING',
+    testnetExecutionDisabled: !V10138_TESTNET_EXECUTION_ENABLED,
+    liveCapitalExecutionDisabled: true
+  };
+  return { schema:'alps.featureMaterializerSelfTest.v10150', version:FINAL_V930_VERSION, pass:Object.values(results).every(Boolean), results, completeCoverage:complete };
+}
+
 // v10.1.7 Feature Materializer + Candle Visibility Bridge:
 // Current failure mode: data/proxy may show real candles, but discovery/feature builders see zero feature rows.
 // This bridge does not fake candles, OOS, strategies, or trades. It uses only real candle arrays from the page
@@ -8227,17 +8370,42 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
     rule: 'If real candles are visible but feature/discovery rows are zero, collect real closed candles, build real feature rows, commit real candle-derived candidates to State Authority/nativeForwardPool/ForwardLatch, then let Paper Entry scan them. No fabricated rows.'
   };
   try {
-    const existingRows = Math.max(out.before.candidates, out.before.nativePoolRows, out.before.latchRows, out.before.authorityRows);
-    if (existingRows > 0) {
-      out.status = 'SKIPPED_ROWS_ALREADY_AVAILABLE';
-      out.after = { candidates: existingRows, nativePoolRows: out.before.nativePoolRows, latchRows: out.before.latchRows, authorityRows: out.before.authorityRows };
+    const featureDecision = v10150ShouldRunFeatureMaterializer(healthTruth, lastV1017FeatureMaterializerView || {});
+    out.beforeFeatureCoverage = featureDecision.coverage;
+    out.candidateRowsIgnoredForFeatureGate = featureDecision.candidateRowsIgnoredForFeatureGate;
+    out.requiredSymbols = [...V10150_REQUIRED_SYMBOLS];
+    out.requiredFrames = [...V10150_REQUIRED_FRAMES];
+    out.requiredPairFrames = featureDecision.coverage.requiredPairFrames;
+    if (!featureDecision.shouldRun) {
+      const completedEvidence = lastV1017FeatureMaterializerView || lastV1012ServerCandleBootstrapView || {};
+      out.candleGroups = safeArray(completedEvidence.candleGroups);
+      out.featureRows = safeArray(completedEvidence.featureRows);
+      out.rows = safeArray(completedEvidence.rows);
+      out.sourcesUsed = safeArray(completedEvidence.sourcesUsed);
+      out.status = 'SKIPPED_FEATURE_COVERAGE_ALREADY_COMPLETE';
+      out.featureRowsFound = featureDecision.coverage.featureRowsFound;
+      out.featurePairFrames = featureDecision.coverage.featurePairFrames;
+      out.freshFeaturePairFrames = featureDecision.coverage.freshFeaturePairFrames;
+      out.closedCandlePairFrames = featureDecision.coverage.candlePairFrames;
+      out.featureDataFresh = true;
+      out.after = { candidates:out.before.candidates, nativePoolRows:out.before.nativePoolRows, latchRows:out.before.latchRows, authorityRows:out.before.authorityRows, featurePairFrames:out.featurePairFrames, requiredPairFrames:out.requiredPairFrames };
       out.finishedAt = new Date().toISOString();
       out.completedAt = out.finishedAt;
-      out.skipReason = 'currentHealth/nativeForwardPool/forwardLatch already contain rows; FeatureMaterializer is not required for this tick.';
+      out.skipReason = 'Fresh real closed-candle features already cover every required pair/timeframe. Candidate rows were not used as feature evidence.';
       healthTruth.v1017FeatureMaterializer = out;
+      Object.assign(healthTruth, v10150ApplyFeatureRuntimeTruth(healthTruth, lastV1017FeatureMaterializerView || out));
       lastV1017FeatureMaterializerView = out;
-      v10115LayerLog('featureGate', out.status, { existingRows });
+      v10115LayerLog('featureGate', out.status, { featureRowsFound:out.featureRowsFound, featurePairFrames:out.featurePairFrames, requiredPairFrames:out.requiredPairFrames, candidateRowsIgnored:out.candidateRowsIgnoredForFeatureGate });
       return out;
+    }
+
+    // Carry forward any still-valid partial feature evidence so only missing/stale pair-frames are fetched.
+    const priorMaterializerEvidence = lastV1017FeatureMaterializerView || {};
+    if (safeArray(priorMaterializerEvidence.candleGroups).length || safeArray(priorMaterializerEvidence.featureRows).length) {
+      out.candleGroups.push(...safeArray(priorMaterializerEvidence.candleGroups));
+      out.featureRows.push(...safeArray(priorMaterializerEvidence.featureRows));
+      out.rows.push(...safeArray(priorMaterializerEvidence.rows));
+      out.sourcesUsed.push('previous.v1017FeatureMaterializerEvidence');
     }
 
     // v10.1.15: IndexedDB is the first candle truth source. If IndexedDB has candles,
@@ -8267,7 +8435,7 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
 
     // First fallback: the in-page real candle collector because it reads runtime globals/localStorage/page caches.
     let pageMaterializer = null;
-    if (!out.rows.length && page && !page.isClosed()) {
+    if (page && !page.isClosed()) {
       pageMaterializer = await v1016WithTimeout(v951CollectRealCandleDiscoveryMaterializer(reason + '-page-real-candle-scan'), 18000, 'V1017_PAGE_CANDLE_SCAN_TIMEOUT').catch(e => ({ status:'PAGE_SCAN_FAILED_OR_TIMED_OUT', error:textValue(e && e.message || e), rows:[], featureRows:[], candleStores:[] }));
       out.pageMaterializerStatus = pageMaterializer?.status || '';
       out.pageMaterializerRows = safeArray(pageMaterializer?.rows).length;
@@ -8280,11 +8448,12 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
         out.candleGroups.push(...safeArray(pageMaterializer.candleStores).map(g => ({ ...g, source:'page.realCandleDiscovery' })));
       }
     } else {
-      out.pageMaterializerStatus = out.rows.length ? 'SKIPPED_INDEXEDDB_ROWS_ALREADY_MATERIALIZED' : 'PAGE_NOT_READY_SKIPPED';
+      out.pageMaterializerStatus = 'PAGE_NOT_READY_SKIPPED';
     }
 
-    // If page stores did not expose feature rows, fetch real closed candles directly and materialize features.
-    if (!out.rows.length) {
+    // Fetch every still-missing or stale feature pair-frame directly from real market data.
+    // A partial page/IndexedDB result must not suppress the remaining universe.
+    {
       const seedReport = {
         ...(lastReport || {}),
         ...(lastHealth || {}),
@@ -8295,11 +8464,20 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
           ...(healthTruth?.settings || {})
         }
       };
-      const symbols = v1012RequestedSymbols(seedReport);
-      const frames = ['5m','15m','30m','1h','4h'];
+      const symbols = [...V10150_REQUIRED_SYMBOLS];
+      const frames = [...V10150_REQUIRED_FRAMES];
+      const localCoverage = v10150FeatureCoverageSnapshot(out, symbols, frames, { includeLast:false });
+      const requiredRefresh = new Set([
+        ...safeArray(localCoverage.missingCandlePairFrames),
+        ...safeArray(localCoverage.missingFeaturePairFrames),
+        ...safeArray(localCoverage.staleFeaturePairFrames)
+      ]);
       const tasks = [];
-      for (const symbol of symbols) for (const tf of frames) tasks.push({ symbol, tf });
-      out.fastFetchRequested = { symbols, frames, taskCount: tasks.length };
+      for (const symbol of symbols) for (const tf of frames) {
+        const key = v10150PairFrameKey(symbol, tf);
+        if (requiredRefresh.has(key)) tasks.push({ symbol, tf, key });
+      }
+      out.fastFetchRequested = { symbols, frames, taskCount:tasks.length, missingBeforeFetch:[...requiredRefresh], localFeaturePairFrames:localCoverage.featurePairFrames, localFreshFeaturePairFrames:localCoverage.freshFeaturePairFrames };
 
       async function v1017FetchFastKlines(symbol, tf, limit = 700) {
         const src = v1014SourceSymbolFor(symbol);
@@ -8365,12 +8543,30 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
     const unique = new Map();
     for (const r of out.rows) { const k = uniqueKeyFromCandidate(r) || r.key; if (k && !unique.has(k)) unique.set(k, r); }
     out.rows = Array.from(unique.values()).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0, FINAL_V930_TECHNICAL_CAP);
-    out.featureRows = out.featureRows.slice(0, 800);
-    out.realCandleRowsCollected = safeArray(out.candleGroups).reduce((acc,g)=>acc + v952Num(g.rows), 0);
-    out.latestClosedCandleTs = safeArray(out.candleGroups).reduce((mx,g)=>Math.max(mx, v952Num(g.latestClosedCandleTs)), 0) || null;
-    out.canonicalPairFrames = safeArray(out.candleGroups).filter(g=>v952Num(g.rows)>=120).length;
-    out.closedCandlePairFrames = out.canonicalPairFrames;
+    const featureUnique = new Map();
+    for (const f of safeArray(out.featureRows)) {
+      const key = v10150PairFrameKey(f?.pair || f?.symbol || f?.baseSymbol || textValue(f?.__alpsV1017Source || '').split('_')[0], f?.timeframe || f?.tf || textValue(f?.__alpsV1017Source || '').split('_')[1]);
+      if (!key) continue;
+      const prev = featureUnique.get(key);
+      if (!prev || Math.max(n(f?.time,0),n(f?.latestClosedCandleTs,0)) >= Math.max(n(prev?.time,0),n(prev?.latestClosedCandleTs,0))) featureUnique.set(key, f);
+    }
+    out.featureRows = Array.from(featureUnique.values());
+    const finalCoverage = v10150FeatureCoverageSnapshot(out, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES, { includeLast:false });
+    out.featureCoverage = finalCoverage;
+    out.realCandleRowsCollected = finalCoverage.totalCandleRows;
+    out.latestClosedCandleTs = finalCoverage.latestClosedCandleTs;
+    out.canonicalPairFrames = finalCoverage.candlePairFrames;
+    out.closedCandlePairFrames = finalCoverage.candlePairFrames;
     out.featureRowsBuilt = out.featureRows.length;
+    out.featureRowsFound = finalCoverage.featureRowsFound;
+    out.featurePairFrames = finalCoverage.featurePairFrames;
+    out.freshFeaturePairFrames = finalCoverage.freshFeaturePairFrames;
+    out.requiredPairFrames = finalCoverage.requiredPairFrames;
+    out.missingCandlePairFrames = finalCoverage.missingCandlePairFrames;
+    out.missingFeaturePairFrames = finalCoverage.missingFeaturePairFrames;
+    out.staleFeaturePairFrames = finalCoverage.staleFeaturePairFrames;
+    out.featureDataFresh = finalCoverage.complete;
+    out.featureCoverageStatus = finalCoverage.status;
     out.discoveryRowsAfter = out.rows.length;
     out.candidateRowsAfter = out.rows.length;
 
@@ -8384,7 +8580,7 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
       lastDiscoveryOutputView = {
         schema:'alps.discoveryOutput.view.v1', version:FINAL_V930_VERSION, reason:reason+'-feature-materialized', pageReady:!!(page && !page.isClosed()), startedAt:Date.now(), finishedAt:Date.now(), durationMs:0,
         functionsInvoked:['v1017FeatureMaterializerCandleVisibilityBridge'], functionResults:[{ name:'v1017FeatureMaterializerCandleVisibilityBridge', exists:true, type:'array', returnedRows:out.rows.length, timedOut:false }], errors:[], rows:out.rows.slice(0, FINAL_V930_TECHNICAL_CAP),
-        featureRowsFound:out.featureRows.length, strategyTemplatesFound:5, rawSetupRows:out.rows.length, testedRows:out.rows.length, rejectedRows:0, candlesVisibleToReport:true, candlesVisibleToDiscovery:true,
+        featureRowsFound:out.featureRowsFound, featurePairFrames:out.featurePairFrames, freshFeaturePairFrames:out.freshFeaturePairFrames, requiredFeaturePairFrames:out.requiredPairFrames, featureCoverageStatus:out.featureCoverageStatus, strategyTemplatesFound:5, rawSetupRows:out.rows.length, testedRows:out.rows.length, rejectedRows:0, candlesVisibleToReport:true, candlesVisibleToDiscovery:true,
         status:'V1017_FEATURE_ROWS_AND_CANDIDATES_MATERIALIZED_FROM_REAL_CANDLES'
       };
       const map = {};
@@ -8409,18 +8605,33 @@ async function v1017FeatureMaterializerCandleVisibilityBridge(healthTruth = {}, 
       healthTruth.dataSource = 'LIVE SNAPSHOT - V1017 REAL CANDLE FEATURE MATERIALIZED';
       healthTruth.candlesLoaded = Math.max(v952Num(healthTruth.candlesLoaded), out.realCandleRowsCollected);
       healthTruth.dataPairFrames = Math.max(v952Num(healthTruth.dataPairFrames), out.closedCandlePairFrames);
+      healthTruth.featureRowsFound = out.featureRowsFound;
+      healthTruth.featurePairFrames = out.featurePairFrames;
+      healthTruth.requiredFeaturePairFrames = out.requiredPairFrames;
+      healthTruth.featureDataFresh = out.featureDataFresh;
+      healthTruth.featureCoverageStatus = out.featureCoverageStatus;
       healthTruth.latestClosedCandleTs = out.latestClosedCandleTs || healthTruth.latestClosedCandleTs || null;
       healthTruth.v952CurrentHealthSync = { schema:'alps.v952CurrentHealthSync.view.v1', version:FINAL_V930_VERSION, installed:true, status:'V1017_FEATURE_MATERIALIZER_CANDIDATES_VISIBLE', currentHealthCandidates:healthTruth.candidates, currentHealthOfficialCandidates:healthTruth.officialCandidates, currentHealthResults:healthTruth.results, syncedCandidates:healthTruth.candidates, syncedResults:healthTruth.results, fwRunning:!!healthTruth.fwRunning, fwRefreshRunning:!!healthTruth.fwRefreshRunning, sourceCounts:{ v1017FeatureMaterializer:out.rows.length }, noFixedCandidateCap:true, rule:'v10.1.7 converts only real closed candle data into candidate rows when page discovery cannot see features.' };
       healthTruth.v952CandidateBridge = { schema:'alps.v952CandidateBridge.view.v1', version:FINAL_V930_VERSION, installed:true, status:'V1017_FEATURE_MATERIALIZER_ROWS_BRIDGED_TO_FORWARD_LATCH', nativeCandidates:v952Num(lastNativeForwardPoolView.totalCandidates), latchedCandidates:v952Num(lastForwardLatchView.size), added:out.rows.length, updated:0, noFixedCandidateCap:true, rule:'Every real current candidate is bridged into ForwardLatch and Paper Entry; no fixed candidate count is used as a blocker.' };
       healthTruth.candidateCountTruth = { schema:'alps.candidateCountTruth.view.v1', version:FINAL_V930_VERSION, installed:true, rawStrategies:healthTruth.results, dashboardCandidates:healthTruth.candidates, officialCandidates:healthTruth.officialCandidates, nativePoolCandidates:v952Num(lastNativeForwardPoolView.totalCandidates), compressedCandidates:0, rawRowsBeforeCompression:out.rows.length, latchedCandidates:v952Num(lastForwardLatchView.size), paperEntryVisibleCandidates:0, serverNativeCandidatesAvailable:v952Num(lastNativeForwardPoolView.totalCandidates), recoveryEligibleCandidates:out.rows.length, oosVerifiedCandidates:0, experimentalForwardCandidates:v952Num(lastNativeForwardPoolView.experimentalForward), paperOpened:v952Num(healthTruth.paperSignals), noFixedCandidateCap:true, namingWarning:'Verified/OOS candidates are separate from Experimental Learning candidates. No fixed candidate number is used as an acceptance blocker.', recommendedLabels:['rawStrategies','nativePoolCandidates','latchedCandidates','paperEligibleCandidates','paperOpened','paperRejected','experimentalLearningCandidates'] };
-      out.status = 'FEATURES_AND_CANDIDATES_COMMITTED_TO_STATE_AUTHORITY';
+      out.status = out.featureDataFresh ? 'FEATURES_35_OF_35_AND_CANDIDATES_COMMITTED_TO_STATE_AUTHORITY' : 'PARTIAL_FEATURE_COVERAGE_CANDIDATES_COMMITTED';
     } else if (out.realCandleRowsCollected <= 0) {
       out.status = 'NO_REAL_CANDLES_AVAILABLE';
     } else if (out.featureRowsBuilt <= 0) {
       out.status = 'CANDLES_FOUND_FEATURE_BUILDER_NOT_CONNECTED';
+    } else if (out.featureDataFresh) {
+      out.status = 'FEATURES_35_OF_35_READY_NO_NEW_CANDIDATES_THIS_CYCLE';
     } else {
-      out.status = 'FEATURES_BUILT_DISCOVERY_ZERO_ROWS';
+      out.status = 'FEATURES_BUILT_PARTIAL_COVERAGE_DISCOVERY_ZERO_ROWS';
     }
+    healthTruth.v1017FeatureMaterializer = out;
+    Object.assign(healthTruth, v10150ApplyFeatureRuntimeTruth(healthTruth, out, { includeLast:false }));
+    healthTruth.featureMaterializerStatus = out.status;
+    healthTruth.featureRowsFound = out.featureRowsFound;
+    healthTruth.featurePairFrames = out.featurePairFrames;
+    healthTruth.requiredFeaturePairFrames = out.requiredPairFrames;
+    healthTruth.featureDataFresh = out.featureDataFresh;
+    v10115LayerLog('featureGate', out.featureCoverageStatus, { featureRowsFound:out.featureRowsFound, featurePairFrames:out.featurePairFrames, freshFeaturePairFrames:out.freshFeaturePairFrames, requiredPairFrames:out.requiredPairFrames, missingFeaturePairFrames:safeArray(out.missingFeaturePairFrames).length, candidateRowsIgnored:out.candidateRowsIgnoredForFeatureGate });
   } catch (e) {
     out.status = 'FAILED';
     out.error = textValue(e && e.message || e).slice(0, 300);
@@ -8954,15 +9165,20 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
   v1016HealthBackgroundRecoveryState = { status: 'QUEUED', runs: (v1016HealthBackgroundRecoveryState.runs || 0) + 1, queuedAt, startedAt: null, finishedAt: null, lastError: '' };
   const seed = { ...(seedHealthTruth || {}) };
   const runningView = { schema:'alps.v1017FeatureMaterializer.view.v1', version: FINAL_V930_VERSION, installed:true, status:'QUEUED_WAITING_BACKGROUND_WORKER', queuedAt, startedAt:null, finishedAt:null, attempts:[], sourcesUsed:[], paperOnly:true, liveCapitalExecution:false, rule:'v10.1.7c keeps the real background worker and adds a non-blocking Paper Entry authority bridge/batch scan.' };
-  seed.v1017FeatureMaterializer = runningView;
-  lastV1017FeatureMaterializerView = runningView;
-  lastHealth = { ...(lastHealth || {}), v1017FeatureMaterializer: runningView, effectivePatchVersion: FINAL_V930_VERSION };
+  const previousFeatureMaterializerView = lastV1017FeatureMaterializerView;
+  const previousFeatureCoverage = v10150FeatureCoverageSnapshot(previousFeatureMaterializerView || {}, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES);
+  seed.v1017FeatureMaterializer = previousFeatureMaterializerView || runningView;
+  // Never erase completed/partial feature evidence merely to publish a QUEUED marker.
+  if (!previousFeatureMaterializerView || previousFeatureCoverage.featurePairFrames === 0) lastV1017FeatureMaterializerView = runningView;
+  lastHealth = { ...(lastHealth || {}), v1017FeatureMaterializer: lastV1017FeatureMaterializerView || runningView, v10150FeatureMaterializerBackground:runningView, effectivePatchVersion: FINAL_V930_VERSION };
   setTimeout(async () => {
     try {
       const startedAt = new Date().toISOString();
       v1016HealthBackgroundRecoveryState = { ...v1016HealthBackgroundRecoveryState, status: 'RUNNING', startedAt };
-      lastV1017FeatureMaterializerView = { ...runningView, status:'RUNNING_BACKGROUND_WORKER', startedAt };
-      lastHealth = { ...(lastHealth || {}), v1017FeatureMaterializer:lastV1017FeatureMaterializerView, effectivePatchVersion: FINAL_V930_VERSION };
+      const runningBackgroundView = { ...runningView, status:'RUNNING_BACKGROUND_WORKER', startedAt };
+      const retainedCoverage = v10150FeatureCoverageSnapshot(lastV1017FeatureMaterializerView || {}, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES);
+      if (!lastV1017FeatureMaterializerView || retainedCoverage.featurePairFrames === 0) lastV1017FeatureMaterializerView = runningBackgroundView;
+      lastHealth = { ...(lastHealth || {}), v1017FeatureMaterializer:lastV1017FeatureMaterializerView, v10150FeatureMaterializerBackground:runningBackgroundView, effectivePatchVersion: FINAL_V930_VERSION };
       await v1016WithTimeout(v1017FeatureMaterializerCandleVisibilityBridge(seed, reason + '-v1017-feature-materializer'), 90000, 'V1017_FEATURE_MATERIALIZER_BACKGROUND_TIMEOUT').catch(e => {
         seed.v1017FeatureMaterializer = v1016TimeoutView('alps.v1017FeatureMaterializer.view.v1', 'BACKGROUND_FAILED_OR_TIMED_OUT', e && e.message || e, { queuedAt, startedAt, finishedAt:new Date().toISOString(), attempts:safeArray(seed?.v1017FeatureMaterializer?.attempts), sourcesUsed:safeArray(seed?.v1017FeatureMaterializer?.sourcesUsed) });
         lastV1017FeatureMaterializerView = seed.v1017FeatureMaterializer;
@@ -8981,7 +9197,7 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
       });
       const finishedAt = new Date().toISOString();
       v1016HealthBackgroundRecoveryState = { ...v1016HealthBackgroundRecoveryState, status: 'COMPLETED_OR_RECORDED', finishedAt, lastError: '' };
-      lastHealth = {
+      lastHealth = v10150ApplyFeatureRuntimeTruth({
         ...(lastHealth || {}),
         ...(seed || {}),
         effectivePatchVersion: FINAL_V930_VERSION,
@@ -8996,7 +9212,7 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
           paperOnly: true,
           liveCapitalExecution: false
         }
-      };
+      });
     } catch (e) {
       const finishedAt = new Date().toISOString();
       v1016HealthBackgroundRecoveryState = { ...v1016HealthBackgroundRecoveryState, status: 'FAILED', finishedAt, lastError: textValue(e && e.message || e).slice(0,240) };
@@ -9016,7 +9232,7 @@ function v1016QueueHealthEndpointRecovery(seedHealthTruth = {}, reason = 'health
 
 
 function v10128BuildHealthLite(source = 'health-lite') {
-  const base = v953HealthTruthFromCurrentHealth(lastHealth || {}, source) || {};
+  const base = v10150ApplyFeatureRuntimeTruth(v953HealthTruthFromCurrentHealth(lastHealth || {}, source) || {});
   v10143SyncClosedLedgerSync(source + '-before-health-lite', lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const canonicalOpenRows = v10143PurgeStaleOpenViews(source + '-canonical-open').canonicalOpenRows;
   const exportCountsRaw = tradeExportCounts(lastTradeExport || {});
@@ -9069,6 +9285,16 @@ function v10128BuildHealthLite(source = 'health-lite') {
     forwardLatchSize: latchRows,
     paperEntryVisibilityCandidatesSeen: paperEntrySeen,
     forwardRunnerSync,
+    featureMaterializerStatus: base.featureMaterializerStatus || lastV1017FeatureMaterializerView?.status || '',
+    featureRowsFound: n(base.featureRowsFound,0),
+    featurePairFrames: n(base.featurePairFrames,0),
+    freshFeaturePairFrames: n(base.freshFeaturePairFrames,0),
+    requiredFeaturePairFrames: n(base.requiredFeaturePairFrames,35),
+    featureCoverageStatus: base.featureCoverageStatus || '',
+    featureDataFresh: base.featureDataFresh === true,
+    missingFeaturePairFrames: safeArray(base.missingFeaturePairFrames),
+    staleFeaturePairFrames: safeArray(base.staleFeaturePairFrames),
+    v10150FeatureRuntimeTruth: base.v10150FeatureRuntimeTruth || null,
     paperSignals: canonicalOpenCountLite,
     openPositions: canonicalOpenCountLite,
     closedTrades: publishedClosedTradesLite,
@@ -9416,10 +9642,11 @@ async function createServer() {
         await loadAutonomyState();
         await loadAutonomyMemoryState();
         await v1016WithTimeout(maybeRecoverStuckBoot(lastHealth || {}, { source: 'health-endpoint-action-executor' }), 2500, 'HEALTH_WATCHDOG_TIMEOUT').catch(e => log('Runner watchdog health action skipped/timeout:', e.message));
-        let healthTruth = v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send');
+        let healthTruth = v10150ApplyFeatureRuntimeTruth(v953HealthTruthFromCurrentHealth(lastHealth || {}, 'health-endpoint-before-send'));
         const healthBackgroundQueue = v1016QueueHealthEndpointRecovery(healthTruth, 'health-endpoint-fast-response-background-recovery');
-        const v10117RowsReadyForFastPath = Math.max(n(healthTruth.candidates,0), n(healthTruth.officialCandidates,0), n(healthTruth?.nativeForwardPool?.totalCandidates,0), n(healthTruth?.forwardLatch?.size,0), n(lastV1017FeatureMaterializerView?.after?.nativePoolRows,0), n(lastV1012ServerCandleBootstrapView?.materializedRows,0)) > 0;
-        healthTruth.v1016HealthFastResponseGuard = { schema:'alps.v1016HealthFastResponseGuard.view.v1', version: FINAL_V930_VERSION, installed:true, status: v10117RowsReadyForFastPath ? 'SKIPPED_ROWS_ALREADY_AVAILABLE_FAST_PATH_BACKGROUND_RESYNC' : (healthBackgroundQueue.queued ? 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_QUEUED' : 'FAST_RESPONSE_RETURNED_BACKGROUND_RECOVERY_' + healthBackgroundQueue.reason), dataReady: v10117RowsReadyForFastPath, backgroundResyncQueued: !!healthBackgroundQueue.queued, queue: healthBackgroundQueue, rule:'/runner/health does not block on Chromium, Market Data Vision, or Paper Entry rescan. When rows already exist, health reports FAST_PATH and queues only a background resync.', paperOnly:true, liveCapitalExecution:false };
+        const v10150HealthFeatureCoverage = v10150FeatureCoverageSnapshot(lastV1017FeatureMaterializerView || healthTruth.v1017FeatureMaterializer || {}, V10150_REQUIRED_SYMBOLS, V10150_REQUIRED_FRAMES);
+        const v10117RowsReadyForFastPath = v10150HealthFeatureCoverage.complete;
+        healthTruth.v1016HealthFastResponseGuard = { schema:'alps.v1016HealthFastResponseGuard.view.v10150', version: FINAL_V930_VERSION, installed:true, status: v10117RowsReadyForFastPath ? 'FEATURE_COVERAGE_35_OF_35_FAST_PATH_BACKGROUND_REFRESH' : (healthBackgroundQueue.queued ? 'FAST_RESPONSE_RETURNED_FEATURE_MATERIALIZER_QUEUED' : 'FAST_RESPONSE_RETURNED_FEATURE_MATERIALIZER_' + healthBackgroundQueue.reason), dataReady: v10117RowsReadyForFastPath, featureRowsReady:v10150HealthFeatureCoverage.featurePairFrames, freshFeaturePairFrames:v10150HealthFeatureCoverage.freshFeaturePairFrames, requiredFeaturePairFrames:v10150HealthFeatureCoverage.requiredPairFrames, candidateRowsIgnoredForFeatureGate:true, backgroundResyncQueued: !!healthBackgroundQueue.queued, queue: healthBackgroundQueue, rule:'/runner/health never blocks on feature recovery. Candidate/native/latch rows do not satisfy the feature fast path; only fresh 35/35 real closed-candle feature coverage does.', paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1017FeatureMaterializer) healthTruth.v1017FeatureMaterializer = lastV1017FeatureMaterializerView || { schema:'alps.v1017FeatureMaterializer.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), queuedAt: healthBackgroundQueue?.state?.queuedAt || null, startedAt: healthBackgroundQueue?.state?.startedAt || null, finishedAt: healthBackgroundQueue?.state?.finishedAt || null, attempts:[], sourcesUsed:[], paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1015HealthMarketDataBootstrap) healthTruth.v1015HealthMarketDataBootstrap = { schema:'alps.v1015HealthMarketDataBootstrap.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
         if (!healthTruth.v1016HealthPaperEntryRescan) healthTruth.v1016HealthPaperEntryRescan = { schema:'alps.v1016HealthPaperEntryRescan.view.v1', version: FINAL_V930_VERSION, installed:true, status: healthBackgroundQueue.queued ? 'QUEUED_WAITING_BACKGROUND_WORKER' : ('BACKGROUND_' + healthBackgroundQueue.reason), paperOnly:true, liveCapitalExecution:false };
@@ -12028,8 +12255,14 @@ async function shutdown() {
   process.exit(0);
 }
 
-main().catch(err => {
-  const info = errorInfo(err);
-  console.error('Fatal ALPS runner boot error:', JSON.stringify(info, null, 2));
-  process.exit(1);
-});
+if (String(process.env.ALPS_V10150_SELFTEST || '') === '1') {
+  const selfTest = v10150RunSelfTest();
+  console.log(JSON.stringify(selfTest, null, 2));
+  process.exit(selfTest.pass ? 0 : 1);
+} else {
+  main().catch(err => {
+    const info = errorInfo(err);
+    console.error('Fatal ALPS runner boot error:', JSON.stringify(info, null, 2));
+    process.exit(1);
+  });
+}
