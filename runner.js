@@ -14,7 +14,7 @@ function log(...args) {
 
 async function main() {
   const config = loadConfig();
-  log(`[v10.2.0] starting final unified runtime version=${config.version}`);
+  log(`[v10.2.0] starting final operational authority version=${config.version}`);
 
   const adapter = new BrowserEngineAdapter(config, log);
   const featureEngine = new ServerFeatureEngine({ config, log });
@@ -55,7 +55,7 @@ async function main() {
   featureEngine.start();
   orchestrator.start();
 
-  // Liveness is available immediately. Operational workers are independent:
+  // Liveness is available immediately. Operational authority workers are independent:
   // fast health cannot be blocked by heavy evidence or recovery commands.
   adapter.waitUntilReady()
     .then(() => orchestrator.bootstrap('initial-adapter-ready'))
