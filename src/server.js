@@ -54,7 +54,7 @@ class PublicServer {
     const adapter = this.adapter.status();
     const runtime = this.orchestrator.runtimeView();
     return {
-      schema:'alps.v10200.processLiveness.v2',
+      schema:'alps.v10200.processLiveness.v3',
       version:this.config.version,
       effectivePatchVersion:this.config.version,
       status:'PROCESS_ALIVE',
@@ -82,10 +82,10 @@ class PublicServer {
     const live = this.orchestrator.compactLive();
     const metrics = live.metrics || {};
     return {
-      schema:'alps.v10200.compatibilityHealth.v2',
+      schema:'alps.v10200.compatibilityHealth.v3',
       version:this.config.version,
       generatedAt:live.generatedAt,
-      sourceOfTruth:'v10.2.0-final-unified-runtime',
+      sourceOfTruth:'v10.2.0-final-operational-authority',
       status:live.status,
       engineReady:Boolean(live.layers && live.layers.process && live.layers.process.ready),
       labRunning:live.labRunning,
@@ -121,7 +121,7 @@ class PublicServer {
     const state = this.orchestrator.snapshot(`route:${pathname}`);
     const map = {
       '/runner/features': () => ({
-        schema:'alps.v10200.features.v2',
+        schema:'alps.v10200.features.v3',
         version:this.config.version,
         generatedAt:state.generatedAt,
         layers:{
@@ -142,7 +142,7 @@ class PublicServer {
         },
       }),
       '/runner/candidates': () => ({
-        schema:'alps.v10200.candidates.v2',
+        schema:'alps.v10200.candidates.v3',
         version:this.config.version,
         generatedAt:state.generatedAt,
         layer:state.layers.candidatePipeline,
@@ -151,9 +151,11 @@ class PublicServer {
         visibilityAudit:state.candidateVisibilityAudit || null,
         sourceAuthority:this.orchestrator.raw.candidateAuthority || null,
         nativePoolFetch:this.orchestrator.runtime.sources.nativePool || null,
+        candidateCohort:state.candidateCohort || null,
+        autonomyAuthority:state.autonomyAuthority || null,
       }),
       '/runner/lifecycle': () => ({
-        schema:'alps.v10200.lifecycle.v2',
+        schema:'alps.v10200.lifecycle.v3',
         version:this.config.version,
         generatedAt:state.generatedAt,
         layers:{
@@ -164,7 +166,7 @@ class PublicServer {
         lifecycle:state.lifecycle,
       }),
       '/runner/learning': () => ({
-        schema:'alps.v10200.learning.v2',
+        schema:'alps.v10200.learning.v3',
         version:this.config.version,
         generatedAt:state.generatedAt,
         layer:state.layers.learning,
@@ -173,15 +175,31 @@ class PublicServer {
         familyAdjustedStats:state.familyAdjustedStats,
       }),
       '/runner/ledger-stats': () => ({
-        schema:'alps.v10200.ledgerStats.v2',
+        schema:'alps.v10200.ledgerStats.v3',
         version:this.config.version,
         generatedAt:state.generatedAt,
         rawLedgerStats:state.metrics.rawLedgerStats,
         familyAdjustedStats:state.familyAdjustedStats,
         rule:'Family-adjusted current-epoch statistics are the performance authority. Raw ledger statistics remain audit-only.',
       }),
+
+      '/runner/candidate-cohort': () => ({
+        schema:'alps.v10200.candidateCohortView.v1',
+        version:this.config.version,
+        generatedAt:state.generatedAt,
+        candidateCohort:state.candidateCohort,
+        gate:state.gates.candidateAccounting,
+      }),
+      '/runner/autonomy': () => ({
+        schema:'alps.v10200.autonomyView.v1',
+        version:this.config.version,
+        generatedAt:state.generatedAt,
+        autonomyAuthority:state.autonomyAuthority,
+        gate:state.gates.autonomy,
+        execution:state.execution,
+      }),
       '/runner/adapter': () => ({
-        schema:'alps.v10200.adapterStatus.v2',
+        schema:'alps.v10200.adapterStatus.v3',
         version:this.config.version,
         generatedAt:state.generatedAt,
         adapter:this.adapter.status(),

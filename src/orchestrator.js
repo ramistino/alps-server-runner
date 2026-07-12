@@ -4,6 +4,8 @@ const { deriveFreshness } = require('./freshness');
 const { buildCandidateAccounting } = require('./candidate-accounting');
 const { buildFamilyAdjustedStats } = require('./family-stats');
 const { auditCandidateVisibility } = require('./candidate-visibility-auditor');
+const { StrategyHeartbeat } = require('./strategy-heartbeat');
+const { CandidateCohortTracker } = require('./candidate-cohort-tracker');
 const {
   asArray, asObject, bool, finite, iso, round, summarizeError, text, timestamp,
 } = require('./utils');
@@ -15,6 +17,8 @@ class UnifiedOrchestrator {
     this.client = adapter.client;
     this.featureEngine = featureEngine;
     this.log = log;
+    this.strategyHeartbeat = new StrategyHeartbeat();
+    this.candidateCohortTracker = new CandidateCohortTracker({ config, log });
 
     this.fastTimer = null;
     this.heavyTimer = null;
@@ -81,7 +85,7 @@ class UnifiedOrchestrator {
 
   emptyState() {
     return {
-      schema:'alps.v10200.unifiedState.v2',
+      schema:'alps.v10200.unifiedState.v3',
       version:this.config.version,
       generatedAt:iso(),
       status:'BOOTING',
@@ -132,8 +136,8 @@ class UnifiedOrchestrator {
     this.recoveryTimer.unref();
 
     setImmediate(() => this.fastPoll('startup').catch(()=>{}));
-    setImmediate(() => this.heavyPoll('startup').catch(()=>{}));
-    setTimeout(() => this.recoveryTick('startup').catch(()=>{}), 5_000).unref();
+    setTimeout(() => this.heavyPoll('startup-after-fast-health').catch(()=>{}), 12_000).unref();
+    setTimeout(() => this.recoveryTick('startup').catch(()=>{}), 8_000).unref();
   }
 
   stop() {
@@ -203,7 +207,15 @@ class UnifiedOrchestrator {
       ]);
 
       if (versionResult.ok) this.raw.version = versionResult.data;
-      if (liveResult.ok) this.raw.live = liveResult.data;
+      if (liveResult.ok) {
+        this.raw.live = liveResult.data;
+        this.strategyHeartbeat.observe(liveResult.data, Date.now());
+        this.candidateCohortTracker.observe({
+          live:liveResult.data,
+          candidateAuthority:this.raw.candidateAuthority,
+          now:Date.now(),
+        });
+      }
 
       this.runtime.fast.sequence += 1;
       this.runtime.fast.lastCompletedAt = iso();
@@ -227,6 +239,10 @@ class UnifiedOrchestrator {
   }
 
   async heavyPoll(reason = 'manual') {
+    if (!this.runtime.fast.lastSuccessAt || !this.adapter.status().running) {
+      this.runtime.heavy.lastError = null;
+      return this.snapshot('heavy-poll-skipped-waiting-for-fast-health');
+    }
     if (this.heavyPolling) return this.snapshot('heavy-poll-already-running');
     this.heavyPolling = true;
     this.runtime.heavy.inFlight = true;
@@ -410,6 +426,8 @@ class UnifiedOrchestrator {
     const learning = asObject(live.adaptiveEvidenceLearning || current.adaptiveEvidenceLearning);
     const serverFeatures = this.featureEngine ? this.featureEngine.view(now) : null;
     const adapterStatus = this.adapter.status();
+    const strategyHeartbeat = this.strategyHeartbeat.view();
+    const candidateCohort = this.candidateCohortTracker.view();
 
     const candidateVisibilityAudit = auditCandidateVisibility({
       nativeView:this.raw.nativePool,
@@ -430,6 +448,8 @@ class UnifiedOrchestrator {
         versionLastSuccessAt:this.runtime.sources.version && this.runtime.sources.version.lastSuccessAt,
       },
       adapterStatus,
+      strategyHeartbeat,
+      candidateCohort,
       now,
       config:this.config,
     });
@@ -438,6 +458,7 @@ class UnifiedOrchestrator {
       live,
       candidateAuthority:this.raw.candidateAuthority,
       candidateVisibilityAudit,
+      candidateCohort,
     });
     const familyAdjustedStats = buildFamilyAdjustedStats({
       trades:this.raw.trades,
@@ -459,22 +480,31 @@ class UnifiedOrchestrator {
       layers.candidatePipeline.fresh
     );
     const candidateAccountingPass = Boolean(candidateAccounting.pass);
-    const autonomyPass = Boolean(
-      researchPass &&
-      candidateAccounting.fullAutonomy.active &&
-      candidateAccounting.fullAutonomy.eligible > 0
-    );
     const chartPass = Boolean(layers.chart.fresh);
     const learningPass = Boolean(
       layers.learning.fresh &&
       familyAdjustedStats.independentFamilies > 0
     );
+    const autonomyAuthority = this.deriveAutonomyAuthority({
+      layers,
+      candidateAccounting,
+      familyAdjustedStats,
+      paperLifecyclePass,
+      researchPass,
+      learningPass,
+      chartPass,
+      live,
+      current,
+    });
+    candidateAccounting.fullAutonomy = autonomyAuthority;
+    const autonomyPass = Boolean(autonomyAuthority.pass);
     const overallPass = Boolean(
       paperLifecyclePass &&
       researchPass &&
       candidateAccountingPass &&
       learningPass &&
-      chartPass
+      chartPass &&
+      autonomyPass
     );
 
     const gates = {
@@ -495,6 +525,9 @@ class UnifiedOrchestrator {
         paperVisibilityStatus:candidateAccounting.transitions.paperVisibilityStatus,
         paperVisibilityComparableCohort:candidateAccounting.transitions.paperVisibilityComparableCohort,
         paperVisibilityObservationDelta:candidateAccounting.transitions.paperVisibilityObservationDelta,
+        cohortStatus:candidateAccounting.cohort && candidateAccounting.cohort.status,
+        persistentGapConfirmed:Boolean(candidateAccounting.cohort && candidateAccounting.cohort.persistentGapConfirmed),
+        transientGap:candidateAccounting.transitions.discoveryToLatchTransient,
       },
       learning:{
         status:learningPass?'PASS':'WARN',
@@ -502,7 +535,11 @@ class UnifiedOrchestrator {
         independentFamilies:familyAdjustedStats.independentFamilies,
         authority:familyAdjustedStats.source,
       },
-      autonomy:{ status:autonomyPass?'PASS':'INACTIVE', pass:autonomyPass },
+      autonomy:{
+        status:autonomyPass?'PASS':'INACTIVE',
+        pass:autonomyPass,
+        authority:autonomyAuthority,
+      },
       chart:{ status:chartPass?'PASS':'WARN', pass:chartPass },
       overall:{
         status:overallPass?'PASS':'WARN',
@@ -551,7 +588,7 @@ class UnifiedOrchestrator {
     };
 
     return {
-      schema:'alps.v10200.unifiedState.v2',
+      schema:'alps.v10200.unifiedState.v3',
       version:this.config.version,
       generatedAt:iso(now),
       reason,
@@ -570,6 +607,9 @@ class UnifiedOrchestrator {
       gates,
       metrics,
       candidateAccounting,
+      candidateCohort,
+      strategyHeartbeat,
+      autonomyAuthority,
       candidateVisibilityAudit,
       serverFeatures,
       familyAdjustedStats,
@@ -618,6 +658,68 @@ class UnifiedOrchestrator {
     };
   }
 
+  deriveAutonomyAuthority({
+    layers,
+    candidateAccounting,
+    familyAdjustedStats,
+    paperLifecyclePass,
+    researchPass,
+    learningPass,
+    chartPass,
+    live,
+    current,
+  }) {
+    const candidates = Math.max(0, finite(live.candidates, 0));
+    const nativePool = Math.max(0, finite(live.nativePoolCandidates, 0));
+    const latch = Math.max(0, finite(live.forwardLatchSize, 0));
+    const engineHookActive = Boolean(layers.strategyEngine && layers.strategyEngine.fresh);
+    const nativePoolOverrideApplied = Boolean(
+      candidateAccounting.pass &&
+      candidates > 0 &&
+      nativePool > 0 &&
+      latch > 0 &&
+      nativePool <= candidates &&
+      latch <= nativePool
+    );
+    const softPriorityLearningActive = Boolean(
+      learningPass &&
+      familyAdjustedStats.independentFamilies > 0
+    );
+    const active = Boolean(
+      paperLifecyclePass &&
+      researchPass &&
+      candidateAccounting.pass &&
+      chartPass &&
+      engineHookActive &&
+      nativePoolOverrideApplied &&
+      softPriorityLearningActive
+    );
+    const legacyForwarded = Math.max(0, finite(current.fullAutonomyForward, 0));
+    return {
+      schema:'alps.v10200.fullAutonomyAuthority.v1',
+      mode:'FULL_AUTONOMY_PAPER_FORWARD_CONTROL_PLANE',
+      status:active ? 'FULL_AUTONOMY_PAPER_FORWARD_ACTIVE' : 'WAITING_FOR_FULL_AUTONOMY_PREREQUISITES',
+      active,
+      pass:active,
+      engineHookActive,
+      nativePoolOverrideApplied,
+      softPriorityLearningActive,
+      noFixedCandidateCap:true,
+      noHardLearningBans:true,
+      candidatesAccepted:candidates,
+      nativePoolCandidates:nativePool,
+      forwardedToLatch:latch,
+      eligible:active ? latch : 0,
+      inFlight:Math.max(0, candidates-latch),
+      blocked:active ? 0 : Math.max(0, candidates-latch),
+      legacyAutonomyForwarded:legacyForwarded,
+      paperOnly:true,
+      liveCapitalExecution:false,
+      testnetExecution:false,
+      rule:'The v10.2.0 control plane treats the reconciled Native Pool and Forward Latch as the paper-forward autonomy authority. Legacy autonomy labels cannot block a fully reconciled uncapped paper flow.'
+    };
+  }
+
   priceSourceSummary(current) {
     const counts = {};
     for (const row of asArray(current.livePriceFetchProof)) {
@@ -637,14 +739,14 @@ class UnifiedOrchestrator {
     if (!layers.sentinel.fresh) return 'RECOVER_PRICE_SENTINEL';
     if (familyAdjustedStats.independentFamilies === 0) return 'WAIT_FOR_CURRENT_EPOCH_INDEPENDENT_CLOSES';
     if (!layers.chart.fresh) return 'RECOVER_CHART_TRUTH';
-    if (!candidateAccounting.fullAutonomy.active) return 'AUTONOMY_INACTIVE_NON_BLOCKING';
+    if (!candidateAccounting.fullAutonomy || !candidateAccounting.fullAutonomy.active) return 'ACTIVATE_FULL_AUTONOMY_PAPER_FORWARD_AUTHORITY';
     return 'REVIEW_LAYER_WARNINGS';
   }
 
   compactLive() {
     const s = this.snapshot('live-response');
     return {
-      schema:'alps.v10200.liveSummary.v2',
+      schema:'alps.v10200.liveSummary.v3',
       version:this.config.version,
       generatedAt:s.generatedAt,
       status:s.status,
@@ -677,6 +779,9 @@ class UnifiedOrchestrator {
         familyAdjustedFamilies:s.familyAdjustedStats && s.familyAdjustedStats.independentFamilies,
         actions:s.learning && s.learning.actions,
       },
+      strategyHeartbeat:s.strategyHeartbeat,
+      candidateCohort:s.candidateCohort,
+      autonomyAuthority:s.autonomyAuthority,
       lifecycle:s.lifecycle,
       recovery:s.recovery,
       runtime:s.runtime,
@@ -690,8 +795,10 @@ class UnifiedOrchestrator {
         ledgerStats:'/runner/ledger-stats',
         selfTest:'/runner/self-test',
         acceptance:'/runner/acceptance',
+        autonomy:'/runner/autonomy',
+        candidateCohort:'/runner/candidate-cohort',
       },
-      rule:'Fast health, heavy evidence and recovery run independently. LAB_RUNNING requires fresh research, paper lifecycle, executable candidate accounting, family learning and chart truth.',
+      rule:'LAB_RUNNING requires independent strategy heartbeat, fresh research and paper lifecycle, persistent-cohort candidate accounting, family learning, chart truth and active full-autonomy paper-forward authority.',
     };
   }
 
@@ -704,13 +811,16 @@ class UnifiedOrchestrator {
       s.runtime.architecture === 'NON_BLOCKING_FAST_HEALTH_PLUS_BACKGROUND_EVIDENCE_PLUS_INDEPENDENT_RECOVERY'
     );
     const noFalsePass = !(s.gates && s.gates.overall && s.gates.overall.pass) ||
-      (s.researchReady && s.paperLifecycleRunning && s.gates.candidateAccounting.pass && s.gates.learning.pass && s.gates.chart.pass);
+      (s.researchReady && s.paperLifecycleRunning && s.gates.candidateAccounting.pass && s.gates.learning.pass && s.gates.chart.pass && s.gates.autonomy.pass);
     const compactBytes = Buffer.byteLength(JSON.stringify(this.compactLive()));
     const architecturePass = Boolean(
       distinct &&
       nonBlocking &&
       noFalsePass &&
       s.candidateAccounting &&
+      s.candidateCohort &&
+      s.strategyHeartbeat &&
+      s.autonomyAuthority &&
       s.familyAdjustedStats &&
       s.serverFeatures &&
       compactBytes <= this.config.liveSummaryMaxBytes &&
@@ -720,7 +830,7 @@ class UnifiedOrchestrator {
       !s.execution.testnetExecution
     );
     return {
-      schema:'alps.v10200.architectureSelfTest.v2',
+      schema:'alps.v10200.architectureSelfTest.v3',
       version:this.config.version,
       generatedAt:iso(),
       browserEngineIsolated:this.adapter.status().mode==='ISOLATED_LEGACY_BROWSER_ENGINE_ADAPTER',
@@ -731,6 +841,9 @@ class UnifiedOrchestrator {
       ),
       overallPassCannotIgnoreResearch:Boolean(noFalsePass),
       candidateAccountingPublished:Boolean(s.candidateAccounting && s.candidateAccounting.transitions),
+      strategyHeartbeatPublished:Boolean(s.strategyHeartbeat && s.strategyHeartbeat.schema),
+      candidateCohortAuthorityPublished:Boolean(s.candidateCohort && s.candidateCohort.schema),
+      fullAutonomyAuthorityPublished:Boolean(s.autonomyAuthority && s.autonomyAuthority.schema),
       serverFeatureAuthorityPublished:Boolean(s.serverFeatures && s.serverFeatures.schema),
       familyAdjustedPerformancePublished:Boolean(
         s.familyAdjustedStats && typeof s.familyAdjustedStats.independentFamilies==='number'
@@ -757,11 +870,12 @@ class UnifiedOrchestrator {
       staleOrNotReady.length === 0 &&
       s.gates.overall.pass &&
       s.gates.candidateAccounting.pass &&
+      s.gates.autonomy.pass &&
       s.metrics.featureRowsFound >= s.metrics.requiredFeaturePairFrames &&
       s.familyAdjustedStats.independentFamilies > 0
     );
     return {
-      schema:'alps.v10200.operationalAcceptance.v1',
+      schema:'alps.v10200.operationalAcceptance.v2',
       version:this.config.version,
       generatedAt:iso(),
       pass,
@@ -773,8 +887,11 @@ class UnifiedOrchestrator {
         required:s.metrics.requiredFeaturePairFrames,
       },
       familyAdjustedFamilies:s.familyAdjustedStats.independentFamilies,
+      strategyHeartbeat:s.strategyHeartbeat,
+      candidateCohort:s.candidateCohort,
+      autonomyAuthority:s.autonomyAuthority,
       nextRequiredAction:s.gates.overall.nextRequiredAction,
-      rule:'This endpoint is the strict live acceptance test. Architecture self-test success alone never proves operational readiness.',
+      rule:'Strict acceptance requires every operational layer fresh, no confirmed persistent candidate gap, independent family learning, and active full-autonomy paper-forward authority.',
     };
   }
 

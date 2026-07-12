@@ -22,12 +22,12 @@ function layer({ name, evidenceField, evidenceAt, maxAgeSec, ready = true, detai
   return {
     name,
     fresh,
-    ready: Boolean(ready),
+    ready:Boolean(ready),
     evidenceField,
-    evidenceAt: evidenceAt ? iso(evidenceAt) : null,
-    ageSec: Number.isFinite(age) ? Math.round(age * 1000) / 1000 : null,
+    evidenceAt:evidenceAt ? iso(evidenceAt) : null,
+    ageSec:Number.isFinite(age) ? Math.round(age * 1000) / 1000 : null,
     maxAgeSec,
-    status: fresh ? 'FRESH' : (!ready ? 'NOT_READY' : (hasEvidence ? 'STALE' : 'NO_EVIDENCE')),
+    status:fresh ? 'FRESH' : (!ready ? 'NOT_READY' : (hasEvidence ? 'STALE' : 'NO_EVIDENCE')),
     ...detail,
   };
 }
@@ -41,6 +41,8 @@ function deriveFreshness({
   serverFeatures,
   runtimeMeta = {},
   adapterStatus = {},
+  strategyHeartbeat = {},
+  candidateCohort = {},
   now = Date.now(),
   config,
 }) {
@@ -53,18 +55,19 @@ function deriveFreshness({
     live && live.currentHealthFreshness && live.currentHealthFreshness.latestEvidenceAt
   );
   const candidateAt = latestEvidence(
+    candidateCohort && candidateCohort.lastSeenAt,
     candidateAuthority && candidateAuthority.generatedAt,
-    current.candidateAuthorityGeneratedAt
+    current.candidateAuthorityGeneratedAt,
+    processAt
   );
-  const legacyResearchAt = latestEvidence(
-    current.featureEpochCompletedAt,
-    current.lastCompletedFeatureEpochAt,
-    current.featureEpochAuthority && current.featureEpochAuthority.completedAt,
-    current.v10152FeatureEpochAuthority && current.v10152FeatureEpochAuthority.completedAt,
-    current.researchCycleCompletedAt,
-    candidateAt,
+  const strategyAt = firstDefined(
+    strategyHeartbeat && strategyHeartbeat.lastHealthyAt,
     current.runtimeObservationAt,
     live && live.runtimeObservationAt
+  );
+  const researchAt = firstDefined(
+    strategyHeartbeat && strategyHeartbeat.lastResearchCycleAt,
+    strategyAt
   );
   const serverFeatureAt = firstDefined(
     serverFeatures && serverFeatures.lastRefreshCompletedAt,
@@ -84,7 +87,7 @@ function deriveFreshness({
     sentinelAt
   );
   const learningAt = firstDefined(learning.generatedAt, current.learningGeneratedAt);
-  const candleAt = firstDefined(serverFeatureAt, candleDepth && candleDepth.generatedAt, legacyResearchAt);
+  const candleAt = firstDefined(serverFeatureAt, candleDepth && candleDepth.generatedAt, researchAt);
   const chartAt = firstDefined(serverFeatureAt, chartTruth && chartTruth.generatedAt, current.chartTruthGeneratedAt);
 
   const required = Math.max(1, finite(
@@ -111,11 +114,16 @@ function deriveFreshness({
   const paperReady = finite(live && live.openPositions, 0) >= 0 &&
     finite(current.watchedPendingEntries, current.pendingEntries || 0) >= 0;
   const learningReady = bool(learning.installed) && text(learning.status).includes('ACTIVE');
-  const legacyResearchReady = bool(current.researchReady) || bool(live && live.labRunning);
+  const strategyReady = Boolean(
+    strategyHeartbeat &&
+    strategyHeartbeat.labRunning &&
+    strategyHeartbeat.researchReady
+  );
+  const researchReady = Boolean(featureReady && strategyReady && strategyHeartbeat.candidateFlowReady);
   const chartReady = featureReady || (bool(current.chartTruthReady) && finite(current.chartCandles, 0) > 0);
 
   return {
-    process: layer({
+    process:layer({
       name:'process',
       evidenceField:'controlPlane.fastPoll.lastSuccessAt',
       evidenceAt:processAt,
@@ -128,7 +136,7 @@ function deriveFreshness({
         browserServerReady:bool(legacyVersion && legacyVersion.browserServerReady),
       },
     }),
-    candleBank: layer({
+    candleBank:layer({
       name:'candleBank',
       evidenceField:'v102ServerFeatureEngine.lastRefreshCompletedAt',
       evidenceAt:candleAt,
@@ -137,7 +145,7 @@ function deriveFreshness({
       now,
       detail:{ pairFrames:candleFrames, requiredPairFrames:required, authority:'SERVER_CLOSED_CANDLE_BANK' },
     }),
-    featureEngine: layer({
+    featureEngine:layer({
       name:'featureEngine',
       evidenceField:'v102ServerFeatureEngine.lastRefreshCompletedAt',
       evidenceAt:serverFeatureAt,
@@ -151,37 +159,38 @@ function deriveFreshness({
         authority:'V102_SERVER_FEATURE_ENGINE',
       },
     }),
-    strategyEngine: layer({
+    strategyEngine:layer({
       name:'strategyEngine',
-      evidenceField:'candidateAuthority.generatedAt/researchCycleCompletedAt',
-      evidenceAt:legacyResearchAt,
+      evidenceField:'controlPlane.strategyHeartbeat.lastHealthyAt',
+      evidenceAt:strategyAt,
       maxAgeSec:config.researchFreshMaxSec,
-      ready:legacyResearchReady,
+      ready:strategyReady,
       now,
       detail:{
-        legacyResearchReady,
+        strategyHeartbeat,
         rawLabRunning:bool(live && live.labRunning),
-        bootAuthorityStatus:text(current.bootAuthorityStatus, 'UNKNOWN'),
         adapterOnly:true,
+        authority:'FAST_LIVE_RESEARCH_HEARTBEAT',
       },
     }),
-    researchCycle: layer({
+    researchCycle:layer({
       name:'researchCycle',
-      evidenceField:'candidateAuthority.generatedAt/researchCycleCompletedAt',
-      evidenceAt:legacyResearchAt,
+      evidenceField:'controlPlane.strategyHeartbeat.lastResearchCycleAt',
+      evidenceAt:researchAt,
       maxAgeSec:config.researchFreshMaxSec,
-      ready:featureReady && legacyResearchReady,
+      ready:researchReady,
       now,
       detail:{
-        researchReady:featureReady && legacyResearchReady,
+        researchReady,
         serverFeaturesReady:featureReady,
-        strategyEngineReady:legacyResearchReady,
-        bootAuthorityStatus:text(current.bootAuthorityStatus, 'UNKNOWN'),
+        strategyEngineReady:strategyReady,
+        candidateFlowReady:Boolean(strategyHeartbeat && strategyHeartbeat.candidateFlowReady),
+        authority:'FAST_RESEARCH_CONTROL_HEARTBEAT',
       },
     }),
-    candidatePipeline: layer({
+    candidatePipeline:layer({
       name:'candidatePipeline',
-      evidenceField:'candidateAuthority.generatedAt',
+      evidenceField:'candidateCohort.lastSeenAt',
       evidenceAt:candidateAt,
       maxAgeSec:config.researchFreshMaxSec,
       ready:candidateReady,
@@ -190,9 +199,11 @@ function deriveFreshness({
         candidates:finite(live && live.candidates, 0),
         nativePoolCandidates:finite(live && live.nativePoolCandidates, 0),
         forwardLatchSize:finite(live && live.forwardLatchSize, 0),
+        cohortStatus:text(candidateCohort && candidateCohort.status, 'WAITING_FOR_COHORT'),
+        cohortId:candidateCohort && candidateCohort.cohortId || null,
       },
     }),
-    paperEntry: layer({
+    paperEntry:layer({
       name:'paperEntry',
       evidenceField:'paperEntryLastScanAt/sentinelLastPriceFetchAt',
       evidenceAt:paperAt,
@@ -205,7 +216,7 @@ function deriveFreshness({
         openPositions:finite(live && live.openPositions, 0),
       },
     }),
-    sentinel: layer({
+    sentinel:layer({
       name:'sentinel',
       evidenceField:'sentinelLastTickAt',
       evidenceAt:sentinelAt,
@@ -217,7 +228,7 @@ function deriveFreshness({
         lastError:text(current.sentinelLastError),
       },
     }),
-    learning: layer({
+    learning:layer({
       name:'learning',
       evidenceField:'adaptiveEvidenceLearning.generatedAt',
       evidenceAt:learningAt,
@@ -229,7 +240,7 @@ function deriveFreshness({
         status:text(learning.status, 'UNKNOWN'),
       },
     }),
-    chart: layer({
+    chart:layer({
       name:'chart',
       evidenceField:'chartTruth.generatedAt',
       evidenceAt:chartAt,

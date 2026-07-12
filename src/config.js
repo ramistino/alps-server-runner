@@ -2,7 +2,7 @@
 
 const path = require('path');
 
-const VERSION = 'v10.2.0-final-unified-runtime';
+const VERSION = 'v10.2.0-final-operational-authority';
 const SCHEMA_PREFIX = 'alps.v10200';
 
 function envNumber(name, fallback, min = -Infinity, max = Infinity) {
@@ -47,6 +47,10 @@ function loadConfig() {
     recoveryCommandTimeoutMs: envNumber('ALPS_V102_RECOVERY_COMMAND_TIMEOUT_MS', 20_000, 5_000, 60_000),
     recoveryCooldownSec: envNumber('ALPS_V102_RECOVERY_COOLDOWN_SEC', 60, 20, 600),
     recoveryReloadSec: envNumber('ALPS_V102_RECOVERY_RELOAD_SEC', 600, 180, 3600),
+
+
+    candidateGapConfirmObservations: envNumber('ALPS_V102_CANDIDATE_GAP_CONFIRM_OBSERVATIONS', 4, 2, 30),
+    candidateGapConfirmSec: envNumber('ALPS_V102_CANDIDATE_GAP_CONFIRM_SEC', 20, 5, 600),
 
     expectedPairFrames: envNumber('ALPS_REQUIRED_PAIR_FRAMES', 35, 1, 1000),
     liveSummaryMaxBytes: envNumber('ALPS_V102_LIVE_MAX_BYTES', 90_000, 20_000, 1_000_000),
