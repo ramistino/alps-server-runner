@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.56 Learning Authority + Temporal Evidence Rebuild
+ * ALPS Server Runner — v10.1.57 Live Truth Freshness + Independent Learning Families
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -625,7 +625,7 @@ function v10153RunSelfTest() {
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.56-learning-authority-temporal-proof';
+const FINAL_V930_VERSION = 'v10.1.57-live-truth-family-learning';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -1129,7 +1129,7 @@ function v10142ClosedTradePnlBps(row = {}) {
   if (Number.isFinite(pct)) return Number((pct * 100).toFixed(4));
   return null;
 }
-// v10.1.56 Adaptive Evidence Learning Authority.
+// v10.1.57 Adaptive Evidence Learning Authority + independent experiment families.
 // Learning is rebuilt only from canonical, semantic-deduped, temporally valid CLOSED paper trades
 // in the current v10.1.51 evidence epoch. It soft-reorders attention only: no hard bans, no caps.
 let lastV10155LearningView = null;
@@ -1137,6 +1137,112 @@ function v10155Clamp(value, min = 0, max = 100) {
   const x = Number(value);
   if (!Number.isFinite(x)) return min;
   return Math.max(min, Math.min(max, x));
+}
+
+// v10.1.57 — correlated target/exit variants from the same market event are one learning experiment.
+// Each family is aggregated once before confidence math, preventing 1R/1.5R/2R siblings from
+// multiplying sample size while preserving every raw trade in the canonical ledger.
+function v10157TimeframeMs(tf = '') {
+  const x = textValue(tf).toLowerCase();
+  return ({'1m':60_000,'5m':300_000,'15m':900_000,'30m':1_800_000,'1h':3_600_000,'4h':14_400_000,'1d':86_400_000})[x] || 60_000;
+}
+function v10157FamilyStrategy(row = {}) {
+  const raw = textValue(row.rootStrategy || row.setupFamily || row.hypothesisId || row.hypothesisDNA || row.strategy || row.stratName || row.setup || 'UNSPECIFIED').toUpperCase();
+  return raw
+    .replace(/(?:TARGET|TP|EXIT|RR?|RISK[_ -]?REWARD)[_: -]*\d+(?:\.\d+)?/g, '')
+    .replace(/\b\d+(?:\.\d+)?R\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 96) || 'UNSPECIFIED';
+}
+function v10157FamilyEventTime(row = {}) {
+  const direct = v10151ToMs(
+    row.signalCandleTime || row.signalTime || row.setupCandleTime || row.sourceCandleTime ||
+    row.candleTime || row.entryCandleTime || row.observedCandleTime
+  );
+  if (direct) return direct;
+  const opened = v10151ToMs(row.openedAt || row.openTime || row.createdAt || row.entryObservedAt);
+  if (!opened) return 0;
+  const tfMs = v10157TimeframeMs(row.timeframe || row.tf || '');
+  return Math.floor(opened / tfMs) * tfMs;
+}
+function v10157FamilyEntry(row = {}) {
+  const x = v10137FiniteNumber(row.entry ?? row.entryPrice ?? row.openPrice, null);
+  if (!Number.isFinite(x)) return 'NA';
+  return Number(x.toPrecision(10)).toString();
+}
+function v10157ExperimentFamilyKey(row = {}) {
+  const pair = v10115CanonicalSymbol(row.pair || row.symbol || row.baseSymbol || 'UNKNOWN') || 'UNKNOWN';
+  const tf = textValue(row.timeframe || row.tf || 'unknown').toLowerCase() || 'unknown';
+  const direction = normalizeDirection(row.direction || row.side || row.dir || 'UNKNOWN') || 'UNKNOWN';
+  const eventTime = v10157FamilyEventTime(row);
+  return [pair, tf, direction, v10157FamilyStrategy(row), eventTime || 'NO_TIME', v10157FamilyEntry(row)].join('|');
+}
+function v10157BuildExperimentFamilies(rows = []) {
+  const map = new Map();
+  for (const row of safeArray(rows)) {
+    if (!row || typeof row !== 'object') continue;
+    const key = v10157ExperimentFamilyKey(row);
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        pair:v10115CanonicalSymbol(row.pair || row.symbol || row.baseSymbol || 'UNKNOWN') || 'UNKNOWN',
+        timeframe:textValue(row.timeframe || row.tf || 'unknown').toLowerCase() || 'unknown',
+        direction:normalizeDirection(row.direction || row.side || row.dir || 'UNKNOWN') || 'UNKNOWN',
+        strategyFamily:v10157FamilyStrategy(row),
+        eventTime:v10157FamilyEventTime(row),
+        entry:v10157FamilyEntry(row),
+        rows:[]
+      });
+    }
+    map.get(key).rows.push(row);
+  }
+  return [...map.values()];
+}
+function v10157AggregateFamily(family = {}) {
+  const rows = safeArray(family.rows);
+  const rValues = rows.map(x=>v10137FiniteNumber(x.resultR,null)).filter(Number.isFinite);
+  const pnlValues = rows.map(x=>v10142ClosedTradePnlBps(x)).filter(Number.isFinite);
+  const avg = values => values.length ? values.reduce((a,b)=>a+b,0)/values.length : null;
+  const avgR = avg(rValues), avgPnl = avg(pnlValues);
+  let result = 'UNKNOWN';
+  const signValue = Number.isFinite(avgR) ? avgR : avgPnl;
+  if (Number.isFinite(signValue)) result = signValue > 0 ? 'WIN' : signValue < 0 ? 'LOSS' : 'BREAKEVEN';
+  else {
+    const counts = {WIN:0,LOSS:0,BREAKEVEN:0,UNKNOWN:0};
+    for (const row of rows) counts[v10142ClosedTradeResult(row)] = (counts[v10142ClosedTradeResult(row)] || 0) + 1;
+    result = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+  }
+  return {
+    ...family,
+    familySize:rows.length,
+    result,
+    resultR:Number.isFinite(avgR) ? avgR : null,
+    pnlBps:Number.isFinite(avgPnl) ? avgPnl : null
+  };
+}
+function v10157StatsFromFamilies(families = []) {
+  const b = { closed:0, wins:0, losses:0, breakeven:0, unknown:0, netPnlBps:0, totalResultR:0, resultRCount:0, pnlBpsCount:0, positiveR:0, negativeR:0, positiveBps:0, negativeBps:0, rawTradeRows:0, largestFamilySize:0 };
+  for (const family of safeArray(families).map(v10157AggregateFamily)) {
+    b.closed += 1;
+    b.rawTradeRows += n(family.familySize,0);
+    b.largestFamilySize = Math.max(b.largestFamilySize,n(family.familySize,0));
+    if (family.result === 'WIN') b.wins += 1;
+    else if (family.result === 'LOSS') b.losses += 1;
+    else if (family.result === 'BREAKEVEN') b.breakeven += 1;
+    else b.unknown += 1;
+    if (Number.isFinite(family.resultR)) {
+      b.resultRCount += 1; b.totalResultR += family.resultR;
+      if (family.resultR > 0) b.positiveR += family.resultR;
+      if (family.resultR < 0) b.negativeR += family.resultR;
+    }
+    if (Number.isFinite(family.pnlBps)) {
+      b.pnlBpsCount += 1; b.netPnlBps += family.pnlBps;
+      if (family.pnlBps > 0) b.positiveBps += family.pnlBps;
+      if (family.pnlBps < 0) b.negativeBps += family.pnlBps;
+    }
+  }
+  return b;
 }
 function v10155ConfidenceFromBucket(b = {}) {
   const closed = n(b.closed, 0);
@@ -1204,25 +1310,28 @@ function v10155CanonicalEpochLearningStats(closedLedgerStats = {}) {
       legacyOrOtherEpochRows += 1;
     }
   }
+  const families = v10157BuildExperimentFamilies(cleanRows);
   const byPairMap = new Map();
   const byTfMap = new Map();
-  for (const row of cleanRows) {
-    const pair = v10115CanonicalSymbol(row.pair || row.symbol || row.baseSymbol || 'UNKNOWN') || 'UNKNOWN';
-    const tf = textValue(row.timeframe || row.tf || 'unknown').toLowerCase() || 'unknown';
-    if (!byPairMap.has(pair)) byPairMap.set(pair, []);
-    if (!byTfMap.has(tf)) byTfMap.set(tf, []);
-    byPairMap.get(pair).push(row);
-    byTfMap.get(tf).push(row);
+  for (const family of families) {
+    if (!byPairMap.has(family.pair)) byPairMap.set(family.pair, []);
+    if (!byTfMap.has(family.timeframe)) byTfMap.set(family.timeframe, []);
+    byPairMap.get(family.pair).push(family);
+    byTfMap.get(family.timeframe).push(family);
   }
-  const bucketRow = (key, group) => ({ key, ...v10142StatsBucket(group) });
+  const bucketRow = (key, group) => ({ key, ...v10157StatsFromFamilies(group) });
   return {
-    schema: 'alps.learningEvidenceAuthority.v10156',
+    schema: 'alps.learningEvidenceAuthority.v10157',
     version: FINAL_V930_VERSION,
-    source: 'CANONICAL_SEMANTIC_DEDUP_CURRENT_TEMPORAL_EPOCH_ONLY',
+    source: 'CANONICAL_SEMANTIC_DEDUP_CURRENT_EPOCH_INDEPENDENT_FAMILY_WEIGHTED',
     temporalEvidenceEpochId: epoch.epochId,
     temporalEvidenceEpochStartedAt: epoch.startedAtIso,
     canonicalClosedTradesObserved: n(closedLedgerStats.closedTrades, canonicalRows.length),
-    closedTrades: cleanRows.length,
+    rawValidClosedTrades: cleanRows.length,
+    closedTrades: families.length,
+    independentExperimentFamilies: families.length,
+    correlatedSiblingTradesCollapsed: Math.max(0, cleanRows.length - families.length),
+    largestExperimentFamilySize: families.reduce((m,x)=>Math.max(m,safeArray(x.rows).length),0),
     invalidTemporalRows,
     legacyOrOtherEpochRows,
     excludedRows: Math.max(0, canonicalRows.length - cleanRows.length),
@@ -1233,7 +1342,7 @@ function v10155CanonicalEpochLearningStats(closedLedgerStats = {}) {
 function v10155BuildLearningView(closedLedgerStats = {}) {
   const learningStats = v10155CanonicalEpochLearningStats(closedLedgerStats);
   const view = {
-    schema: 'alps.adaptiveEvidenceLearning.v10156',
+    schema: 'alps.adaptiveEvidenceLearning.v10157',
     version: FINAL_V930_VERSION,
     installed: true,
     generatedAt: new Date().toISOString(),
@@ -1243,13 +1352,18 @@ function v10155BuildLearningView(closedLedgerStats = {}) {
     temporalEvidenceEpochStartedAt: learningStats.temporalEvidenceEpochStartedAt,
     canonicalClosedTradesObserved: learningStats.canonicalClosedTradesObserved,
     closedTradesLearned: learningStats.closedTrades,
+    rawValidClosedTrades: learningStats.rawValidClosedTrades,
+    independentExperimentFamilies: learningStats.independentExperimentFamilies,
+    correlatedSiblingTradesCollapsed: learningStats.correlatedSiblingTradesCollapsed,
+    largestExperimentFamilySize: learningStats.largestExperimentFamilySize,
+    familyClusteringStatus: 'CORRELATED_TARGET_EXIT_VARIANTS_COLLAPSED_TO_ONE_EXPERIMENT',
     excludedLegacyOrInvalidClosedTrades: learningStats.excludedRows,
     invalidTemporalRows: learningStats.invalidTemporalRows,
     legacyOrOtherEpochRows: learningStats.legacyOrOtherEpochRows,
     status: learningStats.closedTrades > 0 ? 'CURRENT_EPOCH_LEARNING_ACTIVE' : 'WAITING_FOR_VALID_CURRENT_EPOCH_CLOSES',
     pairConfidence: [], timeframeConfidence: [], learningActions: [],
     appliedToCandidatePriority: true, appliedToExecutionAsHardFilter: false,
-    rule: 'Confidence uses only available decisive/R/PnL evidence from temporally valid current-epoch closes, shrunk toward 50 until 12 evidence rows. Missing metrics remain neutral and do not receive fabricated positive credit.'
+    rule: 'Confidence uses independent experiment families from temporally valid current-epoch closes. Correlated target/exit siblings count once; missing metrics remain neutral; scores shrink toward 50 until 12 independent families.'
   };
   try {
     const confidenceRow = (b, keyTransform) => {
@@ -1283,7 +1397,7 @@ function v10155RefreshLearningFromCanonicalLedger(reason = 'learning-refresh') {
     view.refreshReason = reason;
     return view;
   } catch (e) {
-    const fallback = lastV10155LearningView || { schema:'alps.adaptiveEvidenceLearning.v10156', version:FINAL_V930_VERSION, installed:true, status:'LEARNING_REFRESH_FAILED_NEUTRAL_PRIORITY', pairConfidence:[], timeframeConfidence:[], learningActions:[], closedTradesLearned:0 };
+    const fallback = lastV10155LearningView || { schema:'alps.adaptiveEvidenceLearning.v10157', version:FINAL_V930_VERSION, installed:true, status:'LEARNING_REFRESH_FAILED_NEUTRAL_PRIORITY', pairConfidence:[], timeframeConfidence:[], learningActions:[], closedTradesLearned:0 };
     fallback.lastError = textValue(e && e.message || e).slice(0,160);
     fallback.refreshReason = reason;
     lastV10155LearningView = fallback;
@@ -1303,7 +1417,7 @@ function v10155LearningActuatorForRows(rows = []) {
   const candidates = safeArray(rows);
   const applied = candidates.some(x => n(x.learningConfidenceScore,50) !== 50);
   return {
-    schema:'alps.learningSoftPriorityActuator.v10156', version:FINAL_V930_VERSION, installed:true,
+    schema:'alps.learningSoftPriorityActuator.v10157', version:FINAL_V930_VERSION, installed:true,
     mode:'SOFT_REORDER_ONLY', applied, candidatesScored:candidates.length,
     topPriority:candidates.slice(0,10).map(x=>({ key:x.key||'', pair:v10115CanonicalSymbol(x.pair||x.symbol||''), timeframe:textValue(x.timeframe||x.tf||'').toLowerCase(), confidenceScore:n(x.learningConfidenceScore,50) })),
     noHardBans:true, noFixedCaps:true,
@@ -2168,32 +2282,65 @@ async function v10138FetchLivePrice(symbol, timeoutMs = V10138_PRICE_SENTINEL_TI
   const resolved = v10138Symbol(symbol);
   const started = Date.now();
   const cached = v10138LastLivePriceBySymbol.get(resolved) || null;
-  try {
-    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const t = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
-    // v10.1.39 fix: api.binance.com returns HTTP 451 from Render US IPs (the exact geo-block already
-    // solved in v10.1.7 for klines). The official market-data mirror serves the same /api/v3/ticker/price.
-    const res = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${encodeURIComponent(resolved)}`, controller ? { signal: controller.signal } : {});
-    if (t) clearTimeout(t);
-    if (res && res.ok) {
+  const attempts = [];
+  async function fetchJson(url, label, extractor) {
+    const attemptStarted = Date.now();
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const t = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+      const res = await fetch(url, controller ? { signal: controller.signal, headers:{'cache-control':'no-cache'} } : {headers:{'cache-control':'no-cache'}});
+      if (t) clearTimeout(t);
+      if (!res || !res.ok) throw new Error(`HTTP_${res?.status || 0}`);
       const j = await res.json();
-      const price = v10138Num(j && j.price, null);
-      if (Number.isFinite(price) && price > 0) {
-        const out = { symbol: resolved, requestedSymbol: symbol, price, source:'BINANCE_VISION_SPOT_TICKER', latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
-        v10138LastLivePriceBySymbol.set(resolved, out); return out;
-      }
+      const price = v10138Num(extractor(j), null);
+      if (!(Number.isFinite(price) && price > 0)) throw new Error('NON_FINITE_PRICE');
+      attempts.push({source:label,status:'OK',latencyMs:Date.now()-attemptStarted});
+      return price;
+    } catch (e) {
+      attempts.push({source:label,status:'FAILED',latencyMs:Date.now()-attemptStarted,error:textValue(e&&e.message||e).slice(0,120)});
+      return null;
     }
-  } catch (_) {}
+  }
+  const liveSources = [
+    {
+      label:'BINANCE_VISION_SPOT_TICKER',
+      url:`https://data-api.binance.vision/api/v3/ticker/price?symbol=${encodeURIComponent(resolved)}`,
+      extractor:j=>j?.price,
+      tier:'LIVE_SPOT_PRIMARY'
+    },
+    {
+      label:'OKX_SPOT_TICKER',
+      url:`https://www.okx.com/api/v5/market/ticker?instId=${encodeURIComponent(resolved.replace(/USDT$/,'-USDT'))}`,
+      extractor:j=>j?.data?.[0]?.last,
+      tier:'LIVE_SPOT_ALTERNATE'
+    },
+    {
+      label:'BYBIT_SPOT_TICKER',
+      url:`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${encodeURIComponent(resolved)}`,
+      extractor:j=>j?.result?.list?.[0]?.lastPrice,
+      tier:'LIVE_SPOT_ALTERNATE'
+    }
+  ];
+  for (const src of liveSources) {
+    const price = await fetchJson(src.url, src.label, src.extractor);
+    if (Number.isFinite(price)) {
+      const out = { symbol:resolved, requestedSymbol:symbol, price, source:src.label, sourceTier:src.tier, attempts, latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
+      v10138LastLivePriceBySymbol.set(resolved, out); return out;
+    }
+  }
   try {
     const rows = safeArray((await v1012FetchBinanceKlines(symbol, '1m', 2).catch(() => null))?.rows);
     const lastRow = rows[rows.length - 1];
     const price = v10138Num(lastRow?.close ?? lastRow?.c, null);
     if (Number.isFinite(price) && price > 0) {
-      const candleOpenTime=v10151ToMs(lastRow?.time || lastRow?.openTime || lastRow?.t || lastRow?.timestamp); const out = { symbol: resolved, requestedSymbol:symbol, price, source:'FALLBACK_LAST_1M_CANDLE_CLOSE', candleOpenTime, candleCloseTime:candleOpenTime?candleOpenTime+60_000:0, latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
+      const candleOpenTime=v10151ToMs(lastRow?.time || lastRow?.openTime || lastRow?.t || lastRow?.timestamp);
+      attempts.push({source:'FALLBACK_LAST_1M_CANDLE_CLOSE',status:'OK',latencyMs:Date.now()-started});
+      const out = { symbol:resolved, requestedSymbol:symbol, price, source:'FALLBACK_LAST_1M_CANDLE_CLOSE', sourceTier:'CLOSED_CANDLE_LAST_RESORT', attempts, candleOpenTime, candleCloseTime:candleOpenTime?candleOpenTime+60_000:0, latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
       v10138LastLivePriceBySymbol.set(resolved, out); return out;
     }
-  } catch (_) {}
-  return cached || { symbol: resolved, requestedSymbol:symbol, price:null, source:'PRICE_UNAVAILABLE', latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
+  } catch (e) { attempts.push({source:'FALLBACK_LAST_1M_CANDLE_CLOSE',status:'FAILED',error:textValue(e&&e.message||e).slice(0,120)}); }
+  if (cached) return { ...cached, sourceTier:'STALE_CACHE_LAST_RESORT', attempts, returnedCached:true, latencyMs:Date.now()-started };
+  return { symbol:resolved, requestedSymbol:symbol, price:null, source:'PRICE_UNAVAILABLE', sourceTier:'NO_PRICE', attempts, latencyMs:Date.now()-started, at:Date.now(), atIso:v10138NowIso() };
 }
 function v10138BuildPaperTradeFromPending(pending, livePriceProof) {
   const openedAt = Date.now();
@@ -2392,12 +2539,12 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
     lastV10138LivePriceSentinelView = v10148ApplySentinelTelemetry({ ...view });
   }
   const stillPending = [];
-  const v10156PendingLearningView = v10155RefreshLearningFromCanonicalLedger('sentinel-before-pending-priority');
+  const v10157PendingLearningView = v10155RefreshLearningFromCanonicalLedger('sentinel-before-pending-priority');
   v10138PendingEntries = v10138DedupPendingEntries(v10138PendingEntries);
   // v10.1.55: re-applied from v10.1.45 (lost in v10.1.46-54 rebuilds) — evaluate pending entries in
   // learning-confidence order so evidence-strong contexts get first claim on price checks and open slots.
   try { v10138PendingEntries.sort((a, b) => n(v10155CandidateLearningScore(b), 50) - n(v10155CandidateLearningScore(a), 50)); } catch (_) {}
-  view.pendingLearningPriority = { schema:'alps.pendingLearningPriority.v10156', mode:'SOFT_REORDER_ONLY', applied:v10138PendingEntries.some(x=>v10155CandidateLearningScore(x)!==50), closedTradesLearned:n(v10156PendingLearningView?.closedTradesLearned,0), temporalEvidenceEpochId:v10156PendingLearningView?.temporalEvidenceEpochId||'', topPriority:v10138PendingEntries.slice(0,10).map(x=>({key:v10138PendingKey(x),pair:v10115CanonicalSymbol(x.pair||x.symbol||''),timeframe:textValue(x.timeframe||x.tf||'').toLowerCase(),confidenceScore:v10155CandidateLearningScore(x)})), noHardBans:true, noFixedCaps:true };
+  view.pendingLearningPriority = { schema:'alps.pendingLearningPriority.v10157', mode:'SOFT_REORDER_ONLY', applied:v10138PendingEntries.some(x=>v10155CandidateLearningScore(x)!==50), closedTradesLearned:n(v10157PendingLearningView?.closedTradesLearned,0), temporalEvidenceEpochId:v10157PendingLearningView?.temporalEvidenceEpochId||'', topPriority:v10138PendingEntries.slice(0,10).map(x=>({key:v10138PendingKey(x),pair:v10115CanonicalSymbol(x.pair||x.symbol||''),timeframe:textValue(x.timeframe||x.tf||'').toLowerCase(),confidenceScore:v10155CandidateLearningScore(x)})), noHardBans:true, noFixedCaps:true };
   view.watchedPendingEntries = v10138PendingEntries.length;
   for (const p of v10138PendingEntries) {
     try {
@@ -2857,8 +3004,10 @@ async function v10122RefreshCurrentHealthForEndpoint(reason = 'authority-endpoin
   return lastHealth;
 }
 function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
-  const base = { ...(lastHealth || {}), ...(seed || {}) };
-  const truthSeed = v10115AttachOperationalTruth({ ...base, nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, source + '-currentHealth');
+  const baseRaw = { ...(lastHealth || {}), ...(seed || {}) };
+  const attachedTruthSeed = v10115AttachOperationalTruth({ ...baseRaw, nativeForwardPool:lastNativeForwardPoolView, forwardLatch:lastForwardLatchView, paperEntryActivation:lastV948EntryEngineView }, source + '-currentHealth');
+  const truthSeed = v10157ApplyCurrentHealthFreshnessGuard(attachedTruthSeed, source + '-compact-freshness');
+  const base = truthSeed;
   const op = truthSeed.v10115OperationalTruth || lastV10115OperationalTruthView || {};
   const sym = truthSeed.v10115SymbolStatus || lastV10115SymbolStatusView || {};
   const feature = truthSeed.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView || {};
@@ -2909,7 +3058,9 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     warningIfOnlySevenColumns: 'If this CSV has only status,forwardStatus,engineReady,fwRunning,paperSignals,openPositions,closedTrades then the old dashboard/export was used, not this endpoint.',
     sourceOfTruth: op.sourceOfTruth || 'currentHealth',
     authorityStatus: v10119CurrentHealthTruthStatus(truthSeed),
-    currentHealthPresent: v10119CurrentHealthTruthStatus(truthSeed) === 'CURRENT_HEALTH_TRUTH_READY',
+    currentHealthPresent: v10119CurrentHealthTruthStatus(truthSeed) !== 'NO_CURRENT_HEALTH_TRUTH',
+    currentHealthFresh: truthSeed.currentHealthFresh === true,
+    currentHealthAgeSec: truthSeed.currentHealthAgeSec,
     reportExportGuard: 'LEGACY_SEVEN_COLUMN_BLOCKED',
     noOldSnapshotMixing: true,
     oldSnapshotOverwriteBlocked: true,
@@ -3114,14 +3265,102 @@ function v10116CompactCsv(report) {
 function v10119HasObjectValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
 }
+
+// v10.1.57 — CurrentHealth presence is not enough. Operational truth requires a recent runtime
+// observation from this process. Old dashboard/server caches remain available only as audit evidence.
+const V10157_PROCESS_STARTED_AT = Date.now();
+const V10157_HEALTH_FRESH_MAX_MS = Math.max(60_000, v10137FiniteNumber(process.env.ALPS_CURRENT_HEALTH_FRESH_MS, 180_000));
+function v10157EvidenceTimeMs(value) {
+  if (Number.isFinite(Number(value))) {
+    const n0 = Number(value);
+    return n0 > 1e12 ? n0 : (n0 > 1e9 ? n0 * 1000 : 0);
+  }
+  const t = Date.parse(textValue(value));
+  return Number.isFinite(t) ? t : 0;
+}
+function v10157CurrentHealthFreshness(seed = {}, source = 'health-freshness') {
+  const sentinel = seed.v10138LivePriceSentinel || seed.v10148SentinelRuntime || {};
+  const feature = seed.v10150FeatureMaterializerBackground || seed.v1017FeatureMaterializer || {};
+  const candidates = [
+    ['runtimeObservationAt', seed.runtimeObservationAt],
+    ['lastTickAt', seed.lastTickAt],
+    ['sentinelLastTickAt', seed.sentinelLastTickAt || sentinel.sentinelLastTickAt],
+    ['sentinelLastPriceFetchAt', seed.sentinelLastPriceFetchAt || sentinel.sentinelLastPriceFetchAt],
+    ['featureFinishedAt', feature.finishedAt || feature.updatedAt]
+  ].map(([name,value])=>({name,value,ms:v10157EvidenceTimeMs(value)})).filter(x=>x.ms>0);
+  const latest = candidates.sort((a,b)=>b.ms-a.ms)[0] || null;
+  const ageMs = latest ? Math.max(0, Date.now()-latest.ms) : null;
+  const sourceSnapshotVersion = textValue(seed.runtimeObservationVersion || seed.sourceSnapshotVersion || seed.__v10157SourceSnapshotVersion || seed.version || seed.appVersion || '');
+  const versionMatch = sourceSnapshotVersion === FINAL_V930_VERSION;
+  const hasAny = !!(seed && typeof seed === 'object' && (
+    seed.status || seed.engineReady !== undefined || seed.labRunning !== undefined || seed.fwRunning !== undefined ||
+    n(seed.candidates,0)>0 || n(seed.openPositions,0)>0 || n(seed.closedTrades,0)>0
+  ));
+  const fresh = !!(runtimeBootReady && latest && ageMs <= V10157_HEALTH_FRESH_MAX_MS && versionMatch);
+  let status = 'NO_CURRENT_HEALTH_TRUTH';
+  if (hasAny && !sourceSnapshotVersion) status = 'CURRENT_HEALTH_RUNTIME_VERSION_UNPROVEN_BLOCKED';
+  else if (hasAny && !versionMatch) status = 'VERSION_MISMATCH_CURRENT_HEALTH_CACHE_BLOCKED';
+  else if (hasAny && !latest) status = 'CURRENT_HEALTH_CACHE_WITHOUT_LIVE_TIMESTAMP_BLOCKED';
+  else if (hasAny && !fresh) status = runtimeBootReady ? 'STALE_CURRENT_HEALTH_CACHE_BLOCKED' : 'BOOTING_CURRENT_HEALTH_NOT_OPERATIONAL';
+  else if (fresh) status = 'CURRENT_HEALTH_LIVE_TRUTH_READY';
+  return {
+    schema:'alps.currentHealthFreshness.v10157', version:FINAL_V930_VERSION, installed:true, source,
+    status, fresh, runtimeBootReady, runtimeVersion:FINAL_V930_VERSION, sourceSnapshotVersion,
+    versionMatch, latestEvidenceField:latest?.name || '', latestEvidenceAt:latest ? new Date(latest.ms).toISOString() : '',
+    ageSec:ageMs===null?null:Number((ageMs/1000).toFixed(3)), maxAgeSec:Number((V10157_HEALTH_FRESH_MAX_MS/1000).toFixed(3)),
+    processStartedAt:new Date(V10157_PROCESS_STARTED_AT).toISOString(), processInstanceId:V10154_PROCESS_INSTANCE_ID,
+    staleCacheOperationallyBlocked:hasAny && !fresh,
+    rule:'CurrentHealth is operational truth only when a same-version runtime timestamp is fresh. Cached metrics remain audit-only and cannot publish RUNNING/FRESH success.'
+  };
+}
+function v10157ApplyCurrentHealthFreshnessGuard(seed = {}, source = 'health-freshness-guard') {
+  const out = { ...(seed || {}) };
+  const freshness = v10157CurrentHealthFreshness(out, source);
+  out.currentHealthFreshness = freshness;
+  out.currentHealthFresh = freshness.fresh;
+  out.currentHealthAgeSec = freshness.ageSec;
+  out.runtimeVersion = FINAL_V930_VERSION;
+  out.sourceSnapshotVersion = freshness.sourceSnapshotVersion;
+  if (!freshness.fresh) {
+    out.staleOperationalSnapshotAudit = {
+      status:out.status || '', engineReady:!!out.engineReady, labRunning:!!out.labRunning, fwRunning:!!out.fwRunning,
+      candidates:n(out.candidates,0), openPositions:n(out.openPositions,0), closedTrades:n(out.closedTrades,0),
+      sentinelRuntimeStatus:textValue(out.sentinelRuntimeStatus || out.v10138LivePriceSentinel?.sentinelRuntimeStatus || '')
+    };
+    out.status = freshness.status;
+    out.engineReady = false;
+    out.labRunning = false;
+    out.fwRunning = false;
+    out.rawFwRunning = false;
+    out.effectiveFwRunning = false;
+    out.forwardRunnerSyncStatus = 'STALE_OR_VERSION_MISMATCH_CURRENT_HEALTH_BLOCKED';
+    out.sourceOfTruth = 'STALE_CURRENT_HEALTH_AUDIT_ONLY';
+    out.dataSource = 'STALE_CURRENT_HEALTH_CACHE_AUDIT_ONLY';
+    out.sentinelRuntimeStatus = 'STALE_CURRENT_HEALTH_CACHE_BLOCKED';
+    if (out.v10138LivePriceSentinel && typeof out.v10138LivePriceSentinel === 'object') {
+      out.v10138LivePriceSentinel = { ...out.v10138LivePriceSentinel, sentinelRuntimeStatus:'STALE_CURRENT_HEALTH_CACHE_BLOCKED', operationalStatus:'STALE_CACHE_AUDIT_ONLY', currentHealthFresh:false };
+    }
+    if (out.v10148SentinelRuntime && typeof out.v10148SentinelRuntime === 'object') {
+      out.v10148SentinelRuntime = { ...out.v10148SentinelRuntime, sentinelRuntimeStatus:'STALE_CURRENT_HEALTH_CACHE_BLOCKED', operationalStatus:'STALE_CACHE_AUDIT_ONLY', currentHealthFresh:false };
+    }
+    if (out.forwardRunnerSync && typeof out.forwardRunnerSync === 'object') {
+      out.forwardRunnerSync = { ...out.forwardRunnerSync, rawFwRunning:false, effectiveFwRunning:false, status:'STALE_OR_VERSION_MISMATCH_CURRENT_HEALTH_BLOCKED', nextRequiredAction:'VERIFY_LIVE_PROCESS_VERSION_AND_FRESH_HEALTH' };
+    }
+    out.finalHealthGate = { ...(out.finalHealthGate || {}), schema:'alps.finalHealthGate.v10157', version:FINAL_V930_VERSION, installed:true, status:'WARN', nextRequiredAction:'VERIFY_LIVE_PROCESS_VERSION_AND_FRESH_HEALTH', reason:freshness.status };
+  }
+  return out;
+}
 function v10119CurrentHealthSeed(report = {}, source = 'currentHealth-seed') {
   const reportCurrent = v10119HasObjectValue(report.currentHealth) ? report.currentHealth : {};
   const isLiveLiteAuthority = /healthLite|currentHealthLite/i.test(textValue(report.schema || reportCurrent.schema || report.source || ''));
   const base = isLiveLiteAuthority
     ? { ...(v10119HasObjectValue(lastHealth) ? lastHealth : {}), ...(v10119HasObjectValue(report) ? report : {}), ...(v10119HasObjectValue(reportCurrent) ? reportCurrent : {}) }
     : (v10119HasObjectValue(lastHealth) ? { ...lastHealth } : { ...reportCurrent });
+  const sourceSnapshotVersion = textValue(base.runtimeObservationVersion || base.sourceSnapshotVersion || base.version || base.appVersion || reportCurrent.runtimeObservationVersion || reportCurrent.version || reportCurrent.appVersion || '');
   const seed = {
     ...base,
+    __v10157SourceSnapshotVersion: sourceSnapshotVersion,
+    sourceSnapshotVersion,
     effectivePatchVersion: FINAL_V930_VERSION,
     sourceOfTruth: 'currentHealth',
     dataSource: 'CURRENT_HEALTH_AUTHORITY',
@@ -3164,13 +3403,7 @@ function v10119CurrentHealthSeed(report = {}, source = 'currentHealth-seed') {
   return seed;
 }
 function v10119CurrentHealthTruthStatus(seed = {}) {
-  const hasAny = !!(seed && typeof seed === 'object' && (
-    seed.status || seed.lastTickAt || seed.generatedAt || seed.engineReady !== undefined || seed.labRunning !== undefined ||
-    seed.fwRunning !== undefined || n(seed.candidates, 0) > 0 || n(seed.officialCandidates, 0) > 0 ||
-    n(seed?.nativeForwardPool?.totalCandidates, 0) > 0 || n(seed?.forwardLatch?.size, 0) > 0 ||
-    n(seed.paperSignals, 0) > 0 || n(seed.openPositions, 0) > 0 || n(seed.closedTrades, 0) > 0
-  ));
-  return hasAny ? 'CURRENT_HEALTH_TRUTH_READY' : 'NO_CURRENT_HEALTH_TRUTH';
+  return v10157CurrentHealthFreshness(seed, 'v10119-current-health-truth-status').status;
 }
 function v10119AuthorityBlockRegex() {
   return new RegExp('\\n?## 0\\. Report Authority — Current Health Truth[\\s\\S]*?(?=\\n## (?!0\\.)|\\n# |\\s*$)');
@@ -3181,7 +3414,8 @@ function v10119AuthorityBlockRegex() {
 // server currentHealth is correct. This layer makes every report self-identifying, current-health authoritative,
 // and compact enough to upload to ChatGPT. It does not alter trading logic or fabricate data.
 function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
-  const current = v10119CurrentHealthSeed(report, source);
+  const rawCurrent = v10119CurrentHealthSeed(report, source);
+  const current = v10157ApplyCurrentHealthFreshnessGuard(rawCurrent, source + '-authority-freshness');
   const op = current.v10115OperationalTruth || lastV10115OperationalTruthView || {};
   const sym = current.v10115SymbolStatus || lastV10115SymbolStatusView || {};
   const feature = current.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView || {};
@@ -3191,7 +3425,8 @@ function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
   const latch = current.forwardLatch || lastForwardLatchView || {};
   const trade = current.alpsTradeExport || lastTradeExport || buildTradeExport({ openTrades: [], closedTrades: [] });
   const compact = v10116CompactRow({ ...current, nativeForwardPool: pool, forwardLatch: latch, paperEntryActivation: pe }, chart, source + '-authority-row');
-  const truthStatus = v10119CurrentHealthTruthStatus(current);
+  const freshness = current.currentHealthFreshness || v10157CurrentHealthFreshness(current, source);
+  const truthStatus = freshness.status;
   const staleMarkersRemoved = [
     'legacyTitleV9', 'lastKnownCacheDataSource', 'staticAppVersion', 'chartNA',
     'zeroFocusedCandidatesLegacyDiagnosis', 'oldSnapshotSupersededByCurrentHealth', 'reportSnapshotOverwriteBlocked', 'dashboardLocalGuessBlocked'
@@ -3203,9 +3438,14 @@ function v10118ReportAuthorityView(report = {}, source = 'collect-report') {
     generatedAt: new Date().toISOString(),
     source,
     authorityStatus: truthStatus,
-    currentHealthPresent: truthStatus === 'CURRENT_HEALTH_TRUTH_READY',
-    sourceOfTruth: 'currentHealth',
-    dataSource: truthStatus === 'CURRENT_HEALTH_TRUTH_READY' ? 'CURRENT_HEALTH_AUTHORITY' : 'NO_CURRENT_HEALTH_TRUTH',
+    currentHealthPresent: truthStatus !== 'NO_CURRENT_HEALTH_TRUTH',
+    currentHealthFresh: freshness.fresh,
+    currentHealthAgeSec: freshness.ageSec,
+    runtimeVersion: FINAL_V930_VERSION,
+    sourceSnapshotVersion: freshness.sourceSnapshotVersion,
+    freshness,
+    sourceOfTruth: freshness.fresh ? 'currentHealth' : 'staleCurrentHealthAuditOnly',
+    dataSource: freshness.fresh ? 'CURRENT_HEALTH_LIVE_AUTHORITY' : (truthStatus === 'NO_CURRENT_HEALTH_TRUTH' ? 'NO_CURRENT_HEALTH_TRUTH' : 'STALE_CURRENT_HEALTH_CACHE_AUDIT_ONLY'),
     snapshotsAreAuditOnly: true,
     reportSnapshotsExcludedFromOperationalTruth: true,
     oldReportOverwriteBlocked: true,
@@ -4979,7 +5219,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     }
     
   }
-  // v10.1.56: current-epoch learning authority soft priority (lost in v10.1.46-54 rebuilds) — annotate and
+  // v10.1.57: current-epoch family-weighted learning authority soft priority (lost in v10.1.46-54 rebuilds) — annotate and
   // reorder candidates by evidence confidence. SOFT_REORDER_ONLY: no bans, no caps, attention order only.
   try {
     for (const x of selected) { x.learningConfidenceScore = v10155CandidateLearningScore(x); }
@@ -6186,6 +6426,8 @@ function enrichReportV930(report = {}, pageStatus = null) {
   // v9.4.9 attaches a single remaining-risk truth layer after v9.4.8 entry diagnostics are present.
   report = v949AttachCompleteTruth(report);
   report.effectivePatchVersion = FINAL_V930_VERSION;
+  report.currentHealthFreshness = v10157CurrentHealthFreshness(report, 'collect-report-final');
+  report.currentHealthFresh = report.currentHealthFreshness.fresh;
   lastNativeForwardPoolView = nativeView;
   lastOOSEvidenceBridgeView = report.oosEvidenceBridge || lastOOSEvidenceBridgeView;
   lastRecoveryForwardCoreView = report.recoveryForwardCore || lastRecoveryForwardCoreView;
@@ -10152,6 +10394,9 @@ function v10128BuildHealthLite(source = 'health-lite') {
   const healthLite = {
     schema: 'alps.healthLite.v10149',
     version: FINAL_V930_VERSION,
+    sourceSnapshotVersion: textValue(base.runtimeObservationVersion || base.sourceSnapshotVersion || base.version || base.appVersion || lastHealth?.runtimeObservationVersion || lastHealth?.version || lastHealth?.appVersion || ''),
+    runtimeObservationVersion: textValue(base.runtimeObservationVersion || lastHealth?.runtimeObservationVersion || ''),
+    runtimeObservationAt: base.runtimeObservationAt || lastHealth?.runtimeObservationAt || '',
     generatedAt: new Date().toISOString(),
     source,
     status: base.status || lastHealth?.status || 'LAB_RUNNING',
@@ -10360,14 +10605,21 @@ function v10128BuildHealthLite(source = 'health-lite') {
       rule: 'Health-lite final gate trusts currentHealth authority: native pool/latch + paper entry/ledger proof means effective forward is active even if the raw browser flag is false.'
     }
   };
+  const guardedHealthLite = v10157ApplyCurrentHealthFreshnessGuard(healthLite, source + '-health-lite-freshness');
+  Object.assign(healthLite, guardedHealthLite);
   healthLite.reportAuthority = v10118ReportAuthorityView(healthLite, source);
   // v10.1.29: DO NOT assign currentHealth = healthLite. That creates a circular JSON object
   // and breaks /runner/health-lite with "Converting circular structure to JSON".
   // Keep a compact non-circular snapshot for dashboards that look for a currentHealth block.
   healthLite.currentHealth = {
-    schema: 'alps.currentHealthLite.snapshot.v10149',
+    schema: 'alps.currentHealthLite.snapshot.v10157',
     version: FINAL_V930_VERSION,
     source,
+    runtimeVersion: FINAL_V930_VERSION,
+    sourceSnapshotVersion: healthLite.sourceSnapshotVersion || '',
+    currentHealthFresh: healthLite.currentHealthFresh === true,
+    currentHealthAgeSec: healthLite.currentHealthAgeSec,
+    currentHealthFreshness: healthLite.currentHealthFreshness || null,
     status: healthLite.status,
     engineReady: healthLite.engineReady,
     labRunning: healthLite.labRunning,
@@ -10515,7 +10767,7 @@ function v10128BuildHealthLite(source = 'health-lite') {
     pairPerformance: safeArray(closedLedgerStats.byPair).slice(0,10),
     timeframePerformance: safeArray(closedLedgerStats.byTimeframe).slice(0,10),
     sourceOfTruth: 'currentHealth',
-    authorityStatus: healthLite.reportAuthority?.authorityStatus || 'CURRENT_HEALTH_TRUTH_READY',
+    authorityStatus: healthLite.reportAuthority?.authorityStatus || healthLite.currentHealthFreshness?.status || 'NO_CURRENT_HEALTH_TRUTH',
     appVersion: FINAL_V930_VERSION,
     reportTitle: `ALPS Operational Truth Report — ${FINAL_V930_VERSION}`
   };
@@ -10544,21 +10796,59 @@ function v10128BuildHealthLite(source = 'health-lite') {
   return healthLite;
 }
 
+function v10157RunSelfTest() {
+  const nowIso = new Date().toISOString();
+  const oldRuntimeBootReady = runtimeBootReady;
+  runtimeBootReady = true;
+  const stale = v10157ApplyCurrentHealthFreshnessGuard({version:'v10.1.51-old',status:'LAB_RUNNING',engineReady:true,labRunning:true,fwRunning:true,sentinelLastTickAt:'2026-01-01T00:00:00.000Z'},'self-test-stale');
+  const disguisedOldCache = v10157ApplyCurrentHealthFreshnessGuard({version:FINAL_V930_VERSION,sourceSnapshotVersion:'v10.1.51-temporal-intelligence-autonomy-truth',status:'LAB_RUNNING',engineReady:true,labRunning:true,fwRunning:true,sentinelLastTickAt:nowIso},'self-test-disguised-old-cache');
+  const unprovenVersion = v10157ApplyCurrentHealthFreshnessGuard({status:'LAB_RUNNING',engineReady:true,labRunning:true,fwRunning:true,sentinelLastTickAt:nowIso},'self-test-unproven-version');
+  const fresh = v10157ApplyCurrentHealthFreshnessGuard({version:FINAL_V930_VERSION,status:'LAB_RUNNING',engineReady:true,labRunning:true,fwRunning:true,sentinelLastTickAt:nowIso},'self-test-fresh');
+  const rows = [
+    {pair:'ETHUSDT',timeframe:'4h',direction:'LONG',strategy:'EMA TREND RR1',signalCandleTime:1700000000000,entry:100,resultR:1,pnlBps:10},
+    {pair:'ETHUSDT',timeframe:'4h',direction:'LONG',strategy:'EMA TREND RR2',signalCandleTime:1700000000000,entry:100,resultR:2,pnlBps:20},
+    {pair:'BTCUSDT',timeframe:'15m',direction:'SHORT',strategy:'HA_POC',signalCandleTime:1700000900000,entry:200,resultR:-1,pnlBps:-8}
+  ];
+  const families = v10157BuildExperimentFamilies(rows);
+  const stats = v10157StatsFromFamilies(families);
+  runtimeBootReady = oldRuntimeBootReady;
+  return {
+    schema:'alps.v10157SelfTest.v1',version:FINAL_V930_VERSION,
+    staleVersionBlocked:stale.currentHealthFresh===false && stale.engineReady===false && /BLOCKED/.test(stale.status),
+    disguisedOldCacheBlocked:disguisedOldCache.currentHealthFresh===false && disguisedOldCache.status==='VERSION_MISMATCH_CURRENT_HEALTH_CACHE_BLOCKED',
+    unprovenRuntimeVersionBlocked:unprovenVersion.currentHealthFresh===false && unprovenVersion.status==='CURRENT_HEALTH_RUNTIME_VERSION_UNPROVEN_BLOCKED',
+    freshSameVersionAccepted:fresh.currentHealthFresh===true,
+    correlatedSiblingCollapsed:families.length===2 && stats.closed===2 && stats.rawTradeRows===3,
+    familyAverageRCorrect:Math.abs(stats.totalResultR-0.5)<1e-9,
+    liveCapitalExecution:false,testnetExecution:false,
+    pass:false
+  };
+}
+const __v10157SelfTestOriginal = v10157RunSelfTest;
+function v10157SelfTestView() {
+  const x = __v10157SelfTestOriginal();
+  x.pass = x.staleVersionBlocked && x.disguisedOldCacheBlocked && x.unprovenRuntimeVersionBlocked && x.freshSameVersionAccepted && x.correlatedSiblingCollapsed && x.familyAverageRCorrect && !x.liveCapitalExecution && !x.testnetExecution;
+  return x;
+}
+
 async function createServer() {
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      if (url.pathname === '/runner/live' || url.pathname === '/runner/version') {
+        return send(res, 200, { schema:'alps.processLiveness.v10157', version:FINAL_V930_VERSION, effectivePatchVersion:FINAL_V930_VERSION, status:'PROCESS_ALIVE', runtimeBootReady, runtimeBootPhase, browserServerReady, processPid:process.pid, processInstanceId:V10154_PROCESS_INSTANCE_ID, processUptimeSec:Number(process.uptime().toFixed(3)), processStartedAt:new Date(V10157_PROCESS_STARTED_AT).toISOString(), generatedAt:new Date().toISOString(), paperOnly:true, liveCapitalExecution:false, testnetExecution:false });
+      }
       if (!runtimeBootReady && url.pathname.startsWith('/runner/')) {
         const bootHealth = {
-          schema:'alps.bootHealth.v10153', version:FINAL_V930_VERSION,
+          schema:'alps.bootHealth.v10157', version:FINAL_V930_VERSION,
           status:'BOOTING', bootPhase:runtimeBootPhase, runtimeBootReady:false,
           processInstanceId:V10154_PROCESS_INSTANCE_ID, processPid:process.pid,
           browserLaunchSingleflight:{starts:v10154BrowserLaunchStarts,joins:v10154BrowserLaunchJoins,active:!!browserLaunchPromise,activeFlight:v10154LastLaunchFlightId},
           entryZoneConfigAuthority:V10154_ENTRY_ZONE_CONFIG_AUTHORITY,
           browserServerReady, pageReady:!!(page && !page.isClosed()),
           appUrl:APP_URL_ENV || `${staticBaseUrl}/index.html`,
-          persistentDataDir:DATA_DIR, paperOnly:true, liveCapitalExecution:false,
+          persistentDataDir:DATA_DIR, currentHealthFresh:false, currentHealthFreshness:{schema:'alps.currentHealthFreshness.v10157',version:FINAL_V930_VERSION,status:'BOOTING_CURRENT_HEALTH_NOT_OPERATIONAL',fresh:false}, paperOnly:true, liveCapitalExecution:false,
           startedAt:lastHealth.startedAt, generatedAt:new Date().toISOString()
         };
         if (['/runner/health','/runner/health-lite','/runner/live-health.json','/runner/current-health-lite.json','/runner/recovery'].includes(url.pathname)) return send(res, 200, bootHealth);
@@ -10587,6 +10877,7 @@ async function createServer() {
       if (url.pathname === '/runner/v10152-self-test.json') return send(res,200,v10152RunSelfTest());
       if (url.pathname === '/runner/v10153-self-test.json') return send(res,200,v10153RunSelfTest());
       if (url.pathname === '/runner/v10154-self-test.json') return send(res,200,v10154RunSelfTest());
+      if (url.pathname === '/runner/v10157-self-test.json') return send(res,200,v10157SelfTestView());
       if (url.pathname === '/runner/candidate-authority.json') { v10152ReconcileCandidateAuthorities(lastReport||lastHealth||{},'endpoint'); return send(res,200,lastV10152CandidateAuthorityView||{}); }
       if (url.pathname === '/runner/open-reconciliation.json') return send(res,200,v10152BuildOpenReconciliationJournal());
       if (url.pathname === '/runner/pending-reconciliation.json') return send(res,200,v10152BuildPendingReconciliationJournal());
@@ -11412,7 +11703,7 @@ async function pageEval(fn, arg) {
 }
 
 async function getPageHealth() {
-  return pageEval(async () => {
+  const pageHealth = await pageEval(async () => {
     function val(expr, fallback) { try { return expr(); } catch (_) { return fallback; } }
     function num(x, fallback = 0) { const v = Number(x); return Number.isFinite(v) ? v : fallback; }
     const closed = val(() => closedTrades || [], []);
@@ -11493,6 +11784,15 @@ async function getPageHealth() {
       }
     };
   });
+  return {
+    ...(pageHealth || {}),
+    sourcePageAppVersion: textValue(pageHealth?.appVersion || ''),
+    version: FINAL_V930_VERSION,
+    appVersion: FINAL_V930_VERSION,
+    runtimeObservationVersion: FINAL_V930_VERSION,
+    runtimeObservationAt: new Date().toISOString(),
+    runtimeObservationProcessInstanceId: V10154_PROCESS_INSTANCE_ID
+  };
 }
 
 
@@ -13091,7 +13391,7 @@ async function collectReportInternal() {
   await updateTradeVault(lastTradeExport, 'report');
   report.alpsTradeExport = lastTradeExport;
   report = v1001SyncReportCountersFromTradeExport(report, lastTradeExport);
-  const v10156PostLedgerLearning = v10155RefreshLearningFromCanonicalLedger('collect-report-post-ledger-learning-authority');
+  const v10157PostLedgerLearning = v10155RefreshLearningFromCanonicalLedger('collect-report-post-ledger-learning-authority');
   if (report.nativeForwardPool && Array.isArray(report.nativeForwardPool.candidates)) {
     for (const candidate of report.nativeForwardPool.candidates) candidate.learningConfidenceScore = v10155CandidateLearningScore(candidate);
     report.nativeForwardPool.candidates.sort((a,b)=>n(b.learningConfidenceScore,50)-n(a.learningConfidenceScore,50));
@@ -13103,9 +13403,9 @@ async function collectReportInternal() {
     }
     lastNativeForwardPoolView = report.nativeForwardPool;
   }
-  report.adaptiveEvidenceLearning = v10156PostLedgerLearning;
-  report.adaptiveEvidenceLearningJson = JSON.stringify(v10156PostLedgerLearning);
-  report.learningActions = safeArray(v10156PostLedgerLearning.learningActions);
+  report.adaptiveEvidenceLearning = v10157PostLedgerLearning;
+  report.adaptiveEvidenceLearningJson = JSON.stringify(v10157PostLedgerLearning);
+  report.learningActions = safeArray(v10157PostLedgerLearning.learningActions);
   report.learningActionsJson = JSON.stringify(report.learningActions);
   report.tradeLifecycleTruth = v949BuildTradeLifecycleTruth(report);
   report = v949AttachCompleteTruth(report);
@@ -13365,7 +13665,11 @@ function v10154RunSelfTest() {
   return result;
 }
 
-if (String(process.env.ALPS_V10154_SELFTEST || '') === '1') {
+if (String(process.env.ALPS_V10157_SELFTEST || '') === '1') {
+  const selfTest = v10157SelfTestView();
+  console.log(JSON.stringify(selfTest, null, 2));
+  process.exit(selfTest.pass ? 0 : 1);
+} else if (String(process.env.ALPS_V10154_SELFTEST || '') === '1') {
   const selfTest = v10154RunSelfTest();
   console.log(JSON.stringify(selfTest, null, 2));
   process.exit(selfTest.pass ? 0 : 1);
