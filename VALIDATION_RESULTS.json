@@ -1,17 +1,28 @@
 {
-  "schema": "alps.cleanStartValidation.v10149",
-  "version": "v10.1.49-clean-start-persistent-runtime",
-  "results": {
-    "nodeSyntaxRunner": "PASS",
-    "nodeSyntaxTradeExport": "PASS",
-    "nodeSyntaxClosedLedgerAuthority": "PASS",
-    "cleanStartFlagPresent": "PASS",
-    "legacyMigrationSkipped": "PASS",
-    "closedLedgerDefaultFloorZero": "PASS",
-    "authorityDefaultFloorZero": "PASS",
-    "emptyHistoricalSeed": "PASS",
+  "version": "v10.1.53-boot-singleflight-atomic-state-authority",
+  "generatedAt": "2026-07-12T13:03:00Z",
+  "tests": {
+    "runnerSyntax": "PASS",
+    "v10153SelfTest": "PASS",
+    "v10152Regression": "PASS",
+    "v10151TemporalIntelligenceRegression": "PASS",
+    "v10150FeatureCoverageRegression": "PASS",
+    "atomicCorruptPrimaryRecovery": "PASS",
+    "earlyHttpBindingBeforeBrowser": "PASS",
+    "bootHealthAvailableDuringBrowserLaunch": "PASS",
     "paperOnlyBoundary": "PASS",
-    "testnetExecution": "DISABLED",
-    "liveCapitalExecution": "DISABLED"
-  }
+    "liveCapitalExecutionDisabled": "PASS",
+    "testnetExecutionDisabled": "PASS"
+  },
+  "observedBootTest": {
+    "httpListeningBeforeBrowserLaunch": true,
+    "bootHealthVersion": "v10.1.53-boot-singleflight-atomic-state-authority",
+    "bootPhase": "BROWSER_SINGLEFLIGHT_STARTING",
+    "browserServerReady": true,
+    "runtimeBootReady": false
+  },
+  "limitations": [
+    "Real Render, Netlify, Binance, and Playwright network execution cannot be completed inside the artifact build environment.",
+    "The underlying dashboard null textContent selector is not changed because the current dashboard source file was not part of this runner artifact. The runner now classifies it as nonfatal and keeps it visible as a warning."
+  ]
 }

@@ -6,7 +6,7 @@
  *
  * Scope:
  * - Paper-only ledger continuity.
- * - Never decreases the published closedTrades high-water mark within the new clean evidence epoch.
+ * - Never decreases the published closedTrades high-water mark.
  * - Never removes canonical closed-trade rows.
  * - Does not modify strategies, pairs, timeframes, entries, exits, or dashboard logic.
  * - Does not enable testnet or live-capital execution.
@@ -195,7 +195,7 @@ function createClosedLedgerAuthority(options = {}) {
     0,
     finiteNumber(
       options.seedFloor,
-      finiteNumber(process.env.ALPS_CLOSED_LEDGER_SEED_FLOOR, 0)
+      finiteNumber(process.env.ALPS_CLOSED_LEDGER_SEED_FLOOR, 78)
     )
   );
 

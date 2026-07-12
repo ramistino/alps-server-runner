@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.52 Candidate Isolation + Autonomy + Report Authority
+ * ALPS Server Runner — v10.1.53 Boot Singleflight + Atomic State Authority
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -372,6 +372,12 @@ let lastBootProgressAt = Date.now();
 let lastBootWatchdogAt = 0;
 let bootWatchdogRestarts = 0;
 let watchdogActionBusy = false;
+// v10.1.53: single-flight browser/report coordination and early HTTP boot authority.
+let browserLaunchPromise = null;
+let collectReportPromise = null;
+let runtimeBootReady = false;
+let runtimeBootPhase = 'PROCESS_START';
+const v10153AtomicWriteQueues = new Map();
 let lastRunnerWatchdogView = null;
 let lastOOSEvidenceBridgeView = null;
 let lastOOSEvidenceRows = [];
@@ -467,7 +473,7 @@ function v10152TierCounts(rows = []) {
   return out;
 }
 function v10152PersistJsonSync(file, value) {
-  try { fs.mkdirSync(path.dirname(file), {recursive:true}); fs.writeFileSync(file, JSON.stringify(value, null, 2)); return true; } catch (_) { return false; }
+  try { v10153AtomicWriteJsonSync(file, value, 'v10152-authority-view'); return true; } catch (_) { return false; }
 }
 function v10152ReconcileCandidateAuthorities(report = {}, reason = 'candidate-authority') {
   const raw = [];
@@ -582,11 +588,39 @@ function v10152RunSelfTest() {
   result.pass=Object.entries(result).filter(([k])=>!['version','pass','liveCapitalExecution','testnetExecution'].includes(k)).every(([,v])=>v===true) && result.liveCapitalExecution===false && result.testnetExecution===false;
   return result;
 }
+function v10153RunSelfTest() {
+  const base=v10152RunSelfTest();
+  let atomicCorruptRecovery=false;
+  const testFile=path.join(DATA_DIR,`.v10153-atomic-selftest-${process.pid}.json`);
+  try {
+    v10153AtomicWriteJsonSync(testFile,{seq:1},'selftest-first');
+    v10153AtomicWriteJsonSync(testFile,{seq:2},'selftest-second');
+    fs.writeFileSync(testFile,'{"truncated":','utf8');
+    const recovered=v10153ReadJsonAuthoritySync(testFile,'v10153-selftest');
+    atomicCorruptRecovery=!!(recovered.ok && recovered.recovered && recovered.parsed?.seq===1);
+  } catch (_) { atomicCorruptRecovery=false; }
+  try {
+    for (const name of fs.readdirSync(path.dirname(testFile))) if (name.startsWith(path.basename(testFile))) fs.rmSync(path.join(path.dirname(testFile),name),{force:true});
+  } catch (_) {}
+  const result={
+    version:FINAL_V930_VERSION,
+    v10152Regression:base.pass===true,
+    launchSingleflight:typeof launchAppPage==='function' && browserLaunchPromise===null,
+    reportSingleflight:typeof collectReport==='function' && collectReportPromise===null,
+    atomicWriterReady:typeof v10153AtomicWriteJsonSync==='function' && typeof v10153QueueAtomicJsonWrite==='function',
+    corruptRecoveryReaderReady:typeof v10153ReadJsonAuthoritySync==='function',
+    atomicCorruptRecovery,
+    earlyBootAuthority:typeof runtimeBootPhase==='string',
+    paperOnly:true,liveCapitalExecution:false,testnetExecution:false
+  };
+  result.pass=Object.entries(result).filter(([k])=>!['version','pass','liveCapitalExecution','testnetExecution'].includes(k)).every(([,v])=>v===true) && !result.liveCapitalExecution && !result.testnetExecution;
+  return result;
+}
 
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.52-candidate-isolation-autonomy-report-authority';
+const FINAL_V930_VERSION = 'v10.1.53-boot-singleflight-atomic-state-authority';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -4598,15 +4632,16 @@ function v944BuildSyntheticIndicatorEngineView(report = {}, latchView = null) {
 
 async function loadForwardLatchState() {
   try {
-    const raw = await fsp.readFile(V944_FORWARD_LATCH_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
+    const loaded = v10153ReadJsonAuthoritySync(V944_FORWARD_LATCH_FILE, 'v10.1.53 forward-latch');
+    const parsed = loaded.ok ? loaded.parsed : null;
     if (parsed && Array.isArray(parsed.candidates)) forwardLatchState = { ...forwardLatchState, ...parsed, version: FINAL_V930_VERSION };
+    if (loaded.recovered) log(`v10.1.53 forward latch recovered from ${loaded.source}`);
   } catch (_) {}
   lastForwardLatchView = v944BuildForwardLatchView();
   return forwardLatchState;
 }
 async function saveForwardLatchState() {
-  try { await fsp.mkdir(DATA_DIR, { recursive: true }); await fsp.writeFile(V944_FORWARD_LATCH_FILE, JSON.stringify(forwardLatchState, null, 2)); } catch (_) {}
+  try { await v10153QueueAtomicJsonWrite(V944_FORWARD_LATCH_FILE, forwardLatchState, 'forward-latch-state'); } catch (_) {}
 }
 function v941ExperimentalCountFromView(view = lastNativeForwardPoolView || {}) { return n(view.experimentalForward, 0); }
 function v941IsForwardTier(tier = '') { return /^(FULL_AUTONOMY_FORWARD|WATCH_FORWARD|EXPERIMENTAL_FORWARD)$/.test(textValue(tier)); }
@@ -5272,22 +5307,78 @@ function v952BuildQualityBuckets(rows = []) {
 
 function v1000NowIso() { try { return new Date().toISOString(); } catch (_) { return ''; } }
 
+// v10.1.53: state files are never written in-place. A process restart can no longer
+// leave a half-written JSON document as the primary authority file.
+function v10153AtomicWriteTextSync(file, text, label = 'atomic-write') {
+  const dir = path.dirname(file);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  fs.writeFileSync(tmp, String(text), 'utf8');
+  try { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.previous`); } catch (_) {}
+  fs.renameSync(tmp, file);
+  return { ok:true, file, label, bytes:Buffer.byteLength(String(text)) };
+}
+function v10153AtomicWriteJsonSync(file, value, label = 'atomic-json-write') {
+  return v10153AtomicWriteTextSync(file, JSON.stringify(value), label);
+}
+function v10153QueueAtomicJsonWrite(file, value, label = 'atomic-json-write') {
+  const text = JSON.stringify(value);
+  const prior = v10153AtomicWriteQueues.get(file) || Promise.resolve();
+  const next = prior.catch(() => null).then(async () => {
+    const dir = path.dirname(file);
+    await fsp.mkdir(dir, { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+    await fsp.writeFile(tmp, text, 'utf8');
+    try { await fsp.copyFile(file, `${file}.previous`); } catch (_) {}
+    await fsp.rename(tmp, file);
+    return { ok:true, file, label, bytes:Buffer.byteLength(text) };
+  });
+  v10153AtomicWriteQueues.set(file, next);
+  next.finally(() => { if (v10153AtomicWriteQueues.get(file) === next) v10153AtomicWriteQueues.delete(file); }).catch(() => null);
+  return next;
+}
+function v10153ReadJsonAuthoritySync(file, label = 'json-authority') {
+  const candidates = [file, `${file}.previous`];
+  let firstError = null;
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const raw = fs.readFileSync(candidate, 'utf8');
+      const parsed = JSON.parse(raw);
+      return { ok:true, parsed, source:candidate, recovered:candidate !== file, bytes:Buffer.byteLength(raw) };
+    } catch (e) {
+      if (!firstError) firstError = e;
+      if (candidate === file && fs.existsSync(file)) {
+        try {
+          const quarantine = `${file}.corrupt-${Date.now()}`;
+          fs.renameSync(file, quarantine);
+          log(`${label} corrupt primary quarantined: ${quarantine} error=${e.message}`);
+        } catch (_) {}
+      }
+    }
+  }
+  return { ok:false, parsed:null, source:'', recovered:false, error:firstError ? firstError.message : 'FILE_NOT_FOUND' };
+}
+
 function v1014StateRowCount(st = {}) {
   return Array.isArray(st?.rowOrder) ? st.rowOrder.filter(k => st?.rowsByKey?.[k]).length : 0;
 }
 function v1014LoadNonzeroAuthoritySync() {
-  try {
-    if (!fs.existsSync(STATE_AUTHORITY_NONZERO_FILE)) return null;
-    const parsed = JSON.parse(fs.readFileSync(STATE_AUTHORITY_NONZERO_FILE, 'utf8'));
-    return v1014StateRowCount(parsed) > 0 ? parsed : null;
-  } catch (e) { log('v10.1.4 nonzero authority load skipped:', e.message); return null; }
+  const loaded = v10153ReadJsonAuthoritySync(STATE_AUTHORITY_NONZERO_FILE, 'v10.1.53 nonzero-authority');
+  if (!loaded.ok) {
+    if (loaded.error !== 'FILE_NOT_FOUND') log('v10.1.4 nonzero authority load skipped:', loaded.error);
+    return null;
+  }
+  const parsed = loaded.parsed;
+  if (loaded.recovered) log(`v10.1.53 nonzero authority recovered from ${loaded.source}`);
+  return v1014StateRowCount(parsed) > 0 ? parsed : null;
 }
 function v1014PersistNonzeroAuthoritySync(st = {}, reason = 'unknown') {
   try {
     if (v1014StateRowCount(st) <= 0) return;
     const backup = { ...st, lastNonZeroBackupReason: reason, lastNonZeroBackupAt: v1000NowIso(), version: FINAL_V930_VERSION };
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(STATE_AUTHORITY_NONZERO_FILE, JSON.stringify(backup, null, 2));
+    v10153AtomicWriteJsonSync(STATE_AUTHORITY_NONZERO_FILE, backup, 'state-authority-nonzero');
   } catch (e) { log('v10.1.4 nonzero authority backup skipped:', e.message); }
 }
 function v1014RestoreStateAuthorityFromBackupIfEmpty(st = null, reason = 'unknown') {
@@ -5299,7 +5390,7 @@ function v1014RestoreStateAuthorityFromBackupIfEmpty(st = null, reason = 'unknow
   backup.restoredAt = v1000NowIso();
   backup.restoreReason = reason;
   stateAuthorityV10 = backup;
-  try { fs.writeFileSync(STATE_AUTHORITY_FILE, JSON.stringify(stateAuthorityV10, null, 2)); } catch (_) {}
+  try { v10153AtomicWriteJsonSync(STATE_AUTHORITY_FILE, stateAuthorityV10, 'state-authority-restore'); } catch (_) {}
   return stateAuthorityV10;
 }
 function v1014RuntimeCounts(obj = {}) {
@@ -5363,18 +5454,19 @@ function v1000LoadStateAuthoritySync() {
     sources: {},
     resetRequiredForClear: ['USER_RESET','DATA_INVALIDATED','SYMBOL_CONFIG_CHANGED','MANUAL_CLEAR']
   };
-  try {
-    if (fs.existsSync(STATE_AUTHORITY_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(STATE_AUTHORITY_FILE, 'utf8'));
-      stateAuthorityV10 = { ...fresh, ...(parsed || {}), rowsByKey: parsed?.rowsByKey || {}, rowOrder: Array.isArray(parsed?.rowOrder) ? parsed.rowOrder : [] };
-      stateAuthorityV10 = v1014RestoreStateAuthorityFromBackupIfEmpty(stateAuthorityV10, 'load-primary-empty');
-      return stateAuthorityV10;
-    }
-  } catch (e) { log('v10 state authority load skipped:', e.message); }
+  const loadedPrimary = v10153ReadJsonAuthoritySync(STATE_AUTHORITY_FILE, 'v10.1.53 state-authority');
+  if (loadedPrimary.ok) {
+    const parsed = loadedPrimary.parsed;
+    stateAuthorityV10 = { ...fresh, ...(parsed || {}), rowsByKey: parsed?.rowsByKey || {}, rowOrder: Array.isArray(parsed?.rowOrder) ? parsed.rowOrder : [] };
+    stateAuthorityV10 = v1014RestoreStateAuthorityFromBackupIfEmpty(stateAuthorityV10, loadedPrimary.recovered ? 'load-previous-after-corrupt-primary' : 'load-primary-empty');
+    if (loadedPrimary.recovered) log(`v10.1.53 state authority recovered from ${loadedPrimary.source}`);
+    return stateAuthorityV10;
+  }
+  if (loadedPrimary.error && loadedPrimary.error !== 'FILE_NOT_FOUND') log('v10 state authority load skipped:', loadedPrimary.error);
   const backup = v1014LoadNonzeroAuthoritySync();
   if (backup) {
     stateAuthorityV10 = { ...fresh, ...(backup || {}), rowsByKey: backup?.rowsByKey || {}, rowOrder: Array.isArray(backup?.rowOrder) ? backup.rowOrder : [], restoredFromNonzeroBackup: true, restoredAt: v1000NowIso(), restoreReason: 'primary-missing' };
-    try { fs.writeFileSync(STATE_AUTHORITY_FILE, JSON.stringify(stateAuthorityV10, null, 2)); } catch (_) {}
+    try { v10153AtomicWriteJsonSync(STATE_AUTHORITY_FILE, stateAuthorityV10, 'state-authority-backup-restore'); } catch (_) {}
     return stateAuthorityV10;
   }
   stateAuthorityV10 = fresh;
@@ -5384,7 +5476,8 @@ function v1000PersistStateAuthoritySoon() {
   try {
     if (!stateAuthorityV10) return;
     if (v1014StateRowCount(stateAuthorityV10) > 0) v1014PersistNonzeroAuthoritySync(stateAuthorityV10, 'persist-state-authority');
-    fsp.mkdir(DATA_DIR, { recursive: true }).then(() => fsp.writeFile(STATE_AUTHORITY_FILE, JSON.stringify(stateAuthorityV10, null, 2))).catch(e => log('v10 state authority persist skipped:', e.message));
+    const snapshot = { ...stateAuthorityV10, rowsByKey:{ ...(stateAuthorityV10.rowsByKey || {}) }, rowOrder:[...(stateAuthorityV10.rowOrder || [])] };
+    v10153QueueAtomicJsonWrite(STATE_AUTHORITY_FILE, snapshot, 'state-authority-primary').catch(e => log('v10 state authority persist skipped:', e.message));
   } catch (_) {}
 }
 function v1000RowKey(raw = {}) {
@@ -10298,6 +10391,18 @@ async function createServer() {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+      if (!runtimeBootReady && url.pathname.startsWith('/runner/')) {
+        const bootHealth = {
+          schema:'alps.bootHealth.v10153', version:FINAL_V930_VERSION,
+          status:'BOOTING', bootPhase:runtimeBootPhase, runtimeBootReady:false,
+          browserServerReady, pageReady:!!(page && !page.isClosed()),
+          appUrl:APP_URL_ENV || `${staticBaseUrl}/index.html`,
+          persistentDataDir:DATA_DIR, paperOnly:true, liveCapitalExecution:false,
+          startedAt:lastHealth.startedAt, generatedAt:new Date().toISOString()
+        };
+        if (['/runner/health','/runner/health-lite','/runner/live-health.json','/runner/current-health-lite.json','/runner/recovery'].includes(url.pathname)) return send(res, 200, bootHealth);
+        return send(res, 503, { ...bootHealth, error:'RUNTIME_BOOT_NOT_READY_RETRY' });
+      }
       if (['/runner/chatgpt-report.json','/runner/chatgpt-compact.json','/runner/system-report.json','/runner/alps-system-report.json','/runner/report-authority.json','/runner/latest-report-authority.json'].includes(url.pathname)) {
         const compact = await v10116BuildCompactReportForEndpoint(url, url.pathname.slice(1).replace(/\//g, '-'));
         if (url.pathname.includes('authority')) { compact.reportAuthority = v10118ReportAuthorityView(lastReport || lastHealth || {}, url.pathname); compact.v10119ReportAuthority = compact.reportAuthority; }
@@ -10319,6 +10424,7 @@ async function createServer() {
       if (url.pathname === '/runner/temporal-evidence.json') { v10151RefreshIntelligence(lastReport||lastHealth||{}, true); return send(res,200,lastV10151TemporalEvidenceView||{}); }
       if (url.pathname === '/runner/v10151-self-test.json') return send(res,200,v10151RunSelfTest());
       if (url.pathname === '/runner/v10152-self-test.json') return send(res,200,v10152RunSelfTest());
+      if (url.pathname === '/runner/v10153-self-test.json') return send(res,200,v10153RunSelfTest());
       if (url.pathname === '/runner/candidate-authority.json') { v10152ReconcileCandidateAuthorities(lastReport||lastHealth||{},'endpoint'); return send(res,200,lastV10152CandidateAuthorityView||{}); }
       if (url.pathname === '/runner/open-reconciliation.json') return send(res,200,v10152BuildOpenReconciliationJournal());
       if (url.pathname === '/runner/pending-reconciliation.json') return send(res,200,v10152BuildPendingReconciliationJournal());
@@ -10387,7 +10493,7 @@ async function createServer() {
         healthTruth.v10118ReportAuthority = v10118ReportAuthorityView(healthTruth, 'health-endpoint-before-send');
         healthTruth.v10119ReportAuthority = healthTruth.v10118ReportAuthority;
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10151TemporalEvidence:(v10151RefreshIntelligence(healthTruth).temporal), ahiRegimeIntelligence:lastV10151AhiRegimeView, hypothesisDNA:lastV10151HypothesisDNAView, evidenceChamber:lastV10151EvidenceChamberView, autonomyEligibility:lastV10151AutonomyEligibilityView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
+        return send(res, 200, { ...healthTruth, runtimeBootReady, runtimeBootPhase, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10151TemporalEvidence:(v10151RefreshIntelligence(healthTruth).temporal), ahiRegimeIntelligence:lastV10151AhiRegimeView, hypothesisDNA:lastV10151HypothesisDNAView, evidenceChamber:lastV10151EvidenceChamberView, autonomyEligibility:lastV10151AutonomyEligibilityView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
@@ -10979,6 +11085,15 @@ async function installV930StableAutonomyInPage() {
 }
 
 async function launchAppPage(options = {}) {
+  if (page && !page.isClosed() && !options.forceRelaunch) return true;
+  if (browserLaunchPromise) return browserLaunchPromise;
+  browserLaunchPromise = launchAppPageInternal(options);
+  try { return await browserLaunchPromise; }
+  finally { browserLaunchPromise = null; }
+}
+
+async function launchAppPageInternal(options = {}) {
+  if (page && !page.isClosed() && !options.forceRelaunch) return true;
   const appUrl = APP_URL_ENV || `${staticBaseUrl}/index.html`;
   lastHealth.appUrl = appUrl;
   const allowProfileReset = options.allowProfileReset !== false;
@@ -11034,6 +11149,12 @@ async function launchAppPage(options = {}) {
       });
       page.on('pageerror', err => {
         const info = errorInfo(err);
+        const nonfatalDomBinding = /Cannot set properties of null \(setting ['\"]textContent['\"]\)|no root found/i.test(info.message || '');
+        if (nonfatalDomBinding) {
+          lastHealth.pageRuntimeWarning = { status:'NONFATAL_DASHBOARD_DOM_BINDING_WARNING', message:info.message, at:new Date().toISOString() };
+          log('[pagewarning]', info.message);
+          return;
+        }
         lastHealth.lastError = info.message;
         log('[pageerror]', info.message);
       });
@@ -12013,6 +12134,8 @@ async function applyV949TradeLifecycleGuards(reason = 'v949-trade-lifecycle-guar
 
 async function startForwardIfEligible(reason = 'live-paper-evidence-collector') {
   await loadForwardLatchState().catch(() => null);
+  v10152ReconcileCandidateAuthorities(lastReport || lastHealth || {}, `start-forward:${reason}`);
+  await saveForwardLatchState().catch(() => null);
   const pool = lastNativeForwardPoolView || lastHealth?.nativeForwardPool || {};
   const poolEligible = v94ForwardEligibleCountFromView(pool);
   const latchEligible = v944ForwardLatchEligibleCount();
@@ -12267,10 +12390,17 @@ async function ensureRuntimeStarted() {
 
   await triggerActualResearchIfNeeded('ensure-runtime-actual-research-trigger', lastHealth).catch(() => null);
 
-  if (!refreshed.candidates && AUTO_START_LAB && !refreshed.labRunning) {
-    log('No candidates found. ALPS_AUTO_START_LAB=1, starting full Lab. This can take time.');
+  const persistedCandidateCount = Math.max(v1000ActiveRows().length, safeArray(forwardLatchState?.candidates).length, n(lastNativeForwardPoolView?.totalCandidates,0));
+  if (!refreshed.candidates && AUTO_START_LAB && !refreshed.labRunning && persistedCandidateCount <= 0) {
+    log('No candidates found after persistent authority recovery. ALPS_AUTO_START_LAB=1, starting full Lab. This can take time.');
     await pageEval(() => { if (typeof startLab === 'function') startLab(); return true; });
     return;
+  }
+  if (!refreshed.candidates && persistedCandidateCount > 0) {
+    log(`Browser candidate view empty but persistent authority has ${persistedCandidateCount}; applying reconciled latch instead of restarting full Lab.`);
+    v10152ReconcileCandidateAuthorities(lastReport || lastHealth || {}, 'ensure-runtime-persisted-candidate-rebind');
+    await saveForwardLatchState().catch(() => null);
+    await applyForwardLatchToPage('ensure-runtime-persisted-candidate-rebind').catch(() => null);
   }
 
   const eligibleForward = v94ForwardEligibleCountFromView(lastHealth.nativeForwardPool || refreshed.nativeForwardPool || {});
@@ -12572,6 +12702,9 @@ async function runnerTick(reason = 'server-runner tick') {
     await syncOosEvidenceBridgeFromPage('runner-tick').catch(() => null);
     await applyOosEvidenceBridgeToPage('runner-tick').catch(() => null);
     await installV930StableAutonomyInPage().catch(e => log('v9.4 recovery forward core reinstall after bridge failed:', e.message));
+    await loadForwardLatchState().catch(() => null);
+    v10152ReconcileCandidateAuthorities(lastReport || lastHealth || {}, 'runner-tick-before-latch');
+    await saveForwardLatchState().catch(() => null);
     await applyForwardLatchToPage('runner-tick-apply-latch').catch(() => null);
     await applyV948ZonePersistenceEntryEngine('runner-tick-zone-persistence-entry').catch(() => null);
     // v10.1.40: the v10.1.38 sentinel can run before the paper-entry engine creates new open trades.
@@ -12629,6 +12762,13 @@ function scrubLegacyReportMarkdown(md = '') {
 }
 
 async function collectReport() {
+  if (collectReportPromise) return collectReportPromise;
+  collectReportPromise = collectReportInternal();
+  try { return await collectReportPromise; }
+  finally { collectReportPromise = null; }
+}
+
+async function collectReportInternal() {
   if (!page || page.isClosed()) throw new Error('ALPS page is not ready');
   await v1000InstallPageAuthorityHooks('collect-report-before-build').catch(e => log('v10 authority hooks before report failed:', e.message));
   let report = await pageEval(async () => {
@@ -12971,17 +13111,26 @@ async function maybeNotify(h) {
 
 async function main() {
   await ensureDirs();
+  runtimeBootPhase = 'HTTP_BINDING';
+  await createServer();
+  runtimeBootPhase = 'PERSISTENT_STATE_LOADING';
   await loadRecoveryState();
   await v10149LoadEvidenceLedger();
   await v10149TryPreCutoverMigration();
   await v10148LoadSentinelRuntime();
-  await v10147ReconcileClosedLedgerBeforePublish('startup-before-server-listen').catch(e => {
+  await loadForwardLatchState().catch(() => null);
+  v1000LoadStateAuthoritySync();
+  v10152ReconcileCandidateAuthorities(lastReport || lastHealth || {}, 'startup-persistent-authority-reconcile');
+  await saveForwardLatchState().catch(() => null);
+  await v10147ReconcileClosedLedgerBeforePublish('startup-after-server-listen').catch(e => {
     lastHealth = { ...(lastHealth || {}), closedLedgerAuthorityStatus:'STARTUP_AUTHORITY_RECONCILE_FAILED', closedLedgerAuthorityError:textValue(e && e.message || e).slice(0,220) };
   });
-  await v10149PersistEvidenceLedger('startup-before-server-listen');
-  await createServer();
+  await v10149PersistEvidenceLedger('startup-after-server-listen');
   v10148StartSentinelLoop();
+  runtimeBootPhase = 'BROWSER_SINGLEFLIGHT_STARTING';
   const launched = await launchAppPage();
+  runtimeBootReady = true;
+  runtimeBootPhase = launched ? 'RUNTIME_READY' : 'RECOVERY_ONLY_PAGE_LAUNCH_FAILED';
   if (launched) {
     await runnerTick('startup');
   } else {
@@ -13010,7 +13159,11 @@ async function shutdown() {
   process.exit(0);
 }
 
-if (String(process.env.ALPS_V10152_SELFTEST || '') === '1') {
+if (String(process.env.ALPS_V10153_SELFTEST || '') === '1') {
+  const selfTest = v10153RunSelfTest();
+  console.log(JSON.stringify(selfTest, null, 2));
+  process.exit(selfTest.pass ? 0 : 1);
+} else if (String(process.env.ALPS_V10152_SELFTEST || '') === '1') {
   const selfTest = v10152RunSelfTest();
   console.log(JSON.stringify(selfTest, null, 2));
   process.exit(selfTest.pass ? 0 : 1);
