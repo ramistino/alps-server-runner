@@ -19,6 +19,11 @@ class UnifiedOrchestrator {
     this.log = log;
     this.strategyHeartbeat = new StrategyHeartbeat();
     this.candidateCohortTracker = new CandidateCohortTracker({ config, log });
+    this.supervisor = null;
+    this.fastAttemptId = 0;
+    this.heavyAttemptId = 0;
+    this.heavyCircuitOpenUntil = 0;
+    this.heavyCircuitReason = null;
 
     this.fastTimer = null;
     this.heavyTimer = null;
@@ -47,6 +52,8 @@ class UnifiedOrchestrator {
         lastSuccessAt:null,
         lastError:null,
         durationMs:0,
+        consecutiveFailures:0,
+        expiredAttempts:0,
       },
       heavy:{
         sequence:0,
@@ -56,6 +63,10 @@ class UnifiedOrchestrator {
         lastSuccessAt:null,
         lastError:null,
         durationMs:0,
+        circuitOpenUntil:null,
+        circuitReason:null,
+        cancelledAttempts:0,
+        mode:'LIGHTWEIGHT_CONTROL_PLANE_AUTHORITY',
       },
       recovery:{
         sequence:0,
@@ -112,23 +123,30 @@ class UnifiedOrchestrator {
       fast:{...this.runtime.fast},
       heavy:{...this.runtime.heavy},
       recovery:{...this.runtime.recovery},
+      supervisor:this.supervisor ? this.supervisor.status() : null,
       sources:sourceView,
-      architecture:'NON_BLOCKING_FAST_HEALTH_PLUS_BACKGROUND_EVIDENCE_PLUS_INDEPENDENT_RECOVERY',
+      activeInternalRequests:this.client && this.client.activeView ? this.client.activeView() : [],
+      architecture:'SUPERVISED_FAST_HEALTH_PLUS_NON_BLOCKING_AUTHORITY_REFRESH_PLUS_INDEPENDENT_RECOVERY',
     };
+  }
+
+  attachSupervisor(supervisor) {
+    this.supervisor = supervisor;
+    return this.runtimeView();
   }
 
   start() {
     if (this.fastTimer || this.heavyTimer || this.recoveryTimer) return;
     this.fastTimer = setInterval(
-      () => this.fastPoll('interval').catch(error => this.log('[v10.2.0] fast poll error', summarizeError(error))),
+      () => this.fastPoll('interval').catch(error => this.log('[v10.2.1] fast poll error', summarizeError(error))),
       this.config.fastPollMs
     );
     this.heavyTimer = setInterval(
-      () => this.heavyPoll('interval').catch(error => this.log('[v10.2.0] heavy poll error', summarizeError(error))),
+      () => this.heavyPoll('interval').catch(error => this.log('[v10.2.1] heavy poll error', summarizeError(error))),
       this.config.heavyPollMs
     );
     this.recoveryTimer = setInterval(
-      () => this.recoveryTick('interval').catch(error => this.log('[v10.2.0] recovery error', summarizeError(error))),
+      () => this.recoveryTick('interval').catch(error => this.log('[v10.2.1] recovery error', summarizeError(error))),
       this.config.recoveryPollMs
     );
     this.fastTimer.unref();
@@ -147,6 +165,7 @@ class UnifiedOrchestrator {
     this.fastTimer = null;
     this.heavyTimer = null;
     this.recoveryTimer = null;
+    if (this.supervisor && typeof this.supervisor.stop === 'function') this.supervisor.stop();
   }
 
   async bootstrap(reason = 'bootstrap') {
@@ -172,10 +191,10 @@ class UnifiedOrchestrator {
     this.runtime.sources[name] = {...previous, ...patch};
   }
 
-  async fetchSource(name, pathname, timeoutMs) {
+  async fetchSource(name, pathname, timeoutMs, group = 'default') {
     const started = Date.now();
     this.markSource(name, { lastStartedAt:iso(started) });
-    const response = await this.client.get(pathname, { timeoutMs });
+    const response = await this.client.get(pathname, { timeoutMs, group });
     const completed = Date.now();
     const patch = {
       lastCompletedAt:iso(completed),
@@ -193,19 +212,55 @@ class UnifiedOrchestrator {
     return { ok:false, data:null, status:response.status || 0, error:patch.lastError };
   }
 
+  expireFastAttempt(reason = 'FAST_ATTEMPT_EXPIRED') {
+    this.fastAttemptId += 1;
+    this.client.cancelGroup('fast', reason);
+    this.fastPolling = false;
+    this.runtime.fast.inFlight = false;
+    this.runtime.fast.expiredAttempts = finite(this.runtime.fast.expiredAttempts, 0) + 1;
+    this.runtime.fast.lastError = { name:'FastAttemptExpired', message:reason, code:reason };
+    this.runtime.fast.lastCompletedAt = iso();
+    return this.runtimeView();
+  }
+
   async fastPoll(reason = 'manual') {
-    if (this.fastPolling) return this.snapshot('fast-poll-already-running');
+    const now = Date.now();
+    if (this.fastPolling) {
+      const ageMs = this.runtime.fast.lastStartedAt
+        ? now - timestamp(this.runtime.fast.lastStartedAt)
+        : 0;
+      if (ageMs <= this.config.fastHardDeadlineMs) return this.snapshot('fast-poll-already-running');
+      this.expireFastAttempt('FAST_POLL_ORPHANED_BEYOND_HARD_DEADLINE');
+    }
+
+    const attemptId = ++this.fastAttemptId;
     this.fastPolling = true;
     this.runtime.fast.inFlight = true;
-    this.runtime.fast.lastStartedAt = iso();
+    this.runtime.fast.lastStartedAt = iso(now);
     const started = Date.now();
 
     try {
-      const [versionResult, liveResult] = await Promise.all([
-        this.fetchSource('version', '/runner/version', this.config.fastVersionTimeoutMs),
-        this.fetchSource('live', '/runner/live', this.config.fastLiveTimeoutMs),
-      ]);
+      const deadline = new Promise(resolve => {
+        const timer = setTimeout(() => resolve({ deadline:true }), this.config.fastHardDeadlineMs);
+        if (typeof timer.unref === 'function') timer.unref();
+      });
+      const work = Promise.all([
+        this.fetchSource('version', '/runner/version', this.config.fastVersionTimeoutMs, 'fast'),
+        this.fetchSource('live', '/runner/live', this.config.fastLiveTimeoutMs, 'fast'),
+      ]).then(([versionResult, liveResult]) => ({ versionResult, liveResult }));
+      const outcome = await Promise.race([work, deadline]);
+      if (attemptId !== this.fastAttemptId) return this.snapshot('fast-poll-superseded');
+      if (outcome.deadline) {
+        this.client.cancelGroup('fast', 'FAST_HARD_DEADLINE');
+        this.runtime.fast.sequence += 1;
+        this.runtime.fast.consecutiveFailures += 1;
+        this.runtime.fast.lastCompletedAt = iso();
+        this.runtime.fast.durationMs = Date.now() - started;
+        this.runtime.fast.lastError = { name:'FastPollDeadline', message:'Fast poll exceeded hard deadline', code:'FAST_HARD_DEADLINE' };
+        return this.snapshot(reason);
+      }
 
+      const { versionResult, liveResult } = outcome;
       if (versionResult.ok) this.raw.version = versionResult.data;
       if (liveResult.ok) {
         this.raw.live = liveResult.data;
@@ -221,10 +276,12 @@ class UnifiedOrchestrator {
       this.runtime.fast.lastCompletedAt = iso();
       this.runtime.fast.durationMs = Date.now()-started;
 
-      if (versionResult.ok && liveResult.ok) {
+      if (liveResult.ok) {
         this.runtime.fast.lastSuccessAt = iso();
-        this.runtime.fast.lastError = null;
+        this.runtime.fast.lastError = versionResult.ok ? null : { version:versionResult.error || null, live:null };
+        this.runtime.fast.consecutiveFailures = 0;
       } else {
+        this.runtime.fast.consecutiveFailures += 1;
         this.runtime.fast.lastError = {
           version:versionResult.error || null,
           live:liveResult.error || null,
@@ -233,57 +290,138 @@ class UnifiedOrchestrator {
 
       return this.snapshot(reason);
     } finally {
-      this.fastPolling = false;
-      this.runtime.fast.inFlight = false;
+      if (attemptId === this.fastAttemptId) {
+        this.fastPolling = false;
+        this.runtime.fast.inFlight = false;
+      }
     }
   }
 
+  openHeavyCircuit(reason = 'HEAVY_CIRCUIT_OPENED') {
+    this.heavyAttemptId += 1;
+    this.client.cancelGroup('heavy', reason);
+    this.heavyPolling = false;
+    this.runtime.heavy.inFlight = false;
+    this.runtime.heavy.cancelledAttempts = finite(this.runtime.heavy.cancelledAttempts, 0) + 1;
+    this.heavyCircuitOpenUntil = Date.now() + this.config.heavyCircuitCooldownSec * 1000;
+    this.heavyCircuitReason = reason;
+    this.runtime.heavy.circuitOpenUntil = iso(this.heavyCircuitOpenUntil);
+    this.runtime.heavy.circuitReason = reason;
+    this.runtime.heavy.lastError = { name:'HeavyCircuitOpen', message:reason, code:reason };
+    return this.runtimeView();
+  }
+
+  async afterAdapterRestart(reason = 'ADAPTER_RESTART') {
+    this.expireFastAttempt(`RESET_AFTER_${reason}`);
+    this.raw.version = null;
+    this.raw.live = null;
+    this.strategyHeartbeat = new StrategyHeartbeat();
+    this.recovery.lastActionAt = null;
+    const [watch, lab] = await Promise.all([
+      this.client.postJson('/runner/command', { command:'start-watch' }, { timeoutMs:this.config.recoveryCommandTimeoutMs, group:'recovery' }),
+      this.client.postJson('/runner/command', { command:'start-lab' }, { timeoutMs:this.config.recoveryCommandTimeoutMs, group:'recovery' }),
+    ]);
+    this.addRecoveryAction('SUPERVISOR_RESTART_START_WATCH_AND_RESEARCH', {
+      ok:watch.ok && lab.ok,
+      status:lab.status || watch.status,
+      data:{ status:`watch=${watch.ok};lab=${lab.ok}` },
+    });
+    await this.fastPoll('after-supervised-adapter-restart');
+    return this.snapshot('after-supervised-adapter-restart');
+  }
+
   async heavyPoll(reason = 'manual') {
+    const now = Date.now();
     if (!this.runtime.fast.lastSuccessAt || !this.adapter.status().running) {
       this.runtime.heavy.lastError = null;
       return this.snapshot('heavy-poll-skipped-waiting-for-fast-health');
     }
+    if (this.heavyCircuitOpenUntil > now) {
+      this.runtime.heavy.circuitOpenUntil = iso(this.heavyCircuitOpenUntil);
+      this.runtime.heavy.circuitReason = this.heavyCircuitReason;
+      return this.snapshot('heavy-poll-skipped-circuit-open');
+    }
+    if (this.heavyCircuitOpenUntil && this.heavyCircuitOpenUntil <= now) {
+      this.heavyCircuitOpenUntil = 0;
+      this.heavyCircuitReason = null;
+      this.runtime.heavy.circuitOpenUntil = null;
+      this.runtime.heavy.circuitReason = null;
+      this.runtime.heavy.lastError = null;
+    }
     if (this.heavyPolling) return this.snapshot('heavy-poll-already-running');
+
+    const attemptId = ++this.heavyAttemptId;
     this.heavyPolling = true;
     this.runtime.heavy.inFlight = true;
     this.runtime.heavy.lastStartedAt = iso();
     const started = Date.now();
-
-    const specs = [
-      ['candidateAuthority','/runner/candidate-authority.json',30_000],
-      ['candleDepth','/runner/candle-depth-authority.json',30_000],
-      ['chartTruth','/runner/chart-truth.json',30_000],
-      ['trades','/runner/trades.json',this.config.tradesTimeoutMs],
-      ['nativePool','/runner/native-forward-pool.json',this.config.nativePoolTimeoutMs],
-    ];
-
     let successCount = 0;
     const errors = {};
+
     try {
-      await Promise.allSettled(specs.map(async ([name, pathname, timeoutMs]) => {
-        const result = await this.fetchSource(name, pathname, timeoutMs);
+      // v10.2.1 deliberately protects the live strategy process from report endpoints
+      // that rebuild thousands of candidate/trade rows. Operational accounting already
+      // comes from the fast live authority, persistent candidate cohort, server features,
+      // and family-adjusted learning. Legacy row audits are opt-in only.
+      if (!this.config.legacyHeavyAuditEnabled) {
+        this.runtime.heavy.sequence += 1;
+        this.runtime.heavy.lastCompletedAt = iso();
+        this.runtime.heavy.lastSuccessAt = iso();
+        this.runtime.heavy.lastError = null;
+        this.runtime.heavy.durationMs = Date.now() - started;
+        this.runtime.heavy.mode = 'HEALTH_PROTECTED_NO_LEGACY_REPORT_REBUILDS';
+        this.runtime.heavy.circuitOpenUntil = null;
+        this.runtime.heavy.circuitReason = null;
+        return this.snapshot(reason);
+      }
+
+      const specs = [
+        ['candidateAuthority','/runner/candidate-authority.json',20_000],
+        ['candleDepth','/runner/candle-depth-authority.json',20_000],
+      ];
+      for (const [name, pathname, timeoutMs] of specs) {
+        if (attemptId !== this.heavyAttemptId) break;
+        const fastAge = this.runtime.fast.lastSuccessAt
+          ? (Date.now() - timestamp(this.runtime.fast.lastSuccessAt)) / 1000
+          : Infinity;
+        if (fastAge >= this.config.fastStallSec / 2) {
+          errors[name] = { name:'HeavyAuditSkipped', message:'Fast health protection activated', code:'FAST_HEALTH_PROTECTION' };
+          break;
+        }
+        const probe = await this.adapter.probe(this.config.supervisorProbeTimeoutMs);
+        if (!probe.ok) {
+          errors[name] = probe.error || { name:'ProbeFailed', message:'Adapter probe failed before heavy audit' };
+          this.openHeavyCircuit('HEAVY_AUDIT_PRE_PROBE_FAILED');
+          break;
+        }
+        const result = await this.fetchSource(name, pathname, timeoutMs, 'heavy');
+        if (attemptId !== this.heavyAttemptId) break;
         if (result.ok) {
           this.raw[name] = result.data;
           successCount += 1;
-          this.snapshot(`heavy-source-${name}`);
         } else {
           errors[name] = result.error;
+          this.openHeavyCircuit(`HEAVY_SOURCE_FAILED:${name}`);
+          break;
         }
-      }));
+      }
 
+      if (attemptId !== this.heavyAttemptId) return this.snapshot('heavy-poll-superseded');
       this.runtime.heavy.sequence += 1;
       this.runtime.heavy.lastCompletedAt = iso();
       this.runtime.heavy.durationMs = Date.now()-started;
       if (successCount > 0) {
         this.runtime.heavy.lastSuccessAt = iso();
         this.runtime.heavy.lastError = Object.keys(errors).length ? errors : null;
-      } else {
+      } else if (Object.keys(errors).length) {
         this.runtime.heavy.lastError = errors;
       }
       return this.snapshot(reason);
     } finally {
-      this.heavyPolling = false;
-      this.runtime.heavy.inFlight = false;
+      if (attemptId === this.heavyAttemptId) {
+        this.heavyPolling = false;
+        this.runtime.heavy.inFlight = false;
+      }
     }
   }
 
@@ -339,6 +477,11 @@ class UnifiedOrchestrator {
         return state;
       }
 
+      if (!state.layers.process || !state.layers.process.fresh) {
+        this.recovery.status = 'SUPERVISOR_OWNS_FAST_HEALTH_RECOVERY';
+        return state;
+      }
+
       if (strategyReady && sentinelFresh) {
         this.recovery.status = 'READY_NO_ACTION_REQUIRED';
         return state;
@@ -366,8 +509,8 @@ class UnifiedOrchestrator {
       if (this.config.autoStartResearch && (!rawLabRunning || !researchReady || this.recovery.actionCount === 0)) {
         action = 'START_WATCH_AND_RESEARCH';
         const [watch, lab] = await Promise.all([
-          this.client.postJson('/runner/command', { command:'start-watch' }, { timeoutMs:this.config.recoveryCommandTimeoutMs }),
-          this.client.postJson('/runner/command', { command:'start-lab' }, { timeoutMs:this.config.recoveryCommandTimeoutMs }),
+          this.client.postJson('/runner/command', { command:'start-watch' }, { timeoutMs:this.config.recoveryCommandTimeoutMs, group:'recovery' }),
+          this.client.postJson('/runner/command', { command:'start-lab' }, { timeoutMs:this.config.recoveryCommandTimeoutMs, group:'recovery' }),
         ]);
         result = {
           ok:watch.ok && lab.ok,
@@ -398,7 +541,7 @@ class UnifiedOrchestrator {
       this.recovery.status = result && result.ok
         ? 'RECOVERY_ACTION_ACCEPTED'
         : 'RECOVERY_ACTION_FAILED';
-      this.log(`[v10.2.0] recovery ${action} ok=${Boolean(result && result.ok)} reason=${reason}`);
+      this.log(`[v10.2.1] recovery ${action} ok=${Boolean(result && result.ok)} reason=${reason}`);
       this.fastPoll('after-recovery-action').catch(()=>{});
       return this.snapshot(reason);
     } catch (error) {
@@ -649,6 +792,7 @@ class UnifiedOrchestrator {
         serverFeatureAuthority:serverFeatures && serverFeatures.status || 'NOT_AVAILABLE',
         fastPollLastSuccessAt:this.runtime.fast.lastSuccessAt,
         heavyPollLastSuccessAt:this.runtime.heavy.lastSuccessAt,
+        runtimeSupervisor:this.supervisor ? this.supervisor.status() : null,
       },
       lastError:{
         fast:this.runtime.fast.lastError,
@@ -808,7 +952,7 @@ class UnifiedOrchestrator {
       s.layers.sentinel.evidenceField !== s.layers.featureEngine.evidenceField;
     const nonBlocking = Boolean(
       s.runtime &&
-      s.runtime.architecture === 'NON_BLOCKING_FAST_HEALTH_PLUS_BACKGROUND_EVIDENCE_PLUS_INDEPENDENT_RECOVERY'
+      s.runtime.architecture === 'SUPERVISED_FAST_HEALTH_PLUS_NON_BLOCKING_AUTHORITY_REFRESH_PLUS_INDEPENDENT_RECOVERY'
     );
     const noFalsePass = !(s.gates && s.gates.overall && s.gates.overall.pass) ||
       (s.researchReady && s.paperLifecycleRunning && s.gates.candidateAccounting.pass && s.gates.learning.pass && s.gates.chart.pass && s.gates.autonomy.pass);
@@ -844,6 +988,7 @@ class UnifiedOrchestrator {
       strategyHeartbeatPublished:Boolean(s.strategyHeartbeat && s.strategyHeartbeat.schema),
       candidateCohortAuthorityPublished:Boolean(s.candidateCohort && s.candidateCohort.schema),
       fullAutonomyAuthorityPublished:Boolean(s.autonomyAuthority && s.autonomyAuthority.schema),
+      runtimeSupervisorPublished:Boolean(s.runtime && s.runtime.supervisor && s.runtime.supervisor.schema),
       serverFeatureAuthorityPublished:Boolean(s.serverFeatures && s.serverFeatures.schema),
       familyAdjustedPerformancePublished:Boolean(
         s.familyAdjustedStats && typeof s.familyAdjustedStats.independentFamilies==='number'

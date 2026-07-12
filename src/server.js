@@ -80,7 +80,7 @@ class PublicServer {
     const adapter = this.adapter.status();
     const runtime = this.orchestrator.runtimeView();
     return {
-      schema:'alps.v10200.processLiveness.v3',
+      schema:'alps.v10201.processLiveness.v1',
       version:this.config.version,
       effectivePatchVersion:this.config.version,
       status:'PROCESS_ALIVE',
@@ -95,6 +95,7 @@ class PublicServer {
         fast:runtime.fast,
         heavy:runtime.heavy,
         recovery:runtime.recovery,
+        supervisor:runtime.supervisor,
       },
       dashboard:{
         installed:true,
@@ -110,7 +111,7 @@ class PublicServer {
         html:'/runner/report.html',
       },
       endpoint:'/runner/version',
-      endpointRole:'V10200_CONTROL_PLANE_LIVENESS_ONLY',
+      endpointRole:'V10201_SUPERVISED_CONTROL_PLANE_LIVENESS_ONLY',
       paperOnly:true,
       liveCapitalExecution:false,
       testnetExecution:false,
@@ -233,8 +234,18 @@ class PublicServer {
         gate:state.gates.autonomy,
         execution:state.execution,
       }),
+      '/runner/supervisor': () => ({
+        schema:'alps.v10201.supervisorView.v1',
+        version:this.config.version,
+        generatedAt:state.generatedAt,
+        supervisor:state.runtime && state.runtime.supervisor,
+        fast:state.runtime && state.runtime.fast,
+        heavy:state.runtime && state.runtime.heavy,
+        adapter:this.adapter.status(),
+        nextRequiredAction:state.gates && state.gates.overall && state.gates.overall.nextRequiredAction,
+      }),
       '/runner/adapter': () => ({
-        schema:'alps.v10200.adapterStatus.v3',
+        schema:'alps.v10201.adapterStatus.v1',
         version:this.config.version,
         generatedAt:state.generatedAt,
         adapter:this.adapter.status(),

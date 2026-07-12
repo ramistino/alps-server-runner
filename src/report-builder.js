@@ -158,6 +158,7 @@ function buildDashboardModel(orchestrator, config, reason = 'dashboard-data') {
       fast: asObject(runtime.fast),
       heavy: asObject(runtime.heavy),
       recovery: asObject(runtime.recovery),
+      supervisor: asObject(runtime.supervisor),
       architecture: text(runtime.architecture),
     },
     adapter: asObject(state.adapter),
@@ -258,8 +259,20 @@ function toMarkdown(model) {
     `## Learning Actions\n\n${actionRows.length ? markdownTable(['Action','Target','Reason'], actionRows) : 'No learning actions published.'}\n\n` +
     `## Pair Confidence\n\n${pairRows.length ? markdownTable(['Pair','Closed','Wins','Losses','Confidence','Status'], pairRows) : 'No pair confidence rows published.'}\n\n` +
     `## Timeframe Confidence\n\n${tfRows.length ? markdownTable(['Timeframe','Closed','Wins','Losses','Confidence','Status'], tfRows) : 'No timeframe confidence rows published.'}\n\n` +
+    `## Runtime Supervisor\n\n` +
+    markdownTable(['Metric','Value'], [
+      ['Status', model.runtime.supervisor.status || 'NOT_AVAILABLE'],
+      ['Last Decision', model.runtime.supervisor.lastDecision || '—'],
+      ['Last Decision At', model.runtime.supervisor.lastDecisionAt || '—'],
+      ['Consecutive Probe Failures', fmt(model.runtime.supervisor.consecutiveProbeFailures, 0)],
+      ['Consecutive Fast Stalls', fmt(model.runtime.supervisor.consecutiveFastStalls, 0)],
+      ['Controlled Restarts', fmt(model.runtime.supervisor.restartCount, 0)],
+      ['Last Restart Reason', model.runtime.supervisor.lastRestartReason || '—'],
+      ['Heavy Mode', model.runtime.heavy.mode || '—'],
+      ['Heavy Circuit Reason', model.runtime.heavy.circuitReason || '—'],
+    ]) + `\n\n` +
     `## Warnings\n\n${model.warnings.length ? model.warnings.map(row => `- ${row.type} ${row.key}: ${row.status} — ${row.message}`).join('\n') : '- None'}\n\n` +
-    `---\nThis report is generated directly from the current v10.2 operational authority. Cached or legacy snapshots cannot publish PASS.\n`;
+    `---\nThis report is generated directly from the current v10.2.1 supervised operational authority. Cached or legacy snapshots cannot publish PASS.\n`;
 }
 
 function csvEscape(value) {
@@ -282,6 +295,9 @@ function toCsv(model) {
   for (const [key, value] of Object.entries(model.performance.familyAdjusted)) push('familyAdjusted', key, value, model.gates.learning && model.gates.learning.status);
   for (const [key, value] of Object.entries(model.autonomy)) push('autonomy', key, value, model.autonomy.status);
   for (const [key, value] of Object.entries(model.candidateCohort)) push('candidateCohort', key, value, model.candidateCohort.status);
+  for (const [key, value] of Object.entries(model.runtime.supervisor || {})) {
+    if (!Array.isArray(value) && (value === null || typeof value !== 'object')) push('runtimeSupervisor', key, value, model.runtime.supervisor.status || '');
+  }
   for (const row of asArray(model.learning.pairConfidence)) push('pairConfidence', row.key, row.confidenceScore, row.status);
   for (const row of asArray(model.learning.timeframeConfidence)) push('timeframeConfidence', row.key, row.confidenceScore, row.status);
   return rows.map(row => row.map(csvEscape).join(',')).join('\n') + '\n';
@@ -304,7 +320,7 @@ function toHtml(model) {
 
 function buildReportManifest(model) {
   return {
-    schema: 'alps.v10200.reportManifest.v1',
+    schema: 'alps.v10201.reportManifest.v1',
     version: model.version,
     generatedAt: model.generatedAt,
     sourceOfTruth: model.sourceOfTruth,
@@ -315,7 +331,7 @@ function buildReportManifest(model) {
       { format: 'csv', contentType: 'text/csv', url: '/runner/report.csv' },
       { format: 'html', contentType: 'text/html', url: '/runner/report.html' },
     ],
-    rule: 'Every report is generated on demand from current v10.2 operational authority. No cached dashboard guesses are used.',
+    rule: 'Every report is generated on demand from current v10.2.1 supervised operational authority. No cached dashboard guesses are used.',
   };
 }
 

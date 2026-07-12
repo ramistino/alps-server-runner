@@ -104,7 +104,6 @@ function deriveFreshness({
 
   const processReady = Boolean(
     adapterStatus && adapterStatus.running &&
-    legacyVersion && typeof legacyVersion === 'object' &&
     live && typeof live === 'object'
   );
   const sentinelReady = text(current.sentinelRuntimeStatus).includes('RUNNING') ||
