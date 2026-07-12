@@ -1,7 +1,16 @@
 'use strict';
 
 const http = require('http');
+const path = require('path');
+const fsp = require('fs/promises');
 const { noCacheHeaders, summarizeError, text } = require('./utils');
+const {
+  buildDashboardModel,
+  buildReportManifest,
+  toMarkdown,
+  toCsv,
+  toHtml,
+} = require('./report-builder');
 
 function readBody(req, limit = 10 * 1024 * 1024) {
   return new Promise((resolve, reject) => {
@@ -34,11 +43,27 @@ function sendJson(res, status, value, extraHeaders = {}) {
   res.end(raw);
 }
 
+function sendText(res, status, raw, contentType, extraHeaders = {}) {
+  const body = Buffer.from(String(raw ?? ''), 'utf8');
+  res.writeHead(status, noCacheHeaders({
+    'content-type':contentType,
+    'content-length':body.length,
+    'access-control-allow-origin':'*',
+    ...extraHeaders,
+  }));
+  res.end(body);
+}
+
 function isAuthed(req, token) {
   if (!token) return true;
   const auth = text(req.headers.authorization);
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   return auth === `Bearer ${token}` || url.searchParams.get('token') === token;
+}
+
+function reportFilename(extension, now = new Date()) {
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
+  return `ALPS_Operational_Truth_Report_${stamp}.${extension}`;
 }
 
 class PublicServer {
@@ -48,6 +73,7 @@ class PublicServer {
     this.adapter = adapter;
     this.log = log;
     this.server = null;
+    this.publicDir = path.join(config.rootDir, 'public');
   }
 
   versionView() {
@@ -69,6 +95,19 @@ class PublicServer {
         fast:runtime.fast,
         heavy:runtime.heavy,
         recovery:runtime.recovery,
+      },
+      dashboard:{
+        installed:true,
+        url:'/',
+        dataEndpoint:'/runner/dashboard-data',
+        refreshMode:'LIVE_NO_CACHE',
+      },
+      reports:{
+        manifest:'/runner/reports',
+        json:'/runner/report.json',
+        markdown:'/runner/report.md',
+        csv:'/runner/report.csv',
+        html:'/runner/report.html',
       },
       endpoint:'/runner/version',
       endpointRole:'V10200_CONTROL_PLANE_LIVENESS_ONLY',
@@ -158,10 +197,7 @@ class PublicServer {
         schema:'alps.v10200.lifecycle.v3',
         version:this.config.version,
         generatedAt:state.generatedAt,
-        layers:{
-          paperEntry:state.layers.paperEntry,
-          sentinel:state.layers.sentinel,
-        },
+        layers:{ paperEntry:state.layers.paperEntry, sentinel:state.layers.sentinel },
         gate:state.gates.paperLifecycle,
         lifecycle:state.lifecycle,
       }),
@@ -182,7 +218,6 @@ class PublicServer {
         familyAdjustedStats:state.familyAdjustedStats,
         rule:'Family-adjusted current-epoch statistics are the performance authority. Raw ledger statistics remain audit-only.',
       }),
-
       '/runner/candidate-cohort': () => ({
         schema:'alps.v10200.candidateCohortView.v1',
         version:this.config.version,
@@ -210,6 +245,29 @@ class PublicServer {
     return map[pathname] ? map[pathname]() : null;
   }
 
+  async serveDashboard(res) {
+    try {
+      const raw = await fsp.readFile(path.join(this.publicDir, 'index.html'));
+      res.writeHead(200, noCacheHeaders({
+        'content-type':'text/html; charset=utf-8',
+        'content-length':raw.length,
+        'x-alps-source-of-truth':'v10.2.0-operational-authority',
+      }));
+      res.end(raw);
+    } catch (error) {
+      sendJson(res, 503, {
+        schema:'alps.v10200.dashboardUnavailable.v1',
+        status:'DASHBOARD_FILE_NOT_AVAILABLE',
+        error:summarizeError(error),
+        dataEndpoint:'/runner/dashboard-data',
+      });
+    }
+  }
+
+  reportModel(reason = 'report') {
+    return buildDashboardModel(this.orchestrator, this.config, reason);
+  }
+
   async route(req, res) {
     if (req.method === 'OPTIONS') {
       res.writeHead(204, noCacheHeaders({
@@ -223,10 +281,48 @@ class PublicServer {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
 
+    if (req.method === 'GET' && (pathname === '/' || pathname === '/dashboard' || pathname === '/dashboard/')) {
+      return this.serveDashboard(res);
+    }
+    if (pathname === '/favicon.ico') {
+      res.writeHead(204, noCacheHeaders());
+      return res.end();
+    }
+
     if (pathname === '/runner/version') return sendJson(res, 200, this.versionView());
     if (pathname === '/runner/live' || pathname === '/runner/dashboard.json') {
       return sendJson(res, 200, this.orchestrator.compactLive());
     }
+    if (pathname === '/runner/dashboard-data') {
+      return sendJson(res, 200, this.reportModel('dashboard-data'));
+    }
+    if (pathname === '/runner/reports') {
+      const model = this.reportModel('report-manifest');
+      return sendJson(res, 200, buildReportManifest(model));
+    }
+    if (pathname === '/runner/report.json') {
+      const model = this.reportModel('report-json');
+      return sendJson(res, 200, model, {
+        'content-disposition':`attachment; filename="${reportFilename('json')}"`,
+      });
+    }
+    if (pathname === '/runner/report.md' || pathname === '/runner/report.markdown') {
+      const model = this.reportModel('report-markdown');
+      return sendText(res, 200, toMarkdown(model), 'text/markdown; charset=utf-8', {
+        'content-disposition':`attachment; filename="${reportFilename('md')}"`,
+      });
+    }
+    if (pathname === '/runner/report.csv') {
+      const model = this.reportModel('report-csv');
+      return sendText(res, 200, toCsv(model), 'text/csv; charset=utf-8', {
+        'content-disposition':`attachment; filename="${reportFilename('csv')}"`,
+      });
+    }
+    if (pathname === '/runner/report.html') {
+      const model = this.reportModel('report-html');
+      return sendText(res, 200, toHtml(model), 'text/html; charset=utf-8');
+    }
+
     if (
       pathname === '/runner/health-lite' ||
       pathname === '/runner/current-health-lite.json' ||
@@ -259,12 +355,7 @@ class PublicServer {
     if (pathname === '/runner/recover-research' && req.method === 'POST') {
       if (!isAuthed(req, this.config.token)) return sendJson(res, 401, { error:'Unauthorized' });
       const state = await this.orchestrator.forceResearchRecovery();
-      return sendJson(res, 200, {
-        ok:true,
-        recovery:state.recovery,
-        gates:state.gates,
-        runtime:state.runtime,
-      });
+      return sendJson(res, 200, { ok:true, recovery:state.recovery, gates:state.gates, runtime:state.runtime });
     }
 
     if (pathname === '/runner/chart' || pathname === '/runner/chart.json') {
@@ -288,31 +379,20 @@ class PublicServer {
 
   async proxyToAdapter(req, res, incomingUrl) {
     const target = new URL(incomingUrl.pathname + incomingUrl.search, this.config.internalBaseUrl);
-    if (this.config.token && !target.searchParams.has('token')) {
-      target.searchParams.set('token', this.config.token);
-    }
+    if (this.config.token && !target.searchParams.has('token')) target.searchParams.set('token', this.config.token);
     const body = ['GET','HEAD'].includes(req.method) ? undefined : await readBody(req);
     const headers = {};
     for (const [key, value] of Object.entries(req.headers)) {
-      if (!['host','content-length','connection'].includes(key.toLowerCase()) && value !== undefined) {
-        headers[key] = value;
-      }
+      if (!['host','content-length','connection'].includes(key.toLowerCase()) && value !== undefined) headers[key] = value;
     }
     if (this.config.token) headers.authorization = `Bearer ${this.config.token}`;
 
     try {
-      const response = await fetch(target, {
-        method:req.method,
-        headers,
-        body,
-        redirect:'manual',
-      });
+      const response = await fetch(target, { method:req.method, headers, body, redirect:'manual' });
       const buffer = Buffer.from(await response.arrayBuffer());
       const outHeaders = noCacheHeaders({ 'access-control-allow-origin':'*' });
       for (const [key, value] of response.headers.entries()) {
-        if (!['content-length','transfer-encoding','connection','cache-control'].includes(key.toLowerCase())) {
-          outHeaders[key] = value;
-        }
+        if (!['content-length','transfer-encoding','connection','cache-control'].includes(key.toLowerCase())) outHeaders[key] = value;
       }
       outHeaders['content-length'] = buffer.length;
       res.writeHead(response.status, outHeaders);
@@ -349,4 +429,4 @@ class PublicServer {
   }
 }
 
-module.exports = { PublicServer, sendJson, isAuthed };
+module.exports = { PublicServer, sendJson, sendText, isAuthed };
