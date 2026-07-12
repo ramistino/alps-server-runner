@@ -6,6 +6,7 @@ const { BrowserEngineAdapter } = require('./src/browser-engine-adapter');
 const { UnifiedOrchestrator } = require('./src/orchestrator');
 const { PublicServer } = require('./src/server');
 const { ServerFeatureEngine } = require('./src/server-feature-engine');
+const { RuntimeSupervisor } = require('./src/runtime-supervisor');
 const { summarizeError } = require('./src/utils');
 
 function log(...args) {
@@ -14,7 +15,7 @@ function log(...args) {
 
 async function main() {
   const config = loadConfig();
-  log(`[v10.2.0] starting final operational authority version=${config.version}`);
+  log(`[v10.2.1] starting supervised continuous runtime version=${config.version}`);
 
   const adapter = new BrowserEngineAdapter(config, log);
   const featureEngine = new ServerFeatureEngine({ config, log });
@@ -26,6 +27,14 @@ async function main() {
     featureEngine,
     log,
   });
+  const supervisor = new RuntimeSupervisor({
+    config,
+    adapter,
+    orchestrator,
+    log,
+  });
+  orchestrator.attachSupervisor(supervisor);
+
   const server = new PublicServer({
     config,
     orchestrator,
@@ -37,39 +46,41 @@ async function main() {
   const shutdown = async signal => {
     if (shuttingDown) return;
     shuttingDown = true;
-    log(`[v10.2.0] shutdown requested signal=${signal}`);
+    log(`[v10.2.1] shutdown requested signal=${signal}`);
+    supervisor.stop();
     orchestrator.stop();
     featureEngine.stop();
-    await server.stop().catch(error => log('[v10.2.0] server stop failed', summarizeError(error)));
-    await adapter.stop().catch(error => log('[v10.2.0] adapter stop failed', summarizeError(error)));
+    await server.stop().catch(error => log('[v10.2.1] server stop failed', summarizeError(error)));
+    await adapter.stop().catch(error => log('[v10.2.1] adapter stop failed', summarizeError(error)));
     process.exit(0);
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('uncaughtException', error => log('[v10.2.0] uncaughtException', summarizeError(error)));
-  process.on('unhandledRejection', error => log('[v10.2.0] unhandledRejection', summarizeError(error)));
+  process.on('uncaughtException', error => log('[v10.2.1] uncaughtException', summarizeError(error)));
+  process.on('unhandledRejection', error => log('[v10.2.1] unhandledRejection', summarizeError(error)));
 
   await adapter.start();
   await server.start();
   featureEngine.start();
   orchestrator.start();
+  supervisor.start();
 
   // Liveness is available immediately. Operational authority workers are independent:
   // fast health cannot be blocked by heavy evidence or recovery commands.
   adapter.waitUntilReady()
     .then(() => orchestrator.bootstrap('initial-adapter-ready'))
     .then(state => log(
-      `[v10.2.0] initial state status=${state.status} ` +
+      `[v10.2.1] initial state status=${state.status} ` +
       `overall=${state.gates.overall.status} next=${state.gates.overall.nextRequiredAction}`
     ))
     .catch(error => log(
-      '[v10.2.0] initial adapter readiness failed; public control plane remains online',
+      '[v10.2.1] initial adapter readiness failed; public control plane remains online',
       summarizeError(error)
     ));
 }
 
 main().catch(error => {
-  console.error(new Date().toISOString(), '[v10.2.0] fatal startup error', summarizeError(error));
+  console.error(new Date().toISOString(), '[v10.2.1] fatal startup error', summarizeError(error));
   process.exitCode = 1;
 });
