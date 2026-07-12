@@ -64,7 +64,12 @@ function clusterTrades(rows, options = {}) {
       existing.rows.push(row);
       existing.lastOpenedAt = row.openedAt;
     } else {
-      const family = { key:`${base}|${Math.floor(row.openedAt / bucketMs)}`, anchorOpenedAt:row.openedAt, lastOpenedAt:row.openedAt, rows:[row] };
+      const family = {
+        key:`${base}|${Math.floor(row.openedAt / bucketMs)}`,
+        anchorOpenedAt:row.openedAt,
+        lastOpenedAt:row.openedAt,
+        rows:[row],
+      };
       active.set(base, family);
       families.push(family);
     }
@@ -86,7 +91,9 @@ function clusterTrades(rows, options = {}) {
       siblingTrades:family.rows.length,
       averageResultR:Number.isFinite(avgR) ? round(avgR, 6) : null,
       averagePnlBps:Number.isFinite(avgBps) ? round(avgBps, 6) : null,
-      outcome:Number.isFinite(avgR) ? (avgR > 1e-9 ? 'WIN' : avgR < -1e-9 ? 'LOSS' : 'BREAKEVEN') : (avgBps > 1e-9 ? 'WIN' : avgBps < -1e-9 ? 'LOSS' : 'BREAKEVEN'),
+      outcome:Number.isFinite(avgR)
+        ? (avgR > 1e-9 ? 'WIN' : avgR < -1e-9 ? 'LOSS' : 'BREAKEVEN')
+        : (avgBps > 1e-9 ? 'WIN' : avgBps < -1e-9 ? 'LOSS' : 'BREAKEVEN'),
       tradeIds:family.rows.map(x=>text(x.trade.tradeId || x.trade.id || x.trade.key)).filter(Boolean),
     };
   });
@@ -125,24 +132,101 @@ function groupStats(families, key) {
     if (!map.has(value)) map.set(value, []);
     map.get(value).push(row);
   }
-  return [...map.entries()].map(([value, rows]) => ({ key:value, ...aggregateFamilies(rows) }))
+  return [...map.entries()]
+    .map(([value, rows]) => ({ key:value, ...aggregateFamilies(rows) }))
     .sort((a,b)=>b.independentFamilies-a.independentFamilies || String(a.key).localeCompare(String(b.key)));
 }
 
-function buildFamilyAdjustedStats({ trades, learning }) {
-  const source = trades || {};
-  const closedTrades = asArray(
-    source.closedTrades || source.closed || source.trades ||
-    (source.export && source.export.closedTrades) ||
-    (source.tradeExport && source.tradeExport.closedTrades) ||
-    (source.currentHealth && source.currentHealth.closedTrades)
+function extractClosedTrades(source) {
+  const root = source || {};
+  const candidates = [
+    root.closedTrades,
+    root.closed,
+    root.trades,
+    root.rows,
+    root.export && root.export.closedTrades,
+    root.tradeExport && root.tradeExport.closedTrades,
+    root.data && root.data.closedTrades,
+    root.currentHealth && root.currentHealth.closedTrades,
+  ];
+  for (const value of candidates) {
+    if (Array.isArray(value) && value.length) return value;
+  }
+  return [];
+}
+
+function learningFallback(learning) {
+  const pairs = asArray(learning && learning.pairConfidence);
+  const frames = asArray(learning && learning.timeframeConfidence);
+  const independent = Math.max(
+    0,
+    finite(learning && learning.independentExperimentFamilies,
+      finite(learning && learning.closedTradesLearned, 0))
   );
+  const wins = pairs.reduce((sum,row)=>sum+Math.max(0,finite(row.wins,0)),0);
+  const losses = pairs.reduce((sum,row)=>sum+Math.max(0,finite(row.losses,0)),0);
+  const breakeven = pairs.reduce((sum,row)=>sum+Math.max(0,finite(row.breakeven,0)),0);
+  const counted = wins + losses + breakeven;
+  const denominator = independent || counted;
+  const netPnlBps = round(pairs.reduce((sum,row)=>sum+finite(row.netPnlBps,0),0),6);
+  const decisive = wins + losses;
+
+  return {
+    schema:'alps.v10200.familyAdjustedStats.v2',
+    status:denominator > 0 ? 'LEARNING_AUTHORITY_FAMILY_STATS_READY' : 'WAITING_FOR_CURRENT_EPOCH_CLOSED_FAMILIES',
+    source:'ADAPTIVE_EVIDENCE_LEARNING_FAMILY_AUTHORITY',
+    temporalEvidenceEpochId:learning && learning.temporalEvidenceEpochId || null,
+    temporalEvidenceEpochStartedAt:learning && learning.temporalEvidenceEpochStartedAt || null,
+    rawClosedRowsObserved:finite(learning && learning.rawValidClosedTrades,0),
+    correlatedSiblingTradesCollapsed:finite(learning && learning.correlatedSiblingTradesCollapsed,0),
+    largestFamilySize:finite(learning && learning.largestExperimentFamilySize,0),
+    independentFamilies:denominator,
+    wins,
+    losses,
+    breakeven,
+    winRate:denominator ? round(wins*100/denominator,2) : 0,
+    decisiveWinRate:decisive ? round(wins*100/decisive,2) : 0,
+    totalResultR:null,
+    avgResultR:null,
+    netPnlBps,
+    avgPnlBps:denominator ? round(netPnlBps/denominator,6) : 0,
+    profitFactorR:null,
+    profitFactorBps:null,
+    byPair:pairs.map(row=>({
+      key:row.key,
+      independentFamilies:finite(row.closed,0),
+      wins:finite(row.wins,0),
+      losses:finite(row.losses,0),
+      breakeven:finite(row.breakeven,0),
+      netPnlBps:finite(row.netPnlBps,0),
+      confidenceScore:finite(row.confidenceScore,50),
+      status:row.status || 'UNKNOWN',
+    })),
+    byTimeframe:frames.map(row=>({
+      key:row.key,
+      independentFamilies:finite(row.closed,0),
+      wins:finite(row.wins,0),
+      losses:finite(row.losses,0),
+      breakeven:finite(row.breakeven,0),
+      netPnlBps:finite(row.netPnlBps,0),
+      confidenceScore:finite(row.confidenceScore,50),
+      status:row.status || 'UNKNOWN',
+    })),
+    recentFamilies:[],
+    rule:'When full closed rows are unavailable, the current-epoch adaptive learning authority is used because it already collapses correlated siblings into independent experiment families.',
+  };
+}
+
+function buildFamilyAdjustedStats({ trades, learning }) {
+  const closedTrades = extractClosedTrades(trades);
   const epochStart = learning && learning.temporalEvidenceEpochStartedAt;
   const families = clusterTrades(closedTrades, { epochStart, bucketMs:5000 });
+  if (!families.length) return learningFallback(learning);
+
   const stats = aggregateFamilies(families);
   return {
-    schema:'alps.v10200.familyAdjustedStats.v1',
-    status:families.length ? 'FAMILY_ADJUSTED_STATS_READY' : 'WAITING_FOR_CURRENT_EPOCH_CLOSED_FAMILIES',
+    schema:'alps.v10200.familyAdjustedStats.v2',
+    status:'FAMILY_ADJUSTED_STATS_READY',
     source:'CURRENT_EPOCH_CLOSED_TRADES_CLUSTERED_BY_SIGNAL_EVENT',
     temporalEvidenceEpochId:learning && learning.temporalEvidenceEpochId || null,
     temporalEvidenceEpochStartedAt:epochStart || null,
@@ -157,4 +241,10 @@ function buildFamilyAdjustedStats({ trades, learning }) {
   };
 }
 
-module.exports = { clusterTrades, aggregateFamilies, buildFamilyAdjustedStats };
+module.exports = {
+  clusterTrades,
+  aggregateFamilies,
+  buildFamilyAdjustedStats,
+  extractClosedTrades,
+  learningFallback,
+};
