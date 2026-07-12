@@ -625,7 +625,7 @@ function v10153RunSelfTest() {
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.54-entry-zone-config-authority-boot-provenance';
+const FINAL_V930_VERSION = 'v10.1.55-learning-brain-rebuild';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -1129,6 +1129,59 @@ function v10142ClosedTradePnlBps(row = {}) {
   if (Number.isFinite(pct)) return Number((pct * 100).toFixed(4));
   return null;
 }
+// v10.1.55 Adaptive Evidence Learning — REBUILT.
+// The v10.1.44/45 learning brain (pair/timeframe confidence + soft priority + learning actions) was lost in
+// the v10.1.46-54 rebuilds. Rebuilt here on a CLEANER source: the canonical semantic-deduped closed ledger
+// stats (v10142/v10147 authority). Soft priority only — no hard bans, no fixed caps, no fabricated evidence.
+let lastV10155LearningView = null;
+function v10155ConfidenceFromBucket(b = {}) {
+  const closed = n(b.closed, 0);
+  if (!closed) return 50;
+  const decisive = Math.max(1, n(b.wins, 0) + n(b.losses, 0));
+  const decisiveWinRate = n(b.wins, 0) / decisive;                       // 0..1
+  const sampleWeight = Math.min(1, closed / 12);                         // full weight at 12 closed
+  const avgR = n(b.totalResultR, 0) / closed;                            // typically -1..+1.5
+  const pf = n(b.negativeR, 0) < 0 ? n(b.positiveR, 0) / Math.abs(n(b.negativeR, 0)) : (n(b.positiveR, 0) > 0 ? 3 : 1);
+  const bpsSign = n(b.netPnlBps, 0) >= 0 ? 1 : 0;
+  const raw = (decisiveWinRate * 45) + (Math.max(-1, Math.min(1.5, avgR)) / 1.5 * 25) + (Math.min(3, pf) / 3 * 20) + (bpsSign * 10);
+  return Number((50 + (raw - 50) * sampleWeight).toFixed(2));            // shrinks toward 50 on low samples
+}
+function v10155BuildLearningView(closedLedgerStats = {}) {
+  const view = {
+    schema: 'alps.adaptiveEvidenceLearning.v10155',
+    version: FINAL_V930_VERSION,
+    installed: true,
+    generatedAt: new Date().toISOString(),
+    source: 'canonical-closed-ledger-stats-v10147-authority',
+    executionMode: 'SOFT_PRIORITY_ONLY_NO_HARD_BANS_NO_FIXED_CAPS',
+    closedTradesLearned: n(closedLedgerStats.closedTrades, 0),
+    pairConfidence: [], timeframeConfidence: [], learningActions: [],
+    appliedToCandidatePriority: true, appliedToExecutionAsHardFilter: false,
+    rule: 'Confidence blends decisive win rate, avg R, profit factor, net bps sign, shrunk toward 50 on low samples. Soft reorder only.'
+  };
+  try {
+    view.pairConfidence = safeArray(closedLedgerStats.byPair).map(b => ({ key: textValue(b.key).toUpperCase(), closed: n(b.closed,0), wins: n(b.wins,0), losses: n(b.losses,0), netPnlBps: n(b.netPnlBps,0), confidenceScore: v10155ConfidenceFromBucket(b), status: n(b.closed,0) >= 8 ? (v10155ConfidenceFromBucket(b) >= 70 ? 'EXPAND_CONFIDENCE_SOFT_PRIORITY' : 'EVIDENCE_STEADY') : 'LOW_SAMPLE_COLLECT_MORE_EVIDENCE' })).sort((a,b)=>b.confidenceScore-a.confidenceScore);
+    view.timeframeConfidence = safeArray(closedLedgerStats.byTimeframe).map(b => ({ key: textValue(b.key).toLowerCase(), closed: n(b.closed,0), wins: n(b.wins,0), losses: n(b.losses,0), netPnlBps: n(b.netPnlBps,0), confidenceScore: v10155ConfidenceFromBucket(b), status: n(b.closed,0) >= 8 ? (v10155ConfidenceFromBucket(b) >= 70 ? 'EXPAND_CONFIDENCE_SOFT_PRIORITY' : 'EVIDENCE_STEADY') : 'LOW_SAMPLE_COLLECT_MORE_EVIDENCE' })).sort((a,b)=>b.confidenceScore-a.confidenceScore);
+    const topPairs = view.pairConfidence.filter(x=>x.confidenceScore>=65).map(x=>x.key).slice(0,3);
+    const weakPairs = view.pairConfidence.filter(x=>x.confidenceScore<45).map(x=>x.key).slice(0,3);
+    const topTfs = view.timeframeConfidence.filter(x=>x.confidenceScore>=65).map(x=>x.key).slice(0,3);
+    if (topPairs.length) view.learningActions.push({ action:'RAISE_SOFT_CONFIDENCE_PRIORITY', target: topPairs.join(', '), reason:'Highest evidence confidence by pair; soft priority only, no exposure cap or pair ban.' });
+    if (topTfs.length) view.learningActions.push({ action:'RAISE_SOFT_TIMEFRAME_PRIORITY', target: topTfs.join(', '), reason:'Highest evidence confidence by timeframe; evidence-driven and reversible.' });
+    if (weakPairs.length) view.learningActions.push({ action:'SHADOW_RETEST_WEAK_CONTEXTS', target: weakPairs.join(', '), reason:'Low relative confidence; keep collecting evidence without hard blocking.' });
+  } catch (e) { view.lastError = textValue(e && e.message || e).slice(0, 160); }
+  lastV10155LearningView = view;
+  return view;
+}
+function v10155CandidateLearningScore(candidate = {}) {
+  const view = lastV10155LearningView;
+  if (!view) return 50;
+  const pair = textValue(candidate.pair || candidate.baseSymbol || candidate.symbol || '').toUpperCase().split('_')[0].replace(/[^A-Z0-9]/g, '');
+  const tf = textValue(candidate.timeframe || candidate.tf || '').toLowerCase();
+  const p = safeArray(view.pairConfidence).find(x => x.key === pair);
+  const t = safeArray(view.timeframeConfidence).find(x => x.key === tf);
+  return Number((((p ? p.confidenceScore : 50) * 0.6) + ((t ? t.confidenceScore : 50) * 0.4)).toFixed(2));
+}
+
 function v10142StatsBucket(rows = []) {
   const b = { closed:0, wins:0, losses:0, breakeven:0, unknown:0, netPnlBps:0, totalResultR:0, positiveR:0, negativeR:0, positiveBps:0, negativeBps:0 };
   for (const row of safeArray(rows)) {
@@ -2208,6 +2261,10 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
   }
   const stillPending = [];
   v10138PendingEntries = v10138DedupPendingEntries(v10138PendingEntries);
+  // v10.1.55: re-applied from v10.1.45 (lost in v10.1.46-54 rebuilds) — evaluate pending entries in
+  // learning-confidence order so evidence-strong contexts get first claim on price checks and open slots.
+  try { v10138PendingEntries.sort((a, b) => n(v10155CandidateLearningScore(b), 50) - n(v10155CandidateLearningScore(a), 50)); } catch (_) {}
+  view.pendingLearningPriority = { schema:'alps.pendingLearningPriority.v10155', mode:'SOFT_REORDER_ONLY', noHardBans:true, noFixedCaps:true };
   view.watchedPendingEntries = v10138PendingEntries.length;
   for (const p of v10138PendingEntries) {
     try {
@@ -2686,6 +2743,10 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
   const closedTrades = v10143MergeClosedTradeRows(v10143PersistentClosedRows, lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedLedgerStats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedLedgerFlat = v10142ClosedLedgerFlatFields(closedLedgerStats);
+  // v10.1.55: rebuild the adaptive evidence learning view from the canonical closed stats every health pass,
+  // and publish it under the same field names the dashboard already renders (v10.1.44/45 compatibility).
+  const v10155LearningView = v10155BuildLearningView(closedLedgerStats);
+  try { closedLedgerFlat.adaptiveEvidenceLearningJson = JSON.stringify(v10155LearningView); closedLedgerFlat.learningActionsJson = JSON.stringify(v10155LearningView.learningActions || []); } catch (_) {}
   const symbolStatusRows = safeArray(sym.statusBySymbol);
   const serverOpenCount = openTrades.length;
   const actualCanonicalClosedRows = closedLedgerStats.closedTrades;
@@ -3293,6 +3354,12 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     });
     
   }
+  // v10.1.55: rebuilt v10.1.44 forward-pool soft priority (lost in v10.1.46-54 rebuilds) — annotate and
+  // reorder candidates by evidence confidence. SOFT_REORDER_ONLY: no bans, no caps, attention order only.
+  try {
+    for (const x of selected) { x.learningConfidenceScore = v10155CandidateLearningScore(x); }
+    selected.sort((a, b) => n(b.learningConfidenceScore, 50) - n(a.learningConfidenceScore, 50));
+  } catch (_) {}
   const count = tier => selected.filter(x => x.tier === tier).length;
   const view = {
     schema: 'alps.nativeForwardPool.view.v1',
@@ -3300,6 +3367,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     installed: true,
     technicalCap: V952_NO_FIXED_CANDIDATE_CAP ? 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES' : FINAL_V930_TECHNICAL_CAP,
     totalCandidates: selected.length,
+    decisionActuator: { schema:'alps.learningSoftPriorityActuator.v10155', version:FINAL_V930_VERSION, installed:true, mode:'SOFT_REORDER_ONLY', applied:selected.some(x=>n(x.learningConfidenceScore,50)!==50), noHardBans:true, noFixedCaps:true },
     generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
     fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
     watchForward: count('WATCH_FORWARD'),
@@ -4879,6 +4947,12 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     }
     
   }
+  // v10.1.55: rebuilt v10.1.44 forward-pool soft priority (lost in v10.1.46-54 rebuilds) — annotate and
+  // reorder candidates by evidence confidence. SOFT_REORDER_ONLY: no bans, no caps, attention order only.
+  try {
+    for (const x of selected) { x.learningConfidenceScore = v10155CandidateLearningScore(x); }
+    selected.sort((a, b) => n(b.learningConfidenceScore, 50) - n(a.learningConfidenceScore, 50));
+  } catch (_) {}
   const count = tier => selected.filter(x => x.tier === tier).length;
   const quantPassed = selected.filter(x => x.quantitative?.promote).length;
   return {
@@ -4888,6 +4962,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     technicalCap: V952_NO_FIXED_CANDIDATE_CAP ? 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES' : FINAL_V930_TECHNICAL_CAP,
     poolViewCap: null,
     totalCandidates: selected.length,
+    decisionActuator: { schema:'alps.learningSoftPriorityActuator.v10155', version:FINAL_V930_VERSION, installed:true, mode:'SOFT_REORDER_ONLY', applied:selected.some(x=>n(x.learningConfidenceScore,50)!==50), noHardBans:true, noFixedCaps:true },
     generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
     fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
     watchForward: count('WATCH_FORWARD'),
@@ -10003,6 +10078,10 @@ function v10128BuildHealthLite(source = 'health-lite') {
   const exportCountsRaw = tradeExportCounts(lastTradeExport || {});
   const closedLedgerStats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
   const closedLedgerFlat = v10142ClosedLedgerFlatFields(closedLedgerStats);
+  // v10.1.55: rebuild the adaptive evidence learning view from the canonical closed stats every health pass,
+  // and publish it under the same field names the dashboard already renders (v10.1.44/45 compatibility).
+  const v10155LearningView = v10155BuildLearningView(closedLedgerStats);
+  try { closedLedgerFlat.adaptiveEvidenceLearningJson = JSON.stringify(v10155LearningView); closedLedgerFlat.learningActionsJson = JSON.stringify(v10155LearningView.learningActions || []); } catch (_) {}
   const actualCanonicalClosedRowsLite = closedLedgerStats.closedTrades;
   const closedLedgerAuthorityFieldsLite = v10147AuthorityFields(actualCanonicalClosedRowsLite);
   const publishedClosedTradesLite = closedLedgerAuthorityFieldsLite.closedTrades;
