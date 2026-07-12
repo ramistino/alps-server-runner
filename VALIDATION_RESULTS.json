@@ -1,28 +1,41 @@
 {
-  "version": "v10.1.53-boot-singleflight-atomic-state-authority",
-  "generatedAt": "2026-07-12T13:03:00Z",
-  "tests": {
-    "runnerSyntax": "PASS",
-    "v10153SelfTest": "PASS",
-    "v10152Regression": "PASS",
-    "v10151TemporalIntelligenceRegression": "PASS",
-    "v10150FeatureCoverageRegression": "PASS",
-    "atomicCorruptPrimaryRecovery": "PASS",
-    "earlyHttpBindingBeforeBrowser": "PASS",
-    "bootHealthAvailableDuringBrowserLaunch": "PASS",
-    "paperOnlyBoundary": "PASS",
-    "liveCapitalExecutionDisabled": "PASS",
-    "testnetExecutionDisabled": "PASS"
+  "version": "v10.1.58-live-route-truth-separation",
+  "syntax": {
+    "runner.js": "PASS",
+    "alpsTradeExport.js": "PASS",
+    "ALPS_closed_ledger_authority_v10147.js": "PASS"
   },
-  "observedBootTest": {
-    "httpListeningBeforeBrowserLaunch": true,
-    "bootHealthVersion": "v10.1.53-boot-singleflight-atomic-state-authority",
-    "bootPhase": "BROWSER_SINGLEFLIGHT_STARTING",
-    "browserServerReady": true,
-    "runtimeBootReady": false
+  "selfTest": {
+    "schema": "alps.v10158SelfTest.v1",
+    "version": "v10.1.58-live-route-truth-separation",
+    "versionEndpointSchemaCorrect": true,
+    "liveEndpointSchemaCorrect": true,
+    "routesHaveDistinctSchemas": true,
+    "versionRoleIsLivenessOnly": true,
+    "liveContainsFreshnessProof": true,
+    "staleLiveBlocksRunning": true,
+    "freshLiveAllowsRunning": true,
+    "liveCapitalExecution": false,
+    "testnetExecution": false,
+    "pass": true
   },
-  "limitations": [
-    "Real Render, Netlify, Binance, and Playwright network execution cannot be completed inside the artifact build environment.",
-    "The underlying dashboard null textContent selector is not changed because the current dashboard source file was not part of this runner artifact. The runner now classifies it as nonfatal and keeps it visible as a warning."
-  ]
+  "staticRouteAudit": {
+    "legacyLiveVersionAliasRemoved": true,
+    "versionRoutePresent": true,
+    "liveRoutePresent": true,
+    "liveSchemaPresent": true,
+    "versionSchemaPresent": true,
+    "liveHttp503GuardPresent": true
+  },
+  "localHttpSmokeTest": {
+    "versionSchema": "alps.processLiveness.v10158",
+    "liveSchema": "alps.liveTruth.v10158",
+    "distinctSchemas": true,
+    "blockedLiveReturnedHttp503": true,
+    "blockedReason": "CURRENT_HEALTH_CACHE_WITHOUT_LIVE_TIMESTAMP_BLOCKED"
+  },
+  "paperOnly": true,
+  "liveCapitalExecution": false,
+  "testnetExecution": false,
+  "pass": true
 }

@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.57 Live Truth Freshness + Independent Learning Families
+ * ALPS Server Runner — v10.1.58 Live Route Truth Separation + Independent Learning Families
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -625,7 +625,7 @@ function v10153RunSelfTest() {
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.57-live-truth-family-learning';
+const FINAL_V930_VERSION = 'v10.1.58-live-route-truth-separation';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -10831,13 +10831,118 @@ function v10157SelfTestView() {
   return x;
 }
 
+// v10.1.58 — /runner/version proves only process liveness. /runner/live must expose guarded
+// currentHealth truth and can never alias the process-liveness payload again.
+function v10158ProcessLivenessView() {
+  return {
+    schema:'alps.processLiveness.v10158',
+    version:FINAL_V930_VERSION,
+    effectivePatchVersion:FINAL_V930_VERSION,
+    status:'PROCESS_ALIVE',
+    runtimeBootReady,
+    runtimeBootPhase,
+    browserServerReady,
+    processPid:process.pid,
+    processInstanceId:V10154_PROCESS_INSTANCE_ID,
+    processUptimeSec:Number(process.uptime().toFixed(3)),
+    processStartedAt:new Date(V10157_PROCESS_STARTED_AT).toISOString(),
+    generatedAt:new Date().toISOString(),
+    endpoint:'/runner/version',
+    endpointRole:'PROCESS_LIVENESS_ONLY_NOT_CURRENT_HEALTH',
+    paperOnly:true,
+    liveCapitalExecution:false,
+    testnetExecution:false
+  };
+}
+function v10158LiveTruthView(healthLite = {}, source = 'runner-live') {
+  const freshness = healthLite.currentHealthFreshness || v10157CurrentHealthFreshness(healthLite, source + '-freshness');
+  const currentHealthFresh = healthLite.currentHealthFresh === true && freshness.fresh === true;
+  return {
+    schema:'alps.liveTruth.v10158',
+    version:FINAL_V930_VERSION,
+    effectivePatchVersion:FINAL_V930_VERSION,
+    endpoint:'/runner/live',
+    endpointRole:'GUARDED_CURRENT_HEALTH_TRUTH',
+    distinctFromVersionEndpoint:true,
+    generatedAt:new Date().toISOString(),
+    status:currentHealthFresh ? 'CURRENT_HEALTH_LIVE_TRUTH_READY' : (freshness.status || 'CURRENT_HEALTH_NOT_LIVE'),
+    currentHealthFresh,
+    currentHealthAgeSec:healthLite.currentHealthAgeSec ?? freshness.ageSec ?? null,
+    currentHealthFreshness:freshness,
+    runtimeVersion:FINAL_V930_VERSION,
+    sourceSnapshotVersion:healthLite.sourceSnapshotVersion || freshness.sourceSnapshotVersion || '',
+    runtimeObservationAt:healthLite.runtimeObservationAt || '',
+    processInstanceId:V10154_PROCESS_INSTANCE_ID,
+    runtimeBootReady,
+    runtimeBootPhase,
+    browserServerReady,
+    engineReady:currentHealthFresh ? !!healthLite.engineReady : false,
+    labRunning:currentHealthFresh ? !!healthLite.labRunning : false,
+    fwRunning:currentHealthFresh ? !!healthLite.fwRunning : false,
+    rawFwRunning:currentHealthFresh ? !!healthLite.rawFwRunning : false,
+    candidates:n(healthLite.candidates,0),
+    nativePoolCandidates:n(healthLite.nativePoolCandidates,0),
+    forwardLatchSize:n(healthLite.forwardLatchSize,0),
+    paperEntryVisibilityCandidatesSeen:n(healthLite.paperEntryVisibilityCandidatesSeen,0),
+    openPositions:n(healthLite.openPositions,0),
+    closedTrades:n(healthLite.closedTrades,0),
+    rejected:n(healthLite.rejected || healthLite.rejectedSignals,0),
+    featureRowsFound:n(healthLite.featureRowsFound,0),
+    featurePairFrames:n(healthLite.featurePairFrames,0),
+    freshFeaturePairFrames:n(healthLite.freshFeaturePairFrames,0),
+    requiredFeaturePairFrames:n(healthLite.requiredFeaturePairFrames,35),
+    featureCoverageStatus:textValue(healthLite.featureCoverageStatus || ''),
+    learningAuthorityStatus:textValue(healthLite.learningAuthorityStatus || ''),
+    learningClosedTrades:n(healthLite.learningClosedTrades,0),
+    adaptiveEvidenceLearning:healthLite.adaptiveEvidenceLearning || null,
+    forwardRunnerSync:healthLite.forwardRunnerSync || null,
+    finalHealthGate:healthLite.finalHealthGate || null,
+    currentHealth:healthLite.currentHealth || null,
+    fullHealthLiteEndpoint:'/runner/health-lite',
+    rule:'PROCESS_ALIVE is not operational truth. RUNNING states are published here only when same-version currentHealth evidence is fresh.',
+    paperOnly:true,
+    liveCapitalExecution:false,
+    testnetExecution:false
+  };
+}
+function v10158SelfTestView() {
+  const versionView = v10158ProcessLivenessView();
+  const liveBlocked = v10158LiveTruthView({
+    sourceSnapshotVersion:'v10.1.51-old',
+    currentHealthFresh:false,
+    currentHealthFreshness:{schema:'alps.currentHealthFreshness.v10157',status:'VERSION_MISMATCH_CURRENT_HEALTH_CACHE_BLOCKED',fresh:false,sourceSnapshotVersion:'v10.1.51-old'},
+    engineReady:true,labRunning:true,fwRunning:true
+  }, 'v10158-self-test-blocked');
+  const liveReady = v10158LiveTruthView({
+    sourceSnapshotVersion:FINAL_V930_VERSION,
+    currentHealthFresh:true,
+    currentHealthAgeSec:1,
+    currentHealthFreshness:{schema:'alps.currentHealthFreshness.v10157',status:'CURRENT_HEALTH_LIVE_TRUTH_READY',fresh:true,sourceSnapshotVersion:FINAL_V930_VERSION},
+    engineReady:true,labRunning:true,fwRunning:true
+  }, 'v10158-self-test-ready');
+  const out = {
+    schema:'alps.v10158SelfTest.v1',version:FINAL_V930_VERSION,
+    versionEndpointSchemaCorrect:versionView.schema==='alps.processLiveness.v10158',
+    liveEndpointSchemaCorrect:liveBlocked.schema==='alps.liveTruth.v10158',
+    routesHaveDistinctSchemas:versionView.schema!==liveBlocked.schema,
+    versionRoleIsLivenessOnly:versionView.endpointRole==='PROCESS_LIVENESS_ONLY_NOT_CURRENT_HEALTH',
+    liveContainsFreshnessProof:!!liveBlocked.currentHealthFreshness,
+    staleLiveBlocksRunning:liveBlocked.currentHealthFresh===false && liveBlocked.engineReady===false && liveBlocked.labRunning===false && liveBlocked.fwRunning===false,
+    freshLiveAllowsRunning:liveReady.currentHealthFresh===true && liveReady.engineReady===true && liveReady.labRunning===true && liveReady.fwRunning===true,
+    liveCapitalExecution:false,testnetExecution:false,
+    pass:false
+  };
+  out.pass = out.versionEndpointSchemaCorrect && out.liveEndpointSchemaCorrect && out.routesHaveDistinctSchemas && out.versionRoleIsLivenessOnly && out.liveContainsFreshnessProof && out.staleLiveBlocksRunning && out.freshLiveAllowsRunning && !out.liveCapitalExecution && !out.testnetExecution;
+  return out;
+}
+
 async function createServer() {
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === 'OPTIONS') return send(res, 204, '');
       const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      if (url.pathname === '/runner/live' || url.pathname === '/runner/version') {
-        return send(res, 200, { schema:'alps.processLiveness.v10157', version:FINAL_V930_VERSION, effectivePatchVersion:FINAL_V930_VERSION, status:'PROCESS_ALIVE', runtimeBootReady, runtimeBootPhase, browserServerReady, processPid:process.pid, processInstanceId:V10154_PROCESS_INSTANCE_ID, processUptimeSec:Number(process.uptime().toFixed(3)), processStartedAt:new Date(V10157_PROCESS_STARTED_AT).toISOString(), generatedAt:new Date().toISOString(), paperOnly:true, liveCapitalExecution:false, testnetExecution:false });
+      if (url.pathname === '/runner/version') {
+        return send(res, 200, v10158ProcessLivenessView());
       }
       if (!runtimeBootReady && url.pathname.startsWith('/runner/')) {
         const bootHealth = {
@@ -10851,6 +10956,7 @@ async function createServer() {
           persistentDataDir:DATA_DIR, currentHealthFresh:false, currentHealthFreshness:{schema:'alps.currentHealthFreshness.v10157',version:FINAL_V930_VERSION,status:'BOOTING_CURRENT_HEALTH_NOT_OPERATIONAL',fresh:false}, paperOnly:true, liveCapitalExecution:false,
           startedAt:lastHealth.startedAt, generatedAt:new Date().toISOString()
         };
+        if (url.pathname === '/runner/live') return send(res, 503, v10158LiveTruthView({ ...bootHealth, sourceSnapshotVersion:FINAL_V930_VERSION, currentHealthFresh:false, currentHealthFreshness:bootHealth.currentHealthFreshness }, 'runner-live-boot'));
         if (['/runner/health','/runner/health-lite','/runner/live-health.json','/runner/current-health-lite.json','/runner/recovery'].includes(url.pathname)) return send(res, 200, bootHealth);
         return send(res, 503, { ...bootHealth, error:'RUNTIME_BOOT_NOT_READY_RETRY' });
       }
@@ -10878,6 +10984,7 @@ async function createServer() {
       if (url.pathname === '/runner/v10153-self-test.json') return send(res,200,v10153RunSelfTest());
       if (url.pathname === '/runner/v10154-self-test.json') return send(res,200,v10154RunSelfTest());
       if (url.pathname === '/runner/v10157-self-test.json') return send(res,200,v10157SelfTestView());
+      if (url.pathname === '/runner/v10158-self-test.json') return send(res,200,v10158SelfTestView());
       if (url.pathname === '/runner/candidate-authority.json') { v10152ReconcileCandidateAuthorities(lastReport||lastHealth||{},'endpoint'); return send(res,200,lastV10152CandidateAuthorityView||{}); }
       if (url.pathname === '/runner/open-reconciliation.json') return send(res,200,v10152BuildOpenReconciliationJournal());
       if (url.pathname === '/runner/pending-reconciliation.json') return send(res,200,v10152BuildPendingReconciliationJournal());
@@ -10887,6 +10994,16 @@ async function createServer() {
         const timeframe = url.searchParams.get('timeframe') || url.searchParams.get('interval') || '1h';
         const limit = Number(url.searchParams.get('limit') || 120);
         return send(res, 200, await v10133FetchChartTruthWithFallback(pair, timeframe, limit, 'chart-endpoint'));
+      }
+      if (url.pathname === '/runner/live') {
+        await loadForwardLatchState();
+        await loadRecoveryState();
+        await loadTradeVaultState();
+        await v10141SyncSentinelBeforeHealthLite('runner-live-before-send').catch(e => log('v10.1.58 live sentinel sync skipped:', e && e.message || e));
+        await v10147ReconcileClosedLedgerBeforePublish('runner-live-before-send').catch(e => log('v10.1.58 live closed ledger reconcile failed:', e && e.message || e));
+        v10147RebindSentinelToCanonicalOpen('runner-live-before-send');
+        const liveHealthLite = v10128BuildHealthLite('runner-live-before-send');
+        return send(res, liveHealthLite.currentHealthFresh === true ? 200 : 503, v10158LiveTruthView(liveHealthLite, 'runner-live-before-send'));
       }
       if (url.pathname === '/runner/health-lite' || url.pathname === '/runner/live-health.json' || url.pathname === '/runner/current-health-lite.json') {
         await loadForwardLatchState();
@@ -13665,7 +13782,11 @@ function v10154RunSelfTest() {
   return result;
 }
 
-if (String(process.env.ALPS_V10157_SELFTEST || '') === '1') {
+if (String(process.env.ALPS_V10158_SELFTEST || '') === '1') {
+  const selfTest = v10158SelfTestView();
+  console.log(JSON.stringify(selfTest, null, 2));
+  process.exit(selfTest.pass ? 0 : 1);
+} else if (String(process.env.ALPS_V10157_SELFTEST || '') === '1') {
   const selfTest = v10157SelfTestView();
   console.log(JSON.stringify(selfTest, null, 2));
   process.exit(selfTest.pass ? 0 : 1);
