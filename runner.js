@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.53 Boot Singleflight + Atomic State Authority
+ * ALPS Server Runner — v10.1.54 Entry-Zone Config Authority + Boot Provenance
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -377,6 +377,11 @@ let browserLaunchPromise = null;
 let collectReportPromise = null;
 let runtimeBootReady = false;
 let runtimeBootPhase = 'PROCESS_START';
+// v10.1.54: identify each Render process/rolling-deploy instance in every boot-critical log.
+const V10154_PROCESS_INSTANCE_ID = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+let v10154BrowserLaunchStarts = 0;
+let v10154BrowserLaunchJoins = 0;
+let v10154LastLaunchFlightId = 0;
 const v10153AtomicWriteQueues = new Map();
 let lastRunnerWatchdogView = null;
 let lastOOSEvidenceBridgeView = null;
@@ -620,7 +625,7 @@ function v10153RunSelfTest() {
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.53-boot-singleflight-atomic-state-authority';
+const FINAL_V930_VERSION = 'v10.1.54-entry-zone-config-authority-boot-provenance';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -692,10 +697,23 @@ let lastV10115FeatureGateDiagnosticsView = null;
 let lastV10115DeferredEntryQueueView = null;
 
 
+// v10.1.54 finite runtime configuration authority.
+// Invalid Render environment values must never poison Math.max/zone calculations with NaN.
+function v10154FiniteConfig(raw, fallback, options = {}) {
+  const min = Number.isFinite(Number(options.min)) ? Number(options.min) : -Infinity;
+  const max = Number.isFinite(Number(options.max)) ? Number(options.max) : Infinity;
+  const integer = options.integer === true;
+  const parsed = Number(raw);
+  let value = Number.isFinite(parsed) ? parsed : Number(fallback);
+  if (!Number.isFinite(value)) value = 0;
+  value = Math.min(max, Math.max(min, value));
+  return integer ? Math.trunc(value) : value;
+}
+
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery + Progressive Forward Latch
 const V944_FORWARD_LATCH_FILE = path.join(DATA_DIR, 'forward-latch-v944.json');
-const V944_RECOVERABLE_LOOKBACK_CANDLES = Number(process.env.ALPS_V944_RECOVERABLE_LOOKBACK_CANDLES || 5);
-const V944_ENTRY_ZONE_BPS = Number(process.env.ALPS_V944_ENTRY_ZONE_BPS || 18);
+const V944_RECOVERABLE_LOOKBACK_CANDLES = v10154FiniteConfig(process.env.ALPS_V944_RECOVERABLE_LOOKBACK_CANDLES, 5, { min:1, max:500, integer:true });
+const V944_ENTRY_ZONE_BPS = v10154FiniteConfig(process.env.ALPS_V944_ENTRY_ZONE_BPS, 18, { min:1, max:1000 });
 let forwardLatchState = { schema: 'alps.forwardLatch.state.v1', version: FINAL_V930_VERSION, candidates: [], updatedAt: 0, source: '' };
 let lastForwardLatchView = null;
 let lastProgressiveResearchView = null;
@@ -746,9 +764,20 @@ let lastMaterializedRowSources = [];
 let lastV948EntryEngineView = null;
 let lastV948NumericGuardView = null;
 let lastV948RejectedReasonView = null;
-const V948_ENTRY_MAX_PER_TICK = Math.max(0, Number(process.env.ALPS_V948_ENTRY_MAX_PER_TICK || process.env.ALPS_MAX_ENTRIES_PER_TICK || 5));
-const V948_ENTRY_ZONE_BPS = Math.max(1, Number(process.env.ALPS_V948_ENTRY_ZONE_BPS || V944_ENTRY_ZONE_BPS || 18));
-const V948_ENTRY_LOOKBACK_CANDLES = Math.max(1, Number(process.env.ALPS_V948_ENTRY_LOOKBACK_CANDLES || V944_RECOVERABLE_LOOKBACK_CANDLES || 5));
+const V948_ENTRY_MAX_PER_TICK = v10154FiniteConfig(process.env.ALPS_V948_ENTRY_MAX_PER_TICK ?? process.env.ALPS_MAX_ENTRIES_PER_TICK, 5, { min:0, max:100000, integer:true });
+const V948_ENTRY_ZONE_BPS = v10154FiniteConfig(process.env.ALPS_V948_ENTRY_ZONE_BPS, V944_ENTRY_ZONE_BPS, { min:1, max:1000 });
+const V948_ENTRY_LOOKBACK_CANDLES = v10154FiniteConfig(process.env.ALPS_V948_ENTRY_LOOKBACK_CANDLES, V944_RECOVERABLE_LOOKBACK_CANDLES, { min:1, max:500, integer:true });
+const V10154_ENTRY_ZONE_CONFIG_AUTHORITY = {
+  schema:'alps.entryZoneConfigAuthority.v10154', version:FINAL_V930_VERSION, installed:true,
+  rawV944EntryZoneBps: process.env.ALPS_V944_ENTRY_ZONE_BPS ?? null,
+  rawV948EntryZoneBps: process.env.ALPS_V948_ENTRY_ZONE_BPS ?? null,
+  effectiveEntryZoneBps: V948_ENTRY_ZONE_BPS,
+  effectiveLookbackCandles: V948_ENTRY_LOOKBACK_CANDLES,
+  effectiveMaxEntriesPerTick: V948_ENTRY_MAX_PER_TICK,
+  status:'FINITE_ENTRY_ZONE_CONFIGURATION_READY',
+  fallbackApplied: process.env.ALPS_V948_ENTRY_ZONE_BPS != null && !Number.isFinite(Number(process.env.ALPS_V948_ENTRY_ZONE_BPS)),
+  rule:'Non-finite environment values fall back to a verified finite value before any Paper Entry buffer calculation. No strategy or entry-zone policy is changed.'
+};
 
 // ALPS v9.5.2 Current Health Sync Full Candidate Bridge No Fixed Cap state.
 // This layer does not open live orders and does not fabricate evidence. It gives one clear source of truth for the remaining known risks.
@@ -10395,6 +10424,9 @@ async function createServer() {
         const bootHealth = {
           schema:'alps.bootHealth.v10153', version:FINAL_V930_VERSION,
           status:'BOOTING', bootPhase:runtimeBootPhase, runtimeBootReady:false,
+          processInstanceId:V10154_PROCESS_INSTANCE_ID, processPid:process.pid,
+          browserLaunchSingleflight:{starts:v10154BrowserLaunchStarts,joins:v10154BrowserLaunchJoins,active:!!browserLaunchPromise,activeFlight:v10154LastLaunchFlightId},
+          entryZoneConfigAuthority:V10154_ENTRY_ZONE_CONFIG_AUTHORITY,
           browserServerReady, pageReady:!!(page && !page.isClosed()),
           appUrl:APP_URL_ENV || `${staticBaseUrl}/index.html`,
           persistentDataDir:DATA_DIR, paperOnly:true, liveCapitalExecution:false,
@@ -10425,6 +10457,7 @@ async function createServer() {
       if (url.pathname === '/runner/v10151-self-test.json') return send(res,200,v10151RunSelfTest());
       if (url.pathname === '/runner/v10152-self-test.json') return send(res,200,v10152RunSelfTest());
       if (url.pathname === '/runner/v10153-self-test.json') return send(res,200,v10153RunSelfTest());
+      if (url.pathname === '/runner/v10154-self-test.json') return send(res,200,v10154RunSelfTest());
       if (url.pathname === '/runner/candidate-authority.json') { v10152ReconcileCandidateAuthorities(lastReport||lastHealth||{},'endpoint'); return send(res,200,lastV10152CandidateAuthorityView||{}); }
       if (url.pathname === '/runner/open-reconciliation.json') return send(res,200,v10152BuildOpenReconciliationJournal());
       if (url.pathname === '/runner/pending-reconciliation.json') return send(res,200,v10152BuildPendingReconciliationJournal());
@@ -10493,7 +10526,7 @@ async function createServer() {
         healthTruth.v10118ReportAuthority = v10118ReportAuthorityView(healthTruth, 'health-endpoint-before-send');
         healthTruth.v10119ReportAuthority = healthTruth.v10118ReportAuthority;
         lastHealth = { ...lastHealth, ...healthTruth };
-        return send(res, 200, { ...healthTruth, runtimeBootReady, runtimeBootPhase, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10151TemporalEvidence:(v10151RefreshIntelligence(healthTruth).temporal), ahiRegimeIntelligence:lastV10151AhiRegimeView, hypothesisDNA:lastV10151HypothesisDNAView, evidenceChamber:lastV10151EvidenceChamberView, autonomyEligibility:lastV10151AutonomyEligibilityView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
+        return send(res, 200, { ...healthTruth, runtimeBootReady, runtimeBootPhase, processInstanceId:V10154_PROCESS_INSTANCE_ID, processPid:process.pid, browserLaunchSingleflight:{starts:v10154BrowserLaunchStarts,joins:v10154BrowserLaunchJoins,active:!!browserLaunchPromise,activeFlight:v10154LastLaunchFlightId}, entryZoneConfigAuthority:V10154_ENTRY_ZONE_CONFIG_AUTHORITY, reportAuthority: healthTruth.v10118ReportAuthority || v10118ReportAuthorityView(healthTruth, 'health-response'), browserServerReady, recovery: buildRecoveryView(), tradeVault: { currentCounts: v1001HealthTradeCounts, hasLastNonZero: !!tradeVaultState?.lastNonZero, historyCount: tradeVaultState?.history?.length || 0 }, cognition: { version: COGNITION_PATCH_VERSION, summary: lastCognitionView?.summary || cognitionState?.lastView?.summary || null, ledgerSeq: cognitionState?.seq || 0, hashHead: cognitionState?.prevHash || 'GENESIS' }, autonomousBridge: { version: AUTONOMY_PATCH_VERSION, summary: lastAutonomyView?.summary || autonomyState?.lastView?.summary || null, activeRoutes: (lastAutonomyView?.activeRoutes || autonomyState?.activeRoutes || autonomyMemoryState?.activeRoutes || []).length, ledgerSeq: autonomyState?.seq || 0, hashHead: autonomyState?.prevHash || 'GENESIS', persistentMemory: buildPersistentMemoryView(autonomyMemoryState) }, oosEvidenceBridge: lastOOSEvidenceBridgeView, recoveryForwardCore: lastRecoveryForwardCoreView, runnerWatchdog: buildRunnerWatchdogView(healthTruth || {}), pipelineTruthRecovery: lastPipelineTruthView, runtimeTruth: lastCanonicalMetrics, discoveryOutput: lastDiscoveryOutputView, zeroOutputDiagnostics: lastZeroOutputDiagnosticView, symbolLoadStatus: lastSymbolLoadStatusView, closedCandleMap: lastClosedCandleMapView, forwardReadiness: healthTruth.forwardReadiness || lastForwardReadinessView, e2ePipelineTrace: lastE2EPipelineTraceView, effectivePatchVersion: FINAL_V930_VERSION, v1017FeatureMaterializer: healthTruth.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: healthTruth.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v951RealCandleDiscovery: lastReport?.v951RealCandleDiscovery || null, paperEntryVisibility: lastV950PaperEntryVisibilityView, candleStoreResolver: lastV950CandleStoreResolverView, universeCompletion: lastV949UniverseCompletionView, proxyTruth: lastV949ProxyTruthView, candidateCountTruth: healthTruth.candidateCountTruth || lastV949CandidateCountTruthView, qualityRisk: lastV949QualityRiskView, tradeLifecycleTruth: lastV949LifecycleTruthView, reportTruthSync: healthTruth.reportTruthSync || lastV949ReportTruthView, releaseChecklist: lastV949ReleaseChecklistView, finalHealthGate: healthTruth.finalHealthGate || lastV949FinalHealthGateView, v952CurrentHealthSync: healthTruth.v952CurrentHealthSync || lastV952CurrentHealthSyncView, v952CandidateBridge: healthTruth.v952CandidateBridge || lastV952CandidateBridgeView, v952RejectedReasonAudit: healthTruth.v952RejectedReasonAudit || lastV952RejectedAuditView, v952CandidateQualityBuckets: healthTruth.v952CandidateQualityBuckets || lastV952QualityBucketsView, v952ReportTruthSync: healthTruth.v952ReportTruthSync || lastV952ReportTruthView, v953HealthTruthSync: healthTruth.v953HealthTruthSync, v954EntryConstructionAudit: healthTruth.v954EntryConstructionAudit, v955CandleBankFeatureAudit: healthTruth.v955CandleBankFeatureAudit, stateAuthority: v1000BuildView(), v10StateAuthority: v1000BuildView(), v10ZeroOverwriteProof: lastV10ZeroOverwriteProof, chartTruth: lastChartView || null, indicatorGovernance: v1010BuildIndicatorGovernanceView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), indicatorResearch: v944BuildSyntheticIndicatorEngineView(lastReport || {}, lastForwardLatchView || lastNativeForwardPoolView || null), v1012ServerCandleBootstrap: lastV1012ServerCandleBootstrapView, v1015HealthMarketDataBootstrap: healthTruth.v1015HealthMarketDataBootstrap, v1016HealthPaperEntryRescan: healthTruth.v1016HealthPaperEntryRescan, v1018ServerPaperLifecycle: lastV1018LifecycleView, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10151TemporalEvidence:(v10151RefreshIntelligence(healthTruth).temporal), ahiRegimeIntelligence:lastV10151AhiRegimeView, hypothesisDNA:lastV10151HypothesisDNAView, evidenceChamber:lastV10151EvidenceChamberView, autonomyEligibility:lastV10151AutonomyEligibilityView, serverPaperLedger: { openTrades: v10116CountOpenTrades(), rawEntryOpenTrades: safeArray(lastV948EntryEngineView?.openedTrades).filter(t => t && textValue(t.status || 'OPEN').toUpperCase()==='OPEN').length, closedTrades: v10116CountClosedTrades(), actualCanonicalClosedRows: safeArray(lastTradeExport?.closedTrades).length, consistency: healthTruth.v10117LedgerConsistency || null, canonicalOpenSource: 'UNIQUE_SERVER_LEDGER_MERGE_TRADEID_FIRST' } });
       }
       if (url.pathname === '/runner/recovery') { await loadRecoveryState(); return send(res, 200, buildRecoveryView()); }
       if (url.pathname === '/runner/watchdog') { await maybeRecoverStuckBoot(lastHealth || {}, { source: 'watchdog-endpoint-action-executor' }).catch(e => log('Runner watchdog endpoint action failed:', e.message)); return send(res, 200, buildRunnerWatchdogView(lastHealth || {})); }
@@ -10629,7 +10662,7 @@ async function createServer() {
   await new Promise(resolve => server.listen(PORT, HOST, resolve));
   staticBaseUrl = `http://127.0.0.1:${PORT}`;
   browserServerReady = true;
-  log(`ALPS static/API server listening on ${HOST}:${PORT}`);
+  log(`ALPS static/API server listening on ${HOST}:${PORT} version=${FINAL_V930_VERSION} pid=${process.pid} instance=${V10154_PROCESS_INSTANCE_ID}`);
   return server;
 }
 
@@ -11086,8 +11119,15 @@ async function installV930StableAutonomyInPage() {
 
 async function launchAppPage(options = {}) {
   if (page && !page.isClosed() && !options.forceRelaunch) return true;
-  if (browserLaunchPromise) return browserLaunchPromise;
-  browserLaunchPromise = launchAppPageInternal(options);
+  if (browserLaunchPromise) {
+    v10154BrowserLaunchJoins += 1;
+    log(`[singleflight-join] version=${FINAL_V930_VERSION} pid=${process.pid} instance=${V10154_PROCESS_INSTANCE_ID} activeFlight=${v10154LastLaunchFlightId} joins=${v10154BrowserLaunchJoins}`);
+    return browserLaunchPromise;
+  }
+  v10154BrowserLaunchStarts += 1;
+  v10154LastLaunchFlightId = v10154BrowserLaunchStarts;
+  const flightId = v10154LastLaunchFlightId;
+  browserLaunchPromise = launchAppPageInternal({ ...options, __v10154FlightId:flightId });
   try { return await browserLaunchPromise; }
   finally { browserLaunchPromise = null; }
 }
@@ -11117,7 +11157,7 @@ async function launchAppPageInternal(options = {}) {
     launchAttempts += 1;
     try {
       await closeBrowserContextSafe();
-      log(`Launching ALPS Chromium context. attempt=${attempt} profile=${PROFILE_DIR}`);
+      log(`Launching ALPS Chromium context. version=${FINAL_V930_VERSION} pid=${process.pid} instance=${V10154_PROCESS_INSTANCE_ID} flight=${options.__v10154FlightId || 0} attempt=${attempt} profile=${PROFILE_DIR}`);
       context = await chromium.launchPersistentContext(PROFILE_DIR, launchArgs);
       try {
         context.on('close', () => {
@@ -11952,9 +11992,14 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
         }
         if (!finite(zoneMid)) return { ok:false, reason:'ZONE_MID_UNDEFINED', price, zoneMid:null, direction, root };
         const a = finite(snap.atr) ? snap.atr : (Array.isArray(candles) && candles.length ? atr(candles,14) : null);
-        const buffer = Math.max(Math.abs(price)*(cfg.entryZoneBps/10000), finite(a) ? a*0.18 : Math.abs(price)*0.0018);
+        const rawZoneBps = num(cfg.entryZoneBps, null);
+        const zoneBps = finite(rawZoneBps) && rawZoneBps > 0 ? rawZoneBps : 18;
+        const absoluteFloor = Math.max(Math.abs(price)*0.0018, 1e-9);
+        const configuredBuffer = Math.abs(price)*(zoneBps/10000);
+        const atrBuffer = finite(a) && a > 0 ? Math.abs(a)*0.18 : absoluteFloor;
+        const buffer = Math.max(configuredBuffer, atrBuffer, absoluteFloor);
         const distanceBps = finite(zoneMid) && price ? Math.abs(price-zoneMid)/Math.abs(price)*10000 : null;
-        if (!finite(buffer) || buffer <= 0) return { ok:false, reason:'ENTRY_ZONE_BUFFER_UNDEFINED', price, zoneMid, direction };
+        if (!finite(buffer) || buffer <= 0) return { ok:false, reason:'ENTRY_ZONE_BUFFER_UNDEFINED', price, zoneMid, direction, rawZoneBps, zoneBps, absoluteFloor, configuredBuffer, atrBuffer };
         const inside = Math.abs(price-zoneMid) <= buffer;
         const setupAge = setupAgeFromSnapshot(c, latest?.t || Date.now(), snap);
         if (setupAge > cfg.lookback) return { ok:false, reason:'STALE_CANDIDATE', setupAgeCandles:setupAge, price, zoneMid, direction, distanceBps };
@@ -11996,7 +12041,7 @@ async function applyV948ZonePersistenceEntryEngine(reason = 'v948-zone-persisten
       for (const c of candidates) { scanned++; const pair=pairOf(c), tf=tfOf(c), k=keyOf(c); if (hasDuplicate(k,pair,tf)) { reject(c,'DUPLICATE'); continue; } const group=bestCandlesFor(pair, tf, candlesAll, c); if (!group) { reject(c,'CANDLES_NOT_FOUND'); continue; } try { const d=zoneDecision(c, group.rows); if (!d.ok) { reject(c,d.reason,d); continue; } if (maxOpen > 0 && opened.length >= maxOpen) { if (deferredQueue.length < 250) deferredQueue.push({ key:k, pair, timeframe:tf, direction:d.direction, entry:d.entry, stop:d.stop, target:d.target, currentPrice:d.price, reason:'THROTTLED_TO_DEFERRED_QUEUE', maxEntriesPerTick:maxOpen }); continue; } const riskPlan=v10137ValidInitialRiskPlan(d.direction,d.entry,d.stop,d.target); if(!riskPlan.ok){ reject(c,'INVALID_INITIAL_RISK',{...d, riskGuardStatus:riskPlan.reason, initialRisk:riskPlan.initialRisk}); continue; } const trade=makeTrade(c,d,group.path); ensureArray('paperSignals').push(trade); ensureArray('openPositions').push(trade); ensureArray('openTrades').push(trade); try { ensureArray('recentSignals').push(trade); } catch(_) {} state.openedKeys[k]=Date.now(); opened.push(trade); } catch(e) { recordGuard(e,'zoneDecision'); reject(c,/toFixed/i.test(text(e&&e.message))?'NUMERIC_GUARD_TOFIXED':'ENTRY_ENGINE_EXCEPTION',{ error:text(e&&e.message||e).slice(0,160) }); } }
       state.lastRunAt=Date.now(); state.scanned=scanned; state.openedTrades=opened.concat(arr(state.openedTrades)).slice(0,50); state.rejections=rejections; state.rejectedReasonCounts=rejectedReasonCounts; state.candlesStoresFound=candlesAll.length; state.candidatesSeen=candidates.length;
       const topRejectedReason = Object.entries(rejectedReasonCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || '';
-      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, staleSkipped, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Object.values(rejectedReasonCounts).reduce((acc,v)=>acc+Number(v||0),0), acceptedButDeferred:deferredQueue.length, throttleQueue:{ schema:'alps.v10115ThrottleDeferredQueue.view.v1', version:cfg.version, installed:true, queued:deferredQueue.length, rows:deferredQueue.slice(0,80), status:deferredQueue.length?'VALID_SIGNALS_DEFERRED_NOT_REJECTED':'EMPTY', rule:'maxEntriesPerTick is throttle-only; valid entries are deferred, not rejected.' }, openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, freshCandidateDedupe:{currentNativeRows:currentRows.length, candidatesAfterDedupe:candidates.length, staleSkipped, policy: currentRows.length>0?'SCAN_CURRENT_NATIVE_POOL_ONLY_LATCH_HISTORY_FALLBACK_DISABLED':'NO_CURRENT_NATIVE_POOL_USED_FALLBACK_SOURCES'}, v954EntryConstructionAudit:{installed:true, entryBuilderPriority:['candidate.featureSnapshot','candidate.setupPrice/currentPrice','indexedDB candles','runtime candles','localStorage fallback'], preciseRejectReasons:['ENTRY_UNDEFINED','STOP_TARGET_UNDEFINED','ZONE_MID_UNDEFINED','DIRECTION_UNDEFINED','DIRECTION_MISMATCH','OUTSIDE_ZONE','STALE_CANDIDATE','DUPLICATE','CANDLES_NOT_FOUND','INVALIDATION_HIT'], invalidationOnlyAfterNumericPlan:true}, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:cfg.entryZoneBps, rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery', v1011PaperEntryAuthorityRouter:v1011PrimeProof };
+      const view = { schema:'alps.zonePersistenceEntry.view.v1', version:cfg.version, installed:true, paperOnly:true, liveCapitalExecution:false, mode:'LAST_CANDLE_OR_VALID_RECENT_ZONE', reason:reasonText, wrappedFunctions, numericGuard:state.numericGuard, candidatesSeen:candidates.length, serverCandidatesSeen:arr(runnerRows).length, candidateSources, staleSkipped, visibilityBridge, candleResolver, candlesStoresFound:candlesAll.length, scanned, opened:opened.length, rejected:Object.values(rejectedReasonCounts).reduce((acc,v)=>acc+Number(v||0),0), acceptedButDeferred:deferredQueue.length, throttleQueue:{ schema:'alps.v10115ThrottleDeferredQueue.view.v1', version:cfg.version, installed:true, queued:deferredQueue.length, rows:deferredQueue.slice(0,80), status:deferredQueue.length?'VALID_SIGNALS_DEFERRED_NOT_REJECTED':'EMPTY', rule:'maxEntriesPerTick is throttle-only; valid entries are deferred, not rejected.' }, openedTrades:opened, rejectedReasonCounts, topRejectedReason, rejections, runtimeMs:Date.now()-startedAt, maxEntriesPerTick:maxOpen, candidateAdmissionNoFixedCap:true, freshCandidateDedupe:{currentNativeRows:currentRows.length, candidatesAfterDedupe:candidates.length, staleSkipped, policy: currentRows.length>0?'SCAN_CURRENT_NATIVE_POOL_ONLY_LATCH_HISTORY_FALLBACK_DISABLED':'NO_CURRENT_NATIVE_POOL_USED_FALLBACK_SOURCES'}, v954EntryConstructionAudit:{installed:true, entryBuilderPriority:['candidate.featureSnapshot','candidate.setupPrice/currentPrice','indexedDB candles','runtime candles','localStorage fallback'], preciseRejectReasons:['ENTRY_UNDEFINED','STOP_TARGET_UNDEFINED','ZONE_MID_UNDEFINED','DIRECTION_UNDEFINED','DIRECTION_MISMATCH','OUTSIDE_ZONE','STALE_CANDIDATE','DUPLICATE','CANDLES_NOT_FOUND','INVALIDATION_HIT'], invalidationOnlyAfterNumericPlan:true}, scannedAllCandidates:scanned===candidates.length, executionThrottleNotCandidateCap:true, lookbackClosedCandles:cfg.lookback, entryZoneBps:(finite(num(cfg.entryZoneBps,null)) && num(cfg.entryZoneBps,null)>0 ? num(cfg.entryZoneBps,null) : 18), entryZoneConfigStatus:'FINITE_ENTRY_ZONE_CONFIGURATION_READY', entryZoneFallbackApplied:!(finite(num(cfg.entryZoneBps,null)) && num(cfg.entryZoneBps,null)>0), rule:'Accept and scan every real candidate with no fixed candidate cap. Open paper only when current price is still inside a valid recent entry zone, invalidation has not fired, duplicate guard passes, and entry/stop/target are finite numbers; maxEntriesPerTick is only an opening throttle, not candidate admission.', safeNumberPolicy:'No .toFixed is called before finite numeric validation. Page functions known to throw undefined.toFixed are guarded and recorded.', v951Fix:'All-in-one feature visibility + closed candle map + discovery materializer + forward + paper entry recovery', v1011PaperEntryAuthorityRouter:v1011PrimeProof };
       globalThis.__ALPS_V948_ENTRY_ENGINE__.view=view; try { if (typeof saveRuntimeSnapshotThrottled === 'function') saveRuntimeSnapshotThrottled(false); } catch(e){ recordGuard(e,'saveRuntimeSnapshotThrottled'); }
       return view;
     }, { rows: latchRows, runnerRows: runnerCandidateRows, reasonText: reason, cfg: { version: FINAL_V930_VERSION, maxEntriesPerTick: V948_ENTRY_MAX_PER_TICK, entryZoneBps: V948_ENTRY_ZONE_BPS, lookback: V948_ENTRY_LOOKBACK_CANDLES, v1011PrimeProof } });
@@ -13110,6 +13155,8 @@ async function maybeNotify(h) {
 }
 
 async function main() {
+  Object.assign(lastHealth, { version:FINAL_V930_VERSION, appVersion:FINAL_V930_VERSION, processInstanceId:V10154_PROCESS_INSTANCE_ID, processPid:process.pid, entryZoneConfigAuthority:V10154_ENTRY_ZONE_CONFIG_AUTHORITY });
+  log(`ALPS process start version=${FINAL_V930_VERSION} pid=${process.pid} instance=${V10154_PROCESS_INSTANCE_ID} entryZoneBps=${V948_ENTRY_ZONE_BPS}`);
   await ensureDirs();
   runtimeBootPhase = 'HTTP_BINDING';
   await createServer();
@@ -13159,7 +13206,21 @@ async function shutdown() {
   process.exit(0);
 }
 
-if (String(process.env.ALPS_V10153_SELFTEST || '') === '1') {
+function v10154RunSelfTest() {
+  const finiteFallback = v10154FiniteConfig('not-a-number', 18, { min:1, max:1000 }) === 18;
+  const finiteClamp = v10154FiniteConfig('-5', 18, { min:1, max:1000 }) === 1;
+  const effectiveFinite = Number.isFinite(V948_ENTRY_ZONE_BPS) && V948_ENTRY_ZONE_BPS > 0;
+  const provenanceReady = !!V10154_PROCESS_INSTANCE_ID && Number.isInteger(process.pid);
+  const result = { version:FINAL_V930_VERSION, finiteFallback, finiteClamp, effectiveFinite, provenanceReady, entryZoneConfigAuthority:V10154_ENTRY_ZONE_CONFIG_AUTHORITY, paperOnly:true, liveCapitalExecution:false, testnetExecution:false };
+  result.pass = finiteFallback && finiteClamp && effectiveFinite && provenanceReady && result.paperOnly && !result.liveCapitalExecution && !result.testnetExecution;
+  return result;
+}
+
+if (String(process.env.ALPS_V10154_SELFTEST || '') === '1') {
+  const selfTest = v10154RunSelfTest();
+  console.log(JSON.stringify(selfTest, null, 2));
+  process.exit(selfTest.pass ? 0 : 1);
+} else if (String(process.env.ALPS_V10153_SELFTEST || '') === '1') {
   const selfTest = v10153RunSelfTest();
   console.log(JSON.stringify(selfTest, null, 2));
   process.exit(selfTest.pass ? 0 : 1);
