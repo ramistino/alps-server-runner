@@ -8,6 +8,7 @@ COPY runner.js /app/runner.js
 COPY alpsTradeExport.js /app/alpsTradeExport.js
 COPY ALPS_closed_ledger_authority_v10147.js /app/ALPS_closed_ledger_authority_v10147.js
 COPY src /app/src
+COPY public /app/public
 COPY legacy /app/legacy
 COPY recovery /app/recovery
 
