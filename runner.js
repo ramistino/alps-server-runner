@@ -8,16 +8,30 @@ const { PublicServer } = require('./src/server');
 const { ServerFeatureEngine } = require('./src/server-feature-engine');
 const { summarizeError } = require('./src/utils');
 
-function log(...args) { console.log(new Date().toISOString(), ...args); }
+function log(...args) {
+  console.log(new Date().toISOString(), ...args);
+}
 
 async function main() {
   const config = loadConfig();
-  log(`[v10.2.0] starting unified research control plane version=${config.version}`);
+  log(`[v10.2.0] starting final unified runtime version=${config.version}`);
+
   const adapter = new BrowserEngineAdapter(config, log);
   const featureEngine = new ServerFeatureEngine({ config, log });
   await featureEngine.init();
-  const orchestrator = new UnifiedOrchestrator({ config, adapter, featureEngine, log });
-  const server = new PublicServer({ config, orchestrator, adapter, log });
+
+  const orchestrator = new UnifiedOrchestrator({
+    config,
+    adapter,
+    featureEngine,
+    log,
+  });
+  const server = new PublicServer({
+    config,
+    orchestrator,
+    adapter,
+    log,
+  });
 
   let shuttingDown = false;
   const shutdown = async signal => {
@@ -30,6 +44,7 @@ async function main() {
     await adapter.stop().catch(error => log('[v10.2.0] adapter stop failed', summarizeError(error)));
     process.exit(0);
   };
+
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('uncaughtException', error => log('[v10.2.0] uncaughtException', summarizeError(error)));
@@ -40,11 +55,18 @@ async function main() {
   featureEngine.start();
   orchestrator.start();
 
-  // Public liveness is available immediately. Operational state arrives only after the isolated adapter proves readiness.
+  // Liveness is available immediately. Operational workers are independent:
+  // fast health cannot be blocked by heavy evidence or recovery commands.
   adapter.waitUntilReady()
-    .then(() => orchestrator.poll('initial-adapter-ready'))
-    .then(state => log(`[v10.2.0] initial state status=${state.status} overall=${state.gates.overall.status} next=${state.gates.overall.nextRequiredAction}`))
-    .catch(error => log('[v10.2.0] initial adapter readiness failed; control plane remains online', summarizeError(error)));
+    .then(() => orchestrator.bootstrap('initial-adapter-ready'))
+    .then(state => log(
+      `[v10.2.0] initial state status=${state.status} ` +
+      `overall=${state.gates.overall.status} next=${state.gates.overall.nextRequiredAction}`
+    ))
+    .catch(error => log(
+      '[v10.2.0] initial adapter readiness failed; public control plane remains online',
+      summarizeError(error)
+    ));
 }
 
 main().catch(error => {
