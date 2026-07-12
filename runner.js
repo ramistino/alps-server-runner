@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * ALPS Server Runner — v10.1.54 Entry-Zone Config Authority + Boot Provenance
+ * ALPS Server Runner — v10.1.56 Learning Authority + Temporal Evidence Rebuild
  * ------------------
  * This is intentionally a wrapper around the existing ALPS browser app.
  * It does not rewrite the strategy engine. It runs the same index.html in a
@@ -625,7 +625,7 @@ function v10153RunSelfTest() {
 
 // ALPS v9.5.1 All-in-One Feature/Discovery/Forward/Entry Recovery
 // Final integrated layer built from stable v9.2.2. It is paper-only, boot-safe, and fails back to the stable runner.
-const FINAL_V930_VERSION = 'v10.1.55-learning-brain-rebuild';
+const FINAL_V930_VERSION = 'v10.1.56-learning-authority-temporal-proof';
 const FINAL_V930_TECHNICAL_CAP = Number(process.env.ALPS_V930_TECHNICAL_CAP || Number.MAX_SAFE_INTEGER);
 const V952_NO_FIXED_CANDIDATE_CAP = !process.env.ALPS_V930_TECHNICAL_CAP;
 const V952_REPORT_SAMPLE_CAP = Number(process.env.ALPS_V952_REPORT_SAMPLE_CAP || 2000);
@@ -1129,61 +1129,191 @@ function v10142ClosedTradePnlBps(row = {}) {
   if (Number.isFinite(pct)) return Number((pct * 100).toFixed(4));
   return null;
 }
-// v10.1.55 Adaptive Evidence Learning — REBUILT.
-// The v10.1.44/45 learning brain (pair/timeframe confidence + soft priority + learning actions) was lost in
-// the v10.1.46-54 rebuilds. Rebuilt here on a CLEANER source: the canonical semantic-deduped closed ledger
-// stats (v10142/v10147 authority). Soft priority only — no hard bans, no fixed caps, no fabricated evidence.
+// v10.1.56 Adaptive Evidence Learning Authority.
+// Learning is rebuilt only from canonical, semantic-deduped, temporally valid CLOSED paper trades
+// in the current v10.1.51 evidence epoch. It soft-reorders attention only: no hard bans, no caps.
 let lastV10155LearningView = null;
+function v10155Clamp(value, min = 0, max = 100) {
+  const x = Number(value);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
 function v10155ConfidenceFromBucket(b = {}) {
   const closed = n(b.closed, 0);
-  if (!closed) return 50;
-  const decisive = Math.max(1, n(b.wins, 0) + n(b.losses, 0));
-  const decisiveWinRate = n(b.wins, 0) / decisive;                       // 0..1
-  const sampleWeight = Math.min(1, closed / 12);                         // full weight at 12 closed
-  const avgR = n(b.totalResultR, 0) / closed;                            // typically -1..+1.5
-  const pf = n(b.negativeR, 0) < 0 ? n(b.positiveR, 0) / Math.abs(n(b.negativeR, 0)) : (n(b.positiveR, 0) > 0 ? 3 : 1);
-  const bpsSign = n(b.netPnlBps, 0) >= 0 ? 1 : 0;
-  const raw = (decisiveWinRate * 45) + (Math.max(-1, Math.min(1.5, avgR)) / 1.5 * 25) + (Math.min(3, pf) / 3 * 20) + (bpsSign * 10);
-  return Number((50 + (raw - 50) * sampleWeight).toFixed(2));            // shrinks toward 50 on low samples
+  const decisive = n(b.wins, 0) + n(b.losses, 0);
+  const resultRCount = n(b.resultRCount, 0);
+  const pnlBpsCount = n(b.pnlBpsCount, 0);
+  const evidenceCount = Math.max(decisive, resultRCount, pnlBpsCount);
+  if (!closed || !evidenceCount) return 50;
+
+  let weighted = 0;
+  let weight = 0;
+  if (decisive > 0) {
+    weighted += (n(b.wins, 0) / decisive * 100) * 45;
+    weight += 45;
+  }
+  if (resultRCount > 0) {
+    const avgR = n(b.totalResultR, 0) / resultRCount;
+    const avgRScore = v10155Clamp(50 + (v10155Clamp(avgR, -1.5, 1.5) / 1.5 * 50));
+    weighted += avgRScore * 25;
+    weight += 25;
+
+    const positiveR = Math.max(0, n(b.positiveR, 0));
+    const negativeRAbs = Math.abs(Math.min(0, n(b.negativeR, 0)));
+    let pfScore = 50;
+    if (positiveR > 0 || negativeRAbs > 0) {
+      if (positiveR > 0 && negativeRAbs === 0) pfScore = 100;
+      else if (positiveR === 0 && negativeRAbs > 0) pfScore = 0;
+      else {
+        const pf = positiveR / negativeRAbs;
+        pfScore = v10155Clamp((pf / (1 + pf)) * 100);
+      }
+    }
+    weighted += pfScore * 20;
+    weight += 20;
+  }
+  if (pnlBpsCount > 0) {
+    const net = n(b.netPnlBps, 0);
+    const bpsScore = net > 0 ? 100 : (net < 0 ? 0 : 50);
+    weighted += bpsScore * 10;
+    weight += 10;
+  }
+
+  const raw = weight > 0 ? weighted / weight : 50;
+  const sampleWeight = Math.min(1, evidenceCount / 12);
+  return Number(v10155Clamp(50 + (raw - 50) * sampleWeight).toFixed(2));
+}
+function v10155CanonicalEpochLearningStats(closedLedgerStats = {}) {
+  const canonicalRows = v10143MergeClosedTradeRows(
+    v10143PersistentClosedRows,
+    lastTradeExport?.closedTrades,
+    lastV948EntryEngineView?.closedTrades,
+    lastV1017cPaperEntryAuthorityBridgeView?.closedTrades
+  );
+  const epoch = v10151LoadOrCreateTemporalEpochSync();
+  const cleanRows = [];
+  let invalidTemporalRows = 0;
+  let legacyOrOtherEpochRows = 0;
+  for (const row of canonicalRows) {
+    try {
+      const classification = v10151TradeTemporalClassification(row);
+      if (classification.cleanEligible) cleanRows.push(row);
+      else if (classification.status === 'INVALID_PRE_ENTRY_OBSERVATION') invalidTemporalRows += 1;
+      else legacyOrOtherEpochRows += 1;
+    } catch (_) {
+      legacyOrOtherEpochRows += 1;
+    }
+  }
+  const byPairMap = new Map();
+  const byTfMap = new Map();
+  for (const row of cleanRows) {
+    const pair = v10115CanonicalSymbol(row.pair || row.symbol || row.baseSymbol || 'UNKNOWN') || 'UNKNOWN';
+    const tf = textValue(row.timeframe || row.tf || 'unknown').toLowerCase() || 'unknown';
+    if (!byPairMap.has(pair)) byPairMap.set(pair, []);
+    if (!byTfMap.has(tf)) byTfMap.set(tf, []);
+    byPairMap.get(pair).push(row);
+    byTfMap.get(tf).push(row);
+  }
+  const bucketRow = (key, group) => ({ key, ...v10142StatsBucket(group) });
+  return {
+    schema: 'alps.learningEvidenceAuthority.v10156',
+    version: FINAL_V930_VERSION,
+    source: 'CANONICAL_SEMANTIC_DEDUP_CURRENT_TEMPORAL_EPOCH_ONLY',
+    temporalEvidenceEpochId: epoch.epochId,
+    temporalEvidenceEpochStartedAt: epoch.startedAtIso,
+    canonicalClosedTradesObserved: n(closedLedgerStats.closedTrades, canonicalRows.length),
+    closedTrades: cleanRows.length,
+    invalidTemporalRows,
+    legacyOrOtherEpochRows,
+    excludedRows: Math.max(0, canonicalRows.length - cleanRows.length),
+    byPair: [...byPairMap.entries()].map(([k,v]) => bucketRow(k,v)).sort((a,b)=>b.closed-a.closed || b.netPnlBps-a.netPnlBps),
+    byTimeframe: [...byTfMap.entries()].map(([k,v]) => bucketRow(k,v)).sort((a,b)=>b.closed-a.closed || b.netPnlBps-a.netPnlBps)
+  };
 }
 function v10155BuildLearningView(closedLedgerStats = {}) {
+  const learningStats = v10155CanonicalEpochLearningStats(closedLedgerStats);
   const view = {
-    schema: 'alps.adaptiveEvidenceLearning.v10155',
+    schema: 'alps.adaptiveEvidenceLearning.v10156',
     version: FINAL_V930_VERSION,
     installed: true,
     generatedAt: new Date().toISOString(),
-    source: 'canonical-closed-ledger-stats-v10147-authority',
+    source: learningStats.source,
     executionMode: 'SOFT_PRIORITY_ONLY_NO_HARD_BANS_NO_FIXED_CAPS',
-    closedTradesLearned: n(closedLedgerStats.closedTrades, 0),
+    temporalEvidenceEpochId: learningStats.temporalEvidenceEpochId,
+    temporalEvidenceEpochStartedAt: learningStats.temporalEvidenceEpochStartedAt,
+    canonicalClosedTradesObserved: learningStats.canonicalClosedTradesObserved,
+    closedTradesLearned: learningStats.closedTrades,
+    excludedLegacyOrInvalidClosedTrades: learningStats.excludedRows,
+    invalidTemporalRows: learningStats.invalidTemporalRows,
+    legacyOrOtherEpochRows: learningStats.legacyOrOtherEpochRows,
+    status: learningStats.closedTrades > 0 ? 'CURRENT_EPOCH_LEARNING_ACTIVE' : 'WAITING_FOR_VALID_CURRENT_EPOCH_CLOSES',
     pairConfidence: [], timeframeConfidence: [], learningActions: [],
     appliedToCandidatePriority: true, appliedToExecutionAsHardFilter: false,
-    rule: 'Confidence blends decisive win rate, avg R, profit factor, net bps sign, shrunk toward 50 on low samples. Soft reorder only.'
+    rule: 'Confidence uses only available decisive/R/PnL evidence from temporally valid current-epoch closes, shrunk toward 50 until 12 evidence rows. Missing metrics remain neutral and do not receive fabricated positive credit.'
   };
   try {
-    view.pairConfidence = safeArray(closedLedgerStats.byPair).map(b => ({ key: textValue(b.key).toUpperCase(), closed: n(b.closed,0), wins: n(b.wins,0), losses: n(b.losses,0), netPnlBps: n(b.netPnlBps,0), confidenceScore: v10155ConfidenceFromBucket(b), status: n(b.closed,0) >= 8 ? (v10155ConfidenceFromBucket(b) >= 70 ? 'EXPAND_CONFIDENCE_SOFT_PRIORITY' : 'EVIDENCE_STEADY') : 'LOW_SAMPLE_COLLECT_MORE_EVIDENCE' })).sort((a,b)=>b.confidenceScore-a.confidenceScore);
-    view.timeframeConfidence = safeArray(closedLedgerStats.byTimeframe).map(b => ({ key: textValue(b.key).toLowerCase(), closed: n(b.closed,0), wins: n(b.wins,0), losses: n(b.losses,0), netPnlBps: n(b.netPnlBps,0), confidenceScore: v10155ConfidenceFromBucket(b), status: n(b.closed,0) >= 8 ? (v10155ConfidenceFromBucket(b) >= 70 ? 'EXPAND_CONFIDENCE_SOFT_PRIORITY' : 'EVIDENCE_STEADY') : 'LOW_SAMPLE_COLLECT_MORE_EVIDENCE' })).sort((a,b)=>b.confidenceScore-a.confidenceScore);
+    const confidenceRow = (b, keyTransform) => {
+      const confidenceScore = v10155ConfidenceFromBucket(b);
+      const decisiveClosed = n(b.wins,0) + n(b.losses,0);
+      return {
+        key: keyTransform(textValue(b.key)), closed: n(b.closed,0), decisiveClosed,
+        wins: n(b.wins,0), losses: n(b.losses,0), breakeven: n(b.breakeven,0), unknown: n(b.unknown,0),
+        resultRCount: n(b.resultRCount,0), pnlBpsCount: n(b.pnlBpsCount,0), netPnlBps: n(b.netPnlBps,0),
+        confidenceScore,
+        status: n(b.closed,0) >= 8 ? (confidenceScore >= 70 ? 'EXPAND_CONFIDENCE_SOFT_PRIORITY' : (confidenceScore < 45 ? 'SHADOW_RETEST_WEAK_CONTEXT' : 'EVIDENCE_STEADY')) : 'LOW_SAMPLE_COLLECT_MORE_EVIDENCE'
+      };
+    };
+    view.pairConfidence = safeArray(learningStats.byPair).map(b => confidenceRow(b, x => v10115CanonicalSymbol(x) || x.toUpperCase())).sort((a,b)=>b.confidenceScore-a.confidenceScore);
+    view.timeframeConfidence = safeArray(learningStats.byTimeframe).map(b => confidenceRow(b, x => x.toLowerCase())).sort((a,b)=>b.confidenceScore-a.confidenceScore);
     const topPairs = view.pairConfidence.filter(x=>x.confidenceScore>=65).map(x=>x.key).slice(0,3);
     const weakPairs = view.pairConfidence.filter(x=>x.confidenceScore<45).map(x=>x.key).slice(0,3);
     const topTfs = view.timeframeConfidence.filter(x=>x.confidenceScore>=65).map(x=>x.key).slice(0,3);
-    if (topPairs.length) view.learningActions.push({ action:'RAISE_SOFT_CONFIDENCE_PRIORITY', target: topPairs.join(', '), reason:'Highest evidence confidence by pair; soft priority only, no exposure cap or pair ban.' });
-    if (topTfs.length) view.learningActions.push({ action:'RAISE_SOFT_TIMEFRAME_PRIORITY', target: topTfs.join(', '), reason:'Highest evidence confidence by timeframe; evidence-driven and reversible.' });
-    if (weakPairs.length) view.learningActions.push({ action:'SHADOW_RETEST_WEAK_CONTEXTS', target: weakPairs.join(', '), reason:'Low relative confidence; keep collecting evidence without hard blocking.' });
+    if (topPairs.length) view.learningActions.push({ action:'RAISE_SOFT_CONFIDENCE_PRIORITY', target: topPairs.join(', '), reason:'Highest current-epoch evidence confidence by pair; soft priority only.' });
+    if (topTfs.length) view.learningActions.push({ action:'RAISE_SOFT_TIMEFRAME_PRIORITY', target: topTfs.join(', '), reason:'Highest current-epoch evidence confidence by timeframe; reversible soft priority only.' });
+    if (weakPairs.length) view.learningActions.push({ action:'SHADOW_RETEST_WEAK_CONTEXTS', target: weakPairs.join(', '), reason:'Low current-epoch confidence; continue evidence collection without hard blocking.' });
   } catch (e) { view.lastError = textValue(e && e.message || e).slice(0, 160); }
   lastV10155LearningView = view;
   return view;
 }
+function v10155RefreshLearningFromCanonicalLedger(reason = 'learning-refresh') {
+  try {
+    v10143SyncClosedLedgerSync(reason, lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+    const stats = v10142ClosedLedgerStats(lastTradeExport?.closedTrades, lastV948EntryEngineView?.closedTrades, lastV1017cPaperEntryAuthorityBridgeView?.closedTrades);
+    const view = v10155BuildLearningView(stats);
+    view.refreshReason = reason;
+    return view;
+  } catch (e) {
+    const fallback = lastV10155LearningView || { schema:'alps.adaptiveEvidenceLearning.v10156', version:FINAL_V930_VERSION, installed:true, status:'LEARNING_REFRESH_FAILED_NEUTRAL_PRIORITY', pairConfidence:[], timeframeConfidence:[], learningActions:[], closedTradesLearned:0 };
+    fallback.lastError = textValue(e && e.message || e).slice(0,160);
+    fallback.refreshReason = reason;
+    lastV10155LearningView = fallback;
+    return fallback;
+  }
+}
 function v10155CandidateLearningScore(candidate = {}) {
   const view = lastV10155LearningView;
   if (!view) return 50;
-  const pair = textValue(candidate.pair || candidate.baseSymbol || candidate.symbol || '').toUpperCase().split('_')[0].replace(/[^A-Z0-9]/g, '');
+  const pair = v10115CanonicalSymbol(candidate.pair || candidate.baseSymbol || candidate.symbol || candidate.sym || '');
   const tf = textValue(candidate.timeframe || candidate.tf || '').toLowerCase();
-  const p = safeArray(view.pairConfidence).find(x => x.key === pair);
-  const t = safeArray(view.timeframeConfidence).find(x => x.key === tf);
+  const p = safeArray(view.pairConfidence).find(x => v10115CanonicalSymbol(x.key) === pair);
+  const t = safeArray(view.timeframeConfidence).find(x => textValue(x.key).toLowerCase() === tf);
   return Number((((p ? p.confidenceScore : 50) * 0.6) + ((t ? t.confidenceScore : 50) * 0.4)).toFixed(2));
+}
+function v10155LearningActuatorForRows(rows = []) {
+  const candidates = safeArray(rows);
+  const applied = candidates.some(x => n(x.learningConfidenceScore,50) !== 50);
+  return {
+    schema:'alps.learningSoftPriorityActuator.v10156', version:FINAL_V930_VERSION, installed:true,
+    mode:'SOFT_REORDER_ONLY', applied, candidatesScored:candidates.length,
+    topPriority:candidates.slice(0,10).map(x=>({ key:x.key||'', pair:v10115CanonicalSymbol(x.pair||x.symbol||''), timeframe:textValue(x.timeframe||x.tf||'').toLowerCase(), confidenceScore:n(x.learningConfidenceScore,50) })),
+    noHardBans:true, noFixedCaps:true,
+    temporalEvidenceEpochId:lastV10155LearningView?.temporalEvidenceEpochId || '',
+    closedTradesLearned:n(lastV10155LearningView?.closedTradesLearned,0)
+  };
 }
 
 function v10142StatsBucket(rows = []) {
-  const b = { closed:0, wins:0, losses:0, breakeven:0, unknown:0, netPnlBps:0, totalResultR:0, positiveR:0, negativeR:0, positiveBps:0, negativeBps:0 };
+  const b = { closed:0, wins:0, losses:0, breakeven:0, unknown:0, netPnlBps:0, totalResultR:0, resultRCount:0, pnlBpsCount:0, positiveR:0, negativeR:0, positiveBps:0, negativeBps:0 };
   for (const row of safeArray(rows)) {
     if (!row || typeof row !== 'object') continue;
     b.closed += 1;
@@ -1194,12 +1324,14 @@ function v10142StatsBucket(rows = []) {
     else b.unknown += 1;
     const r = v10137FiniteNumber(row.resultR, null);
     if (Number.isFinite(r)) {
+      b.resultRCount += 1;
       b.totalResultR += r;
       if (r > 0) b.positiveR += r;
       if (r < 0) b.negativeR += r;
     }
     const pnl = v10142ClosedTradePnlBps(row);
     if (Number.isFinite(pnl)) {
+      b.pnlBpsCount += 1;
       b.netPnlBps += pnl;
       if (pnl > 0) b.positiveBps += pnl;
       if (pnl < 0) b.negativeBps += pnl;
@@ -1240,7 +1372,7 @@ function v10142ClosedLedgerStats(...groups) {
   const byPairMap = new Map();
   const byTfMap = new Map();
   for (const row of rows) {
-    const pair = textValue(row.pair || row.symbol || 'UNKNOWN').toUpperCase() || 'UNKNOWN';
+    const pair = v10115CanonicalSymbol(row.pair || row.symbol || row.baseSymbol || 'UNKNOWN') || 'UNKNOWN';
     const tf = textValue(row.timeframe || row.tf || 'unknown').toLowerCase() || 'unknown';
     if (!byPairMap.has(pair)) byPairMap.set(pair, []);
     if (!byTfMap.has(tf)) byTfMap.set(tf, []);
@@ -2260,11 +2392,12 @@ async function v10138LivePriceSentinelTick(reason='v10138-live-price-sentinel') 
     lastV10138LivePriceSentinelView = v10148ApplySentinelTelemetry({ ...view });
   }
   const stillPending = [];
+  const v10156PendingLearningView = v10155RefreshLearningFromCanonicalLedger('sentinel-before-pending-priority');
   v10138PendingEntries = v10138DedupPendingEntries(v10138PendingEntries);
   // v10.1.55: re-applied from v10.1.45 (lost in v10.1.46-54 rebuilds) — evaluate pending entries in
   // learning-confidence order so evidence-strong contexts get first claim on price checks and open slots.
   try { v10138PendingEntries.sort((a, b) => n(v10155CandidateLearningScore(b), 50) - n(v10155CandidateLearningScore(a), 50)); } catch (_) {}
-  view.pendingLearningPriority = { schema:'alps.pendingLearningPriority.v10155', mode:'SOFT_REORDER_ONLY', noHardBans:true, noFixedCaps:true };
+  view.pendingLearningPriority = { schema:'alps.pendingLearningPriority.v10156', mode:'SOFT_REORDER_ONLY', applied:v10138PendingEntries.some(x=>v10155CandidateLearningScore(x)!==50), closedTradesLearned:n(v10156PendingLearningView?.closedTradesLearned,0), temporalEvidenceEpochId:v10156PendingLearningView?.temporalEvidenceEpochId||'', topPriority:v10138PendingEntries.slice(0,10).map(x=>({key:v10138PendingKey(x),pair:v10115CanonicalSymbol(x.pair||x.symbol||''),timeframe:textValue(x.timeframe||x.tf||'').toLowerCase(),confidenceScore:v10155CandidateLearningScore(x)})), noHardBans:true, noFixedCaps:true };
   view.watchedPendingEntries = v10138PendingEntries.length;
   for (const p of v10138PendingEntries) {
     try {
@@ -2823,6 +2956,11 @@ function v10116CompactRow(seed = {}, chart = null, source = 'chatgpt-compact') {
     avgPnlBps: closedLedgerFlat.avgPnlBps,
     profitFactorR: closedLedgerFlat.profitFactorR,
     profitFactorBps: closedLedgerFlat.profitFactorBps,
+    adaptiveEvidenceLearningJson: v10116FlatJson(v10155LearningView),
+    learningActionsJson: v10116FlatJson(v10155LearningView.learningActions || []),
+    learningAuthorityStatus: v10155LearningView.status || '',
+    learningClosedTrades: n(v10155LearningView.closedTradesLearned,0),
+    learningTemporalEpochId: v10155LearningView.temporalEvidenceEpochId || '',
     closedLedgerStatsStatus: closedLedgerAuthorityFields.closedLedgerStatsCompleteness === 'FULL_CANONICAL_ROWS' ? closedLedgerFlat.closedLedgerStatsStatus : 'PARTIAL_CANONICAL_ROWS_HIGH_WATER_COUNT_RETAINED',
     closedLedgerMonotonicStatus: closedLedgerAuthorityFields.closedLedgerMonotonicStatus,
     closedLedgerAuthoritySource: closedLedgerAuthorityFields.closedLedgerAuthoritySource,
@@ -3314,114 +3452,8 @@ function autonomyRouteMatchesCandidate(route = {}, c = {}) {
   const rroot = textValue(route.root || route.strategy).toUpperCase().replace(/[^A-Z0-9]+/g, '_');
   return (!rpair || pair.includes(rpair)) && (!rtf || tf === rtf) && (!rroot || strat.includes(rroot));
 }
-function classifyCandidateV930(c = {}, routes = []) {
-  const safety = candidateSafetyReason(c);
-  const labels = candidateEvidenceLabels(c);
-  if (safety) return { tier: safety === 'DATA_OR_PRICE_GUARD' ? 'DATA_BLOCKED' : 'SAFETY_BLOCKED', safetyReason: safety, evidenceLabels: labels };
-  const suspended = routes.find(r => String(r.action || '').toUpperCase().includes('SHADOW') && autonomyRouteMatchesCandidate(r, c));
-  if (suspended) return { tier: 'COGNITION_SUSPENDED', safetyReason: '', evidenceLabels: labels.concat(['COGNITION_ROUTE']), routeKey: suspended.routeKey || '' };
-  if (c.forwardEligible === true || /WATCHLIST|FORWARD/i.test(textValue(c.promotionTier))) return { tier: 'WATCH_FORWARD', safetyReason: '', evidenceLabels: labels };
-  if (/WATCH|ROBUSTNESS_WATCH|KEEP/i.test([c.rawVerdict, c.effectiveVerdict, c.robustnessFinal].map(textValue).join('|'))) return { tier: 'FULL_AUTONOMY_FORWARD', safetyReason: '', evidenceLabels: labels.concat(['PROMOTED_BY_AUTONOMY']) };
-  if (/DISCARD/i.test([c.rawVerdict, c.effectiveVerdict].map(textValue).join('|')) && Number(c.oosPF || 0) > 1 && Number(c.oosTrades || 0) >= 10) return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: labels.concat(['SANDBOX_RETEST']) };
-  return { tier: 'RESEARCH_SANDBOX', safetyReason: '', evidenceLabels: labels };
-}
-function buildNativeForwardPoolView(report = {}, routes = []) {
-  const top = safeArray(report?.research?.topStrategies);
-  const selected = [];
-  const seen = new Set();
-  for (const c of top) {
-    const key = uniqueKeyFromCandidate(c);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    const cls = classifyCandidateV930(c, routes);
-    selected.push({
-      key,
-      pair: c.pair || c.baseSymbol || (textValue(c.sym).split('_')[0] || ''),
-      timeframe: c.timeframe || '',
-      strategy: c.strategy || c.stratName || '',
-      exit: c.exit || c.exitName || '',
-      tier: cls.tier,
-      safetyReason: cls.safetyReason,
-      evidenceLabels: cls.evidenceLabels,
-      oosPF: c.oosPF,
-      oosTrades: c.oosTrades,
-      totalTrades: c.totalTrades,
-      ddBps: c.oosDD,
-      score: c.score,
-      originalPromotionTier: c.promotionTier,
-      originalForwardEligible: c.forwardEligible === true,
-      originalBlockReason: c.forwardBlockReason || ''
-    });
-    
-  }
-  // v10.1.55: rebuilt v10.1.44 forward-pool soft priority (lost in v10.1.46-54 rebuilds) — annotate and
-  // reorder candidates by evidence confidence. SOFT_REORDER_ONLY: no bans, no caps, attention order only.
-  try {
-    for (const x of selected) { x.learningConfidenceScore = v10155CandidateLearningScore(x); }
-    selected.sort((a, b) => n(b.learningConfidenceScore, 50) - n(a.learningConfidenceScore, 50));
-  } catch (_) {}
-  const count = tier => selected.filter(x => x.tier === tier).length;
-  const view = {
-    schema: 'alps.nativeForwardPool.view.v1',
-    version: FINAL_V930_VERSION,
-    installed: true,
-    technicalCap: V952_NO_FIXED_CANDIDATE_CAP ? 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES' : FINAL_V930_TECHNICAL_CAP,
-    totalCandidates: selected.length,
-    decisionActuator: { schema:'alps.learningSoftPriorityActuator.v10155', version:FINAL_V930_VERSION, installed:true, mode:'SOFT_REORDER_ONLY', applied:selected.some(x=>n(x.learningConfidenceScore,50)!==50), noHardBans:true, noFixedCaps:true },
-    generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
-    fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
-    watchForward: count('WATCH_FORWARD'),
-    experimentalForward: count('EXPERIMENTAL_FORWARD'),
-    researchSandbox: count('RESEARCH_SANDBOX'),
-    cognitionSuspended: count('COGNITION_SUSPENDED'),
-    safetyBlocked: count('SAFETY_BLOCKED'),
-    dataBlocked: count('DATA_BLOCKED'),
-    promotedByFullAutonomy: count('FULL_AUTONOMY_FORWARD'),
-    promotedToExperimental: count('EXPERIMENTAL_FORWARD'),
-    blockedBySafety: count('SAFETY_BLOCKED') + count('DATA_BLOCKED'),
-    evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
-    candidates: selected.slice(0, 50),
-    note: 'Sample, DD, PF, LAB_ONLY and robustness labels are evidence tags. Only operational safety remains a hard block.'
-  };
-  return view;
-}
-function buildFullAutonomyView(report = {}, nativeView = null, routes = []) {
-  return {
-    schema: 'alps.fullAutonomy.view.v1',
-    version: FINAL_V930_VERSION,
-    enabled: true,
-    mode: 'DECIDE_AND_ACT_PAPER_ONLY',
-    paperOnly: true,
-    liveCapitalExecution: false,
-    humanStrategicRestrictionsRemoved: {
-      fixedTradeCount: true,
-      fixedPairPreference: true,
-      fixedTimeframePreference: true,
-      manualPatternBlocks: true,
-      manualExposureBudget: true,
-      fixedRobustWatchDependency: true,
-      fixedCandidateCapAsStrategy: true
-    },
-    safetyGuardsPreserved: {
-      closedCandleOnly: true,
-      freshSignalOnly: true,
-      badDataGuard: true,
-      duplicateSignalGuard: true,
-      storageProtection: true,
-      emergencyStop: true,
-      paperOnlyBoundary: true
-    },
-    allowedActions: ['OPEN_PAPER','HOLD','REDUCE_EXPOSURE','SHADOW_RETEST','REBUILD','SUSPEND_PATTERN','STOP_REVIEW','WAIT_FOR_EVIDENCE'],
-    decisions: [],
-    lastDecision: nativeView?.promotedByFullAutonomy ? 'FULL_AUTONOMY_FORWARD_POOL_READY' : 'WAIT_FOR_EVIDENCE',
-    nativeForwardPool: {
-      totalCandidates: nativeView?.totalCandidates || 0,
-      promotedByFullAutonomy: nativeView?.promotedByFullAutonomy || 0,
-      blockedBySafety: nativeView?.blockedBySafety || 0
-    },
-    activeEvidenceRoutes: safeArray(routes).length
-  };
-}
+// v10.1.56: removed obsolete duplicate classifyCandidateV930/buildNativeForwardPoolView/buildFullAutonomyView definitions.
+// The single authoritative implementations live in the v9.3.1 evidence section below.
 function buildEngineHookView(pageStatus = {}) {
   return {
     schema: 'alps.engineHook.view.v1',
@@ -4947,7 +4979,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     }
     
   }
-  // v10.1.55: rebuilt v10.1.44 forward-pool soft priority (lost in v10.1.46-54 rebuilds) — annotate and
+  // v10.1.56: current-epoch learning authority soft priority (lost in v10.1.46-54 rebuilds) — annotate and
   // reorder candidates by evidence confidence. SOFT_REORDER_ONLY: no bans, no caps, attention order only.
   try {
     for (const x of selected) { x.learningConfidenceScore = v10155CandidateLearningScore(x); }
@@ -4962,7 +4994,7 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     technicalCap: V952_NO_FIXED_CANDIDATE_CAP ? 'UNLIMITED_ACCEPT_ALL_REAL_CANDIDATES' : FINAL_V930_TECHNICAL_CAP,
     poolViewCap: null,
     totalCandidates: selected.length,
-    decisionActuator: { schema:'alps.learningSoftPriorityActuator.v10155', version:FINAL_V930_VERSION, installed:true, mode:'SOFT_REORDER_ONLY', applied:selected.some(x=>n(x.learningConfidenceScore,50)!==50), noHardBans:true, noFixedCaps:true },
+    learningDecisionActuator: v10155LearningActuatorForRows(selected),
     generatedStrategies: Number(report?.research?.strategies || report?.forwardWatch?.totalGeneratedStrategies || top.length || 0),
     fullAutonomyForward: count('FULL_AUTONOMY_FORWARD'),
     watchForward: count('WATCH_FORWARD'),
@@ -4985,7 +5017,8 @@ function buildNativeForwardPoolView(report = {}, routes = []) {
     mutationGovernor,
     decisionActuator: null,
     evidenceLabels: [...new Set(selected.flatMap(x => x.evidenceLabels || []))],
-    candidates: selected.slice(0, 50),
+    candidatePreview: selected.slice(0, 50),
+    candidates: selected,
     note: 'v9.4.1: Live Paper Evidence Collector starts EXPERIMENTAL_FORWARD for non-safety candidates when verified OOS is unavailable. It never labels those candidates OOS-verified; it marks them NOT_OOS_VERIFIED and collects real paper evidence.'
   };
 }
@@ -6088,12 +6121,15 @@ function buildV949CompleteTruthMarkdown(report = {}) {
 }
 
 function enrichReportV930(report = {}, pageStatus = null) {
+  v10155RefreshLearningFromCanonicalLedger('enrich-report-before-native-forward-pool');
   const routes = safeArray(report?.alpsAutonomousBridge?.activeRoutes || lastAutonomyView?.activeRoutes || autonomyMemoryState?.activeRoutes);
   const nativeView = buildNativeForwardPoolView(report, routes);
   v944MergeForwardLatchFromView(nativeView, 'enrich-report-native-forward-pool');
   if (report.recoveryForwardCore) v944MergeForwardLatchFromRecoveryCore(report.recoveryForwardCore, 'enrich-report-recovery-core');
   const forwardLatch = v944BuildForwardLatchView();
-  const decisionActuator = v941BuildDecisionActuatorView(nativeView, report);
+  const learningDecisionActuator = nativeView.learningDecisionActuator || v10155LearningActuatorForRows(nativeView.candidates);
+  const decisionActuator = { ...v941BuildDecisionActuatorView(nativeView, report), learningSoftPriority:learningDecisionActuator, learningPriorityApplied:learningDecisionActuator.applied === true };
+  nativeView.learningDecisionActuator = learningDecisionActuator;
   nativeView.decisionActuator = decisionActuator;
   const fullAutonomy = buildFullAutonomyView(report, nativeView, routes);
   const mutationGovernor = nativeView?.mutationGovernor || v931BuildMutationGovernor(report);
@@ -10154,6 +10190,13 @@ function v10128BuildHealthLite(source = 'health-lite') {
     avgPnlBps: closedLedgerFlat.avgPnlBps,
     profitFactorR: closedLedgerFlat.profitFactorR,
     profitFactorBps: closedLedgerFlat.profitFactorBps,
+    adaptiveEvidenceLearningJson: v10116FlatJson(v10155LearningView),
+    learningActionsJson: v10116FlatJson(v10155LearningView.learningActions || []),
+    learningAuthorityStatus: v10155LearningView.status || '',
+    learningClosedTrades: n(v10155LearningView.closedTradesLearned,0),
+    learningTemporalEpochId: v10155LearningView.temporalEvidenceEpochId || '',
+    adaptiveEvidenceLearning: v10155LearningView,
+    learningActions: safeArray(v10155LearningView.learningActions),
     closedLedgerStatsStatus: closedLedgerAuthorityFieldsLite.closedLedgerStatsCompleteness === 'FULL_CANONICAL_ROWS' ? closedLedgerFlat.closedLedgerStatsStatus : 'PARTIAL_CANONICAL_ROWS_HIGH_WATER_COUNT_RETAINED',
     closedLedgerMonotonicStatus: closedLedgerAuthorityFieldsLite.closedLedgerMonotonicStatus,
     closedLedgerAuthoritySource: closedLedgerAuthorityFieldsLite.closedLedgerAuthoritySource,
@@ -10351,6 +10394,13 @@ function v10128BuildHealthLite(source = 'health-lite') {
     avgPnlBps: healthLite.avgPnlBps,
     profitFactorR: healthLite.profitFactorR,
     profitFactorBps: healthLite.profitFactorBps,
+    adaptiveEvidenceLearningJson: healthLite.adaptiveEvidenceLearningJson,
+    learningActionsJson: healthLite.learningActionsJson,
+    learningAuthorityStatus: healthLite.learningAuthorityStatus,
+    learningClosedTrades: healthLite.learningClosedTrades,
+    learningTemporalEpochId: healthLite.learningTemporalEpochId,
+    adaptiveEvidenceLearning: healthLite.adaptiveEvidenceLearning,
+    learningActions: healthLite.learningActions,
     closedLedgerStatsStatus: healthLite.closedLedgerStatsStatus,
     closedLedgerMonotonicStatus: healthLite.closedLedgerMonotonicStatus,
     closedLedgerAuthoritySource: healthLite.closedLedgerAuthoritySource,
@@ -13041,6 +13091,22 @@ async function collectReportInternal() {
   await updateTradeVault(lastTradeExport, 'report');
   report.alpsTradeExport = lastTradeExport;
   report = v1001SyncReportCountersFromTradeExport(report, lastTradeExport);
+  const v10156PostLedgerLearning = v10155RefreshLearningFromCanonicalLedger('collect-report-post-ledger-learning-authority');
+  if (report.nativeForwardPool && Array.isArray(report.nativeForwardPool.candidates)) {
+    for (const candidate of report.nativeForwardPool.candidates) candidate.learningConfidenceScore = v10155CandidateLearningScore(candidate);
+    report.nativeForwardPool.candidates.sort((a,b)=>n(b.learningConfidenceScore,50)-n(a.learningConfidenceScore,50));
+    report.nativeForwardPool.candidatePreview = report.nativeForwardPool.candidates.slice(0,50);
+    report.nativeForwardPool.learningDecisionActuator = v10155LearningActuatorForRows(report.nativeForwardPool.candidates);
+    if (report.nativeForwardPool.decisionActuator) {
+      report.nativeForwardPool.decisionActuator.learningSoftPriority = report.nativeForwardPool.learningDecisionActuator;
+      report.nativeForwardPool.decisionActuator.learningPriorityApplied = report.nativeForwardPool.learningDecisionActuator.applied === true;
+    }
+    lastNativeForwardPoolView = report.nativeForwardPool;
+  }
+  report.adaptiveEvidenceLearning = v10156PostLedgerLearning;
+  report.adaptiveEvidenceLearningJson = JSON.stringify(v10156PostLedgerLearning);
+  report.learningActions = safeArray(v10156PostLedgerLearning.learningActions);
+  report.learningActionsJson = JSON.stringify(report.learningActions);
   report.tradeLifecycleTruth = v949BuildTradeLifecycleTruth(report);
   report = v949AttachCompleteTruth(report);
   report.alpsTradeContinuityVault = buildTradeVaultView();
@@ -13084,6 +13150,10 @@ async function collectReportInternal() {
   report.currentHealth.staleCurrentHealthOpenDelta = 0;
   report.currentHealth.v10138LivePriceSentinel = v10148SentinelView();
   report.currentHealth.v10151TemporalEvidence = report.v10151TemporalEvidence;
+  report.currentHealth.adaptiveEvidenceLearning = report.adaptiveEvidenceLearning || lastV10155LearningView || null;
+  report.currentHealth.adaptiveEvidenceLearningJson = report.adaptiveEvidenceLearningJson || JSON.stringify(report.currentHealth.adaptiveEvidenceLearning || {});
+  report.currentHealth.learningActions = report.learningActions || safeArray(report.currentHealth.adaptiveEvidenceLearning?.learningActions);
+  report.currentHealth.learningActionsJson = report.learningActionsJson || JSON.stringify(report.currentHealth.learningActions || []);
   report.currentHealth.ahiRegimeIntelligence = report.ahiRegimeIntelligence;
   report.currentHealth.hypothesisDNA = report.hypothesisDNA;
   report.currentHealth.evidenceChamber = report.evidenceChamber;
@@ -13154,7 +13224,7 @@ ${v10151BuildIntelligenceMarkdown(report)}`;
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-candle-depth-authority.json'), JSON.stringify(report.v10152CandleDepthAuthority || {}, null, 2)).catch(() => null);
   await fsp.writeFile(path.join(REPORT_DIR, 'latest-native-forward-pool.json'), JSON.stringify(report.nativeForwardPool || {}, null, 2)).catch(() => null);
   await v1014PersistRuntimeNonzeroSnapshot(report, 'collect-report-final').catch(() => null);
-  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView, chartTruth: report.chartTruth || lastChartView || null, v10115OperationalTruth: report.v10115OperationalTruth || lastV10115OperationalTruthView, v10115SymbolStatus: report.v10115SymbolStatus || lastV10115SymbolStatusView, v10115FeatureGateDiagnostics: report.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView, v10115UnifiedLayerLog: report.v10115UnifiedLayerLog || lastV10115LayerLogView, v10115DeferredEntryQueue: report.v10115DeferredEntryQueue || lastV10115DeferredEntryQueueView, v10115ChartTruthSync: report.v10115ChartTruthSync, v10117LedgerConsistency: report.v10117LedgerConsistency || lastHealth?.v10117LedgerConsistency, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10149PersistentEvidenceLedger:v10149EvidenceView(), v10149BootReplayGuard:lastV10149BootReplayGuardView, v10149IntrabarTruthGuard:{ ambiguousDeferred:n(lastV1018LifecycleView?.intrabarAmbiguousDeferred,0), lookaheadBlocked:n(lastV1018LifecycleView?.intrabarLookaheadBlocked,0), proof:safeArray(lastV1018LifecycleView?.intrabarAmbiguityProof).slice(0,20) } }, null, 2)).catch(() => null);
+  await fsp.writeFile(path.join(REPORT_DIR, 'latest-v930.json'), JSON.stringify({ fullAutonomy: report.fullAutonomy, nativeForwardPool: report.nativeForwardPool, oosEvidenceBridge: report.oosEvidenceBridge, recoveryForwardCore: report.recoveryForwardCore, engineHook: report.engineHook, circuitBreaker: report.circuitBreaker, chart: report.chart, counterfactual: report.counterfactual, pipelineTruthRecovery: report.pipelineTruthRecovery, runtimeTruth: report.runtimeTruth, discoveryOutput: report.discoveryOutput, zeroOutputDiagnostics: report.zeroOutputDiagnostics, symbolLoadStatus: report.symbolLoadStatus, closedCandleMap: report.closedCandleMap, gateMatrix: report.gateMatrix, forwardReadiness: report.forwardReadiness, e2ePipelineTrace: report.e2ePipelineTrace, zonePersistenceEntry: report.zonePersistenceEntry, paperEntryActivation: report.paperEntryActivation, numericGuardHotfix: report.numericGuardHotfix, v951RealCandleDiscovery: report.v951RealCandleDiscovery, paperEntryVisibility: report.zonePersistenceEntry?.visibilityBridge || lastV950PaperEntryVisibilityView, candleStoreResolver: report.zonePersistenceEntry?.candleResolver || lastV950CandleStoreResolverView, universeCompletion: report.universeCompletion, proxyTruth: report.proxyTruth, candidateCountTruth: report.candidateCountTruth, qualityRisk: report.qualityRisk, tradeLifecycleTruth: report.tradeLifecycleTruth, reportTruthSync: report.reportTruthSync, mobileRuntimeTruth: report.mobileRuntimeTruth, auditTrailTruth: report.auditTrailTruth, releaseChecklist: report.releaseChecklist, finalHealthGate: report.finalHealthGate, v952CurrentHealthSync: report.v952CurrentHealthSync, v952CandidateBridge: report.v952CandidateBridge, v952RejectedReasonAudit: report.v952RejectedReasonAudit, v952CandidateQualityBuckets: report.v952CandidateQualityBuckets, v952ReportTruthSync: report.v952ReportTruthSync, completeHealthUniverseLifecycleTruth: report.completeHealthUniverseLifecycleTruth, v954EntryConstructionAudit: report.v954EntryConstructionAudit, stateAuthority: report.stateAuthority || v1000BuildView(), v10StateAuthority: report.v10StateAuthority || report.stateAuthority || v1000BuildView(), v10ZeroOverwriteProof: report.v10ZeroOverwriteProof || lastV10ZeroOverwriteProof, v1001TradeLedgerExportSync: report.v1001TradeLedgerExportSync, alpsTradeExport: report.alpsTradeExport, alpsTradeContinuityVault: report.alpsTradeContinuityVault, v1017FeatureMaterializer: report.v1017FeatureMaterializer || lastV1017FeatureMaterializerView, v1017cPaperEntryAuthorityBridge: report.v1017cPaperEntryAuthorityBridge || lastV1017cPaperEntryAuthorityBridgeView, v1012ServerCandleBootstrap: report.v1012ServerCandleBootstrap || lastV1012ServerCandleBootstrapView, chartTruth: report.chartTruth || lastChartView || null, v10115OperationalTruth: report.v10115OperationalTruth || lastV10115OperationalTruthView, v10115SymbolStatus: report.v10115SymbolStatus || lastV10115SymbolStatusView, v10115FeatureGateDiagnostics: report.v10115FeatureGateDiagnostics || lastV10115FeatureGateDiagnosticsView, v10115UnifiedLayerLog: report.v10115UnifiedLayerLog || lastV10115LayerLogView, v10115DeferredEntryQueue: report.v10115DeferredEntryQueue || lastV10115DeferredEntryQueueView, v10115ChartTruthSync: report.v10115ChartTruthSync, v10117LedgerConsistency: report.v10117LedgerConsistency || lastHealth?.v10117LedgerConsistency, v10138LivePriceSentinel: v10148SentinelView(), v10148SentinelRuntime: { ...v10148SentinelRuntime, ...v10148SentinelView() }, v10138TestnetExecutionBridge: lastV10138TestnetExecutionBridgeView, v10149PersistentEvidenceLedger:v10149EvidenceView(), v10149BootReplayGuard:lastV10149BootReplayGuardView, adaptiveEvidenceLearning:report.adaptiveEvidenceLearning || lastV10155LearningView || null, learningActions:report.learningActions || safeArray(lastV10155LearningView?.learningActions), v10149IntrabarTruthGuard:{ ambiguousDeferred:n(lastV1018LifecycleView?.intrabarAmbiguousDeferred,0), lookaheadBlocked:n(lastV1018LifecycleView?.intrabarLookaheadBlocked,0), proof:safeArray(lastV1018LifecycleView?.intrabarAmbiguityProof).slice(0,20) } }, null, 2)).catch(() => null);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   await fsp.writeFile(path.join(REPORT_DIR, `ALPS_Server_Report_${stamp}.json`), JSON.stringify(report, null, 2)).catch(() => null);
   return report;
