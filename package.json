@@ -1,11 +1,13 @@
 {
-  "name": "alps-server-runner-trade-export",
-  "version": "9.1.8-recovery-v1.2-trade-export",
-  "description": "ALPS Server Runner Recovery + QuantEdge trade export: exposes openTrades/closedTrades for live sync.",
+  "name": "alps-server-runner",
+  "version": "10.2.2",
+  "description": "ALPS paper-only supervised runtime with lightweight heartbeat and persisted operational truth authority.",
   "main": "runner.js",
   "scripts": {
     "start": "node runner.js",
-    "check": "node --check runner.js",
+    "check": "node --check runner.js && node --check src/config.js && node --check src/runtime-supervisor.js && node --check src/server-feature-engine.js && node --check src/v1022-runtime-authority.js",
+    "test": "node --test test/v1022-runtime-authority.test.js",
+    "check:all": "npm run check && npm test",
     "check:trade-export": "node --check runner.js && node --check alpsTradeExport.js"
   },
   "dependencies": {

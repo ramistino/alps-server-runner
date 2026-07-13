@@ -7,6 +7,12 @@ const { UnifiedOrchestrator } = require('./src/orchestrator');
 const { PublicServer } = require('./src/server');
 const { ServerFeatureEngine } = require('./src/server-feature-engine');
 const { RuntimeSupervisor } = require('./src/runtime-supervisor');
+const {
+  preparePersistentLayout,
+  installV1022RuntimeAuthority,
+  installV1022PublicSafety,
+  createSafeShutdown,
+} = require('./src/v1022-runtime-authority');
 const { summarizeError } = require('./src/utils');
 
 function log(...args) {
@@ -15,7 +21,9 @@ function log(...args) {
 
 async function main() {
   const config = loadConfig();
-  log(`[v10.2.1] starting supervised continuous runtime version=${config.version}`);
+  const layout = preparePersistentLayout(config);
+  log(`[v10.2.2] starting final runtime authority version=${config.version}`);
+  log(`[v10.2.2] persistent root=${layout.root}`);
 
   const adapter = new BrowserEngineAdapter(config, log);
   const featureEngine = new ServerFeatureEngine({ config, log });
@@ -27,6 +35,8 @@ async function main() {
     featureEngine,
     log,
   });
+  const { store } = installV1022RuntimeAuthority({ orchestrator, adapter, config, log });
+
   const supervisor = new RuntimeSupervisor({
     config,
     adapter,
@@ -41,24 +51,21 @@ async function main() {
     adapter,
     log,
   });
+  installV1022PublicSafety({ server, store, config });
 
-  let shuttingDown = false;
-  const shutdown = async signal => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    log(`[v10.2.1] shutdown requested signal=${signal}`);
-    supervisor.stop();
-    orchestrator.stop();
-    featureEngine.stop();
-    await server.stop().catch(error => log('[v10.2.1] server stop failed', summarizeError(error)));
-    await adapter.stop().catch(error => log('[v10.2.1] adapter stop failed', summarizeError(error)));
-    process.exit(0);
-  };
+  const shutdown = createSafeShutdown({
+    supervisor,
+    orchestrator,
+    featureEngine,
+    server,
+    adapter,
+    log,
+  });
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('uncaughtException', error => log('[v10.2.1] uncaughtException', summarizeError(error)));
-  process.on('unhandledRejection', error => log('[v10.2.1] unhandledRejection', summarizeError(error)));
+  process.once('SIGTERM', () => shutdown('SIGTERM', 0));
+  process.once('SIGINT', () => shutdown('SIGINT', 0));
+  process.once('uncaughtException', error => shutdown('uncaughtException', 1, error));
+  process.once('unhandledRejection', error => shutdown('unhandledRejection', 1, error));
 
   await adapter.start();
   await server.start();
@@ -66,21 +73,21 @@ async function main() {
   orchestrator.start();
   supervisor.start();
 
-  // Liveness is available immediately. Operational authority workers are independent:
-  // fast health cannot be blocked by heavy evidence or recovery commands.
+  // The public control plane is available immediately. The direct heartbeat and
+  // operational truth sidecar are independent, so slow evidence cannot block liveness.
   adapter.waitUntilReady()
     .then(() => orchestrator.bootstrap('initial-adapter-ready'))
     .then(state => log(
-      `[v10.2.1] initial state status=${state.status} ` +
+      `[v10.2.2] initial state status=${state.status} ` +
       `overall=${state.gates.overall.status} next=${state.gates.overall.nextRequiredAction}`
     ))
     .catch(error => log(
-      '[v10.2.1] initial adapter readiness failed; public control plane remains online',
+      '[v10.2.2] initial adapter readiness failed; public control plane remains online',
       summarizeError(error)
     ));
 }
 
 main().catch(error => {
-  console.error(new Date().toISOString(), '[v10.2.1] fatal startup error', summarizeError(error));
+  console.error(new Date().toISOString(), '[v10.2.2] fatal startup error', summarizeError(error));
   process.exitCode = 1;
 });
