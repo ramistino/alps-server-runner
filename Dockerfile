@@ -11,7 +11,9 @@ COPY src /app/src
 COPY public /app/public
 COPY legacy /app/legacy
 COPY recovery /app/recovery
+COPY test /app/test
 
+RUN npm run check:all
 ENV HOST=0.0.0.0
 ENV PORT=8787
 ENV ALPS_AUTO_START_WATCH=1
