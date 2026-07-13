@@ -165,14 +165,18 @@ test('public /runner/command is blocked before adapter proxying', async () => {
   assert.equal(JSON.parse(res.body).status, 'PUBLIC_COMMAND_PROXY_DISABLED');
 });
 
-test('healthy direct probe blocks restart despite operational degradation', async () => {
+test('recent fast heartbeat is reused and blocks duplicate supervisor probes', async () => {
   let restartCount = 0;
   let recoveryCount = 0;
+  let probeCount = 0;
   const now = new Date().toISOString();
   const adapter = {
     status:()=>({ running:true }),
-    probe:async()=>({ ok:true }),
+    probe:async()=>{ probeCount += 1; return { ok:true }; },
     restart:async()=>{ restartCount += 1; },
+    consecutiveProbeFailures:4,
+    lastProbeStatus:'FAILED_0',
+    lastReadyAt:null,
   };
   const orchestrator = {
     runtimeView:()=>({
@@ -198,13 +202,17 @@ test('healthy direct probe blocks restart despite operational degradation', asyn
   await supervisor.tick('test');
   assert.equal(restartCount, 0);
   assert.equal(recoveryCount, 1);
+  assert.equal(probeCount, 0);
+  assert.equal(adapter.consecutiveProbeFailures, 0);
+  assert.equal(adapter.lastProbeStatus, 'READY_REUSED_FAST_HEARTBEAT');
   assert.equal(supervisor.status().restartAuthority, 'PROCESS_EXIT_OR_REPEATED_DIRECT_VERSION_PROBE_FAILURES_ONLY');
 });
 
-test('three repeated direct probe failures allow one controlled restart', async () => {
+test('three repeated stale-heartbeat confirmation failures allow one controlled restart', async () => {
   let restartCount = 0;
   let afterRestartCount = 0;
   const now = new Date().toISOString();
+  const staleHeartbeatAt = new Date(Date.now() - 120_000).toISOString();
   const adapter = {
     status:()=>({ running:true }),
     probe:async()=>({ ok:false, status:0 }),
@@ -212,7 +220,7 @@ test('three repeated direct probe failures allow one controlled restart', async 
   };
   const orchestrator = {
     runtimeView:()=>({
-      fast:{ lastSuccessAt:now, inFlight:false },
+      fast:{ lastSuccessAt:staleHeartbeatAt, inFlight:false },
       operational:{ lastSuccessAt:now, consecutiveFailures:0 },
       heavy:{ inFlight:false },
     }),
