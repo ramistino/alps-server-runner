@@ -112,11 +112,36 @@ class RuntimeSupervisor {
       }
 
       const adapterRunningBeforeProbe = Boolean(this.adapter.status().running);
-      const probe = await this.adapter.probe(this.config.supervisorProbeTimeoutMs);
-      if (probe.ok) this.consecutiveProbeFailures = 0;
-      else this.consecutiveProbeFailures += 1;
-
       const staleHeartbeat = !Number.isFinite(fastAge) || fastAge >= this.config.fastStallSec;
+      const recentDirectHeartbeat = Boolean(adapterRunningBeforeProbe && !staleHeartbeat);
+
+      let probe;
+      if (recentDirectHeartbeat) {
+        /*
+         * fast.lastSuccessAt is direct evidence from the same private
+         * /runner/version endpoint. Reuse it instead of issuing a duplicate
+         * concurrent probe that can collide with /runner/live or recovery.
+         */
+        probe = {
+          ok:true,
+          status:200,
+          source:'RECENT_FAST_DIRECT_VERSION_HEARTBEAT',
+          reused:true,
+        };
+        this.consecutiveProbeFailures = 0;
+        this.adapter.consecutiveProbeFailures = 0;
+        this.adapter.lastProbeStatus = 'READY_REUSED_FAST_HEARTBEAT';
+        this.adapter.lastReadyAt = fast.lastSuccessAt;
+      } else {
+        /*
+         * Only perform an isolated confirmation probe when the normal
+         * heartbeat is genuinely stale or has never succeeded.
+         */
+        probe = await this.adapter.probe(this.config.supervisorProbeTimeoutMs);
+        if (probe.ok) this.consecutiveProbeFailures = 0;
+        else this.consecutiveProbeFailures += 1;
+      }
+
       if (staleHeartbeat) this.consecutiveHeartbeatStalls += 1;
       else this.consecutiveHeartbeatStalls = 0;
 
@@ -169,10 +194,15 @@ class RuntimeSupervisor {
         ? ageSec(this.lastRestartAt, Date.now())
         : Infinity;
       const restartAllowed = restartCooldownAge >= this.config.adapterRestartCooldownSec;
+      const repeatedIsolatedProbeFailures = Boolean(
+        staleHeartbeat &&
+        !probe.ok &&
+        this.consecutiveProbeFailures >= this.config.fastFailureRestartThreshold
+      );
       const restartRequired = Boolean(
         !adapterRunningBeforeProbe ||
         !this.adapter.status().running ||
-        this.consecutiveProbeFailures >= this.config.fastFailureRestartThreshold
+        repeatedIsolatedProbeFailures
       );
 
       if (restartRequired && restartAllowed) {
