@@ -1,9 +1,10 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 
-const VERSION = 'v10.2.1-supervised-continuous-runtime';
-const SCHEMA_PREFIX = 'alps.v10201';
+const VERSION = 'v10.2.2-final-runtime-authority';
+const SCHEMA_PREFIX = 'alps.v10202';
 
 function envNumber(name, fallback, min = -Infinity, max = Infinity) {
   const n = Number(process.env[name]);
@@ -11,11 +12,56 @@ function envNumber(name, fallback, min = -Infinity, max = Infinity) {
   return Math.min(max, Math.max(min, n));
 }
 
+function envPath(name, fallback) {
+  const value = String(process.env[name] || '').trim();
+  return path.resolve(value || fallback);
+}
+
+function detectPersistentRoot(rootDir) {
+  const explicit = String(process.env.ALPS_PERSISTENT_DIR || '').trim();
+  if (explicit) return path.resolve(explicit);
+  if (fs.existsSync('/var/data')) return '/var/data/alps';
+  const legacyDataDir = String(process.env.ALPS_DATA_DIR || '').trim();
+  if (legacyDataDir) return path.resolve(legacyDataDir);
+  return path.join(rootDir, 'data');
+}
+
 function loadConfig() {
   const publicPort = envNumber('PORT', envNumber('ALPS_RUNNER_PORT', 8787), 1, 65535);
-  const internalPort = envNumber('ALPS_BROWSER_ENGINE_PORT', publicPort === 65535 ? 65534 : publicPort + 1, 1, 65535);
-  if (internalPort === publicPort) throw new Error('ALPS_BROWSER_ENGINE_PORT must differ from PORT');
+  const internalPort = envNumber(
+    'ALPS_BROWSER_ENGINE_PORT',
+    publicPort === 65535 ? 65534 : publicPort + 1,
+    1,
+    65535
+  );
+  if (internalPort === publicPort) {
+    throw new Error('ALPS_BROWSER_ENGINE_PORT must differ from PORT');
+  }
+
   const rootDir = path.resolve(process.env.ALPS_V102_ROOT || path.join(__dirname, '..'));
+  const persistentRoot = detectPersistentRoot(rootDir);
+  const unifiedRootSelected = Boolean(
+    String(process.env.ALPS_PERSISTENT_DIR || '').trim() ||
+    fs.existsSync('/var/data')
+  );
+  const legacyDataDir = String(process.env.ALPS_DATA_DIR || '').trim();
+  const dataDir = envPath(
+    'ALPS_V102_DATA_DIR',
+    unifiedRootSelected ? path.join(persistentRoot, 'state') : (legacyDataDir || persistentRoot)
+  );
+  const reportDir = envPath(
+    'ALPS_V102_REPORT_DIR',
+    unifiedRootSelected ? path.join(persistentRoot, 'reports') : (String(process.env.ALPS_REPORT_DIR || '').trim() || path.join(persistentRoot, 'reports'))
+  );
+  const profileDir = envPath(
+    'ALPS_V102_PROFILE_DIR',
+    unifiedRootSelected ? path.join(persistentRoot, 'chromium-profile') : (String(process.env.ALPS_PROFILE_DIR || '').trim() || path.join(persistentRoot, 'chromium-profile'))
+  );
+  const ledgerDir = envPath(
+    'ALPS_V102_LEDGER_DIR',
+    unifiedRootSelected ? path.join(persistentRoot, 'ledger') : (String(process.env.ALPS_LEDGER_DIR || '').trim() || path.join(persistentRoot, 'ledger'))
+  );
+
   return {
     version:VERSION,
     schemaPrefix:SCHEMA_PREFIX,
@@ -28,7 +74,23 @@ function loadConfig() {
     rootDir,
     legacyRunnerPath:path.join(rootDir, 'legacy', 'browser-engine-runner-v10158.js'),
 
-    fastPollMs:envNumber('ALPS_V102_FAST_POLL_MS', 5_000, 2_000, 30_000),
+    persistentRoot,
+    dataDir,
+    reportDir,
+    profileDir,
+    ledgerDir,
+    operationalStateFile:path.join(dataDir, 'v10202-operational-truth.json'),
+    paperEntryProofFile:path.join(dataDir, 'v10202-paper-entry-proof.json'),
+    candidateCohortFile:path.join(dataDir, 'v102-candidate-cohort-authority.json'),
+    candidateEpochFile:path.join(dataDir, 'v10202-candidate-epoch.json'),
+
+    fastPollMs:envNumber('ALPS_V102_HEARTBEAT_POLL_MS', 5_000, 2_000, 30_000),
+    heartbeatTimeoutMs:envNumber('ALPS_V102_HEARTBEAT_TIMEOUT_MS', 4_000, 1_000, 15_000),
+    operationalPollMs:envNumber('ALPS_V102_OPERATIONAL_POLL_MS', 10_000, 5_000, 120_000),
+    operationalLiveTimeoutMs:envNumber('ALPS_V102_OPERATIONAL_LIVE_TIMEOUT_MS', 15_000, 5_000, 60_000),
+    operationalFreshMaxSec:envNumber('ALPS_V102_OPERATIONAL_FRESH_SEC', 90, 30, 900),
+    operationalPersistIntervalMs:envNumber('ALPS_V102_OPERATIONAL_PERSIST_MS', 60_000, 10_000, 600_000),
+
     heavyPollMs:envNumber('ALPS_V102_HEAVY_POLL_MS', 60_000, 15_000, 300_000),
     recoveryPollMs:envNumber('ALPS_V102_RECOVERY_POLL_MS', 30_000, 10_000, 300_000),
     supervisorPollMs:envNumber('ALPS_V102_SUPERVISOR_POLL_MS', 10_000, 5_000, 60_000),
@@ -65,10 +127,11 @@ function loadConfig() {
     candidateGapConfirmObservations:envNumber('ALPS_V102_CANDIDATE_GAP_CONFIRM_OBSERVATIONS', 4, 2, 30),
     candidateGapConfirmSec:envNumber('ALPS_V102_CANDIDATE_GAP_CONFIRM_SEC', 20, 5, 600),
 
+    candleCloseBufferMs:envNumber('ALPS_V102_CANDLE_CLOSE_BUFFER_MS', 5_000, 1_000, 30_000),
     expectedPairFrames:envNumber('ALPS_REQUIRED_PAIR_FRAMES', 35, 1, 1000),
-    liveSummaryMaxBytes:envNumber('ALPS_V102_LIVE_MAX_BYTES', 120_000, 20_000, 1_000_000),
+    liveSummaryMaxBytes:envNumber('ALPS_V102_LIVE_MAX_BYTES', 160_000, 20_000, 1_000_000),
     childStartTimeoutMs:envNumber('ALPS_V102_CHILD_START_TIMEOUT_MS', 120_000, 10_000, 300_000),
   };
 }
 
-module.exports = { VERSION, SCHEMA_PREFIX, loadConfig };
+module.exports = { VERSION, SCHEMA_PREFIX, loadConfig, detectPersistentRoot };
