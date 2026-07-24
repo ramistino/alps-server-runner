@@ -1,6 +1,6 @@
 FROM node:22.16.0-bookworm-slim
 WORKDIR /app
-COPY package.json runner.js v1202-bundle.js evidence-scoring-v1206.js test-v12043.js test-v12044.js test-v12044-1.js test-v12044-2.js test-v12044-persistence-ordering-race.js test-v12051.js test-v1206.js /app/
+COPY package.json runner.js v1207-main.js policy-shadow-v12052.js v1202-bundle.js evidence-scoring-v1206.js test-v12043.js test-v12044.js test-v12044-1.js test-v12044-2.js test-v12044-persistence-ordering-race.js test-v12051.js test-v1206.js test-v1207.js /app/
 RUN node --version && npm --version && npm run validate
 ENV HOST=0.0.0.0
 ENV PORT=8787
@@ -22,7 +22,6 @@ ENV ALPS_V12_CRYPTO_MAX_CANDLES_PER_FRAME=60000
 ENV ALPS_V12_CONTINUITY_MAX_GAP_RANGES=25
 ENV ALPS_V12_EVIDENCE_MAX_FILES=250
 ENV ALPS_V12_FORWARD_RECENT_CLOSED_LIMIT=200
+ENV ALPS_V12_EVIDENCE_SCORING_ENABLED=1
 EXPOSE 8787
 CMD ["npm", "start"]
-
-ENV ALPS_V12_EVIDENCE_SCORING_ENABLED=1

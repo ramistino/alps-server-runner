@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-const { main } = require('./v1202-bundle');
+const { main } = require('./v1207-main');
 main().catch(error => {
-  console.error(new Date().toISOString(), '[v12.0.6] fatal startup error', error && error.stack || error);
+  console.error(new Date().toISOString(), '[v12.0.7] fatal startup error', error && error.stack || error);
   process.exitCode = 1;
 });

@@ -1,12 +1,12 @@
 {
   "name": "alps-generation2-multi-market-command-center",
-  "version": "12.0.6",
-  "description": "ALPS Generation 2 paper-only multi-market research core with certified forward-time integrity and deterministic cluster-aware evidence statistical scoring.",
+  "version": "12.0.7",
+  "description": "ALPS Generation 2 paper-only multi-market research core with certified v12.0.5.1 control, deterministic v12.0.6 evidence scoring, and a pre-registered six-arm entry/exit policy shadow experiment.",
   "main": "runner.js",
   "scripts": {
     "start": "node runner.js",
-    "check": "node --check runner.js && node --check v1202-bundle.js && node --check evidence-scoring-v1206.js && node --check test-v12043.js && node --check test-v12044.js && node --check test-v12044-1.js && node --check test-v12044-2.js && node --check test-v12044-persistence-ordering-race.js && node --check test-v12051.js && node --check test-v1206.js",
-    "test": "node test-v12043.js && node test-v12044.js && node test-v12044-1.js && node test-v12044-2.js && node test-v12044-persistence-ordering-race.js && node test-v12051.js && node test-v1206.js",
+    "check": "node --check runner.js && node --check v1207-main.js && node --check policy-shadow-v12052.js && node --check v1202-bundle.js && node --check evidence-scoring-v1206.js && node --check test-v12043.js && node --check test-v12044.js && node --check test-v12044-1.js && node --check test-v12044-2.js && node --check test-v12044-persistence-ordering-race.js && node --check test-v12051.js && node --check test-v1206.js && node --check test-v1207.js",
+    "test": "node test-v12043.js && node test-v12044.js && node test-v12044-1.js && node test-v12044-2.js && node test-v12044-persistence-ordering-race.js && node test-v12051.js && node test-v1206.js && node test-v1207.js",
     "test:memory": "node --max-old-space-size=256 test-v12044-2.js",
     "validate": "npm run check && npm test && npm run test:memory",
     "check:all": "npm run validate",
