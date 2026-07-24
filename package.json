@@ -1,19 +1,19 @@
 {
-  "name": "alps-server-runner",
-  "version": "10.2.2",
-  "description": "ALPS paper-only supervised runtime with lightweight heartbeat and persisted operational truth authority.",
+  "name": "alps-generation2-multi-market-command-center",
+  "version": "12.0.6",
+  "description": "ALPS Generation 2 paper-only multi-market research core with certified forward-time integrity and deterministic cluster-aware evidence statistical scoring.",
   "main": "runner.js",
   "scripts": {
     "start": "node runner.js",
-    "check": "node --check runner.js && node --check src/config.js && node --check src/runtime-supervisor.js && node --check src/server-feature-engine.js && node --check src/v1022-runtime-authority.js",
-    "test": "node --test test/v1022-runtime-authority.test.js",
-    "check:all": "npm run check && npm test",
-    "check:trade-export": "node --check runner.js && node --check alpsTradeExport.js"
-  },
-  "dependencies": {
-    "playwright": "1.61.1"
+    "check": "node --check runner.js && node --check v1202-bundle.js && node --check evidence-scoring-v1206.js && node --check test-v12043.js && node --check test-v12044.js && node --check test-v12044-1.js && node --check test-v12044-2.js && node --check test-v12044-persistence-ordering-race.js && node --check test-v12051.js && node --check test-v1206.js",
+    "test": "node test-v12043.js && node test-v12044.js && node test-v12044-1.js && node test-v12044-2.js && node test-v12044-persistence-ordering-race.js && node test-v12051.js && node test-v1206.js",
+    "test:memory": "node --max-old-space-size=256 test-v12044-2.js",
+    "validate": "npm run check && npm test && npm run test:memory",
+    "check:all": "npm run validate",
+    "test:stress:256": "node --max-old-space-size=256 stress-v12051-full-universe.js",
+    "test:stress:220": "node --max-old-space-size=220 stress-v12051-full-universe.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }
