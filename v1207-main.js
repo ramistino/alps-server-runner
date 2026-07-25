@@ -12,7 +12,8 @@ const {
   SERVICE_VERSION,
   SHADOW_VERSION,
   CONTROL_VERSION,
-} = require('./policy-shadow-v12052');
+  INTEGRITY_PATCH_VERSION,
+} = require('./policy-shadow-integrity-v12071');
 
 function iso(value = Date.now()) { return new Date(value).toISOString(); }
 function sendJson(res, status, body) {
@@ -54,6 +55,7 @@ class PolicyShadowServer extends MultiMarketServer {
       version:SERVICE_VERSION,
       candidateEngineVersion:CONTROL_VERSION,
       shadowPolicyEngineVersion:SHADOW_VERSION,
+      integrityPatchVersion:INTEGRITY_PATCH_VERSION,
       status:view.status,
       generatedAt:view.generatedAt,
       gen2Enabled:true,
@@ -178,7 +180,7 @@ async function main() {
   const startupAt = iso();
   const log = (...args) => console.log(new Date().toISOString(), ...args);
   log(`[v12.0.7] starting ${SERVICE_VERSION}`);
-  log(`[v12.0.7] certified control=${CONTROL_VERSION} shadow=${SHADOW_VERSION}`);
+  log(`[v12.0.7.1] certified control=${CONTROL_VERSION} shadow=${SHADOW_VERSION} integrity=${INTEGRITY_PATCH_VERSION}`);
   log(`[v12.0.7] mode=PRE_REGISTERED_POLICY_SHADOW paperOnly=true execution=false promotion=false`);
   log(`[v12.0.7] roots v12=${config.dataRoot} v11=${config.legacyRoot} (read-only)`);
 

@@ -2,6 +2,6 @@
 'use strict';
 const { main } = require('./v1207-main');
 main().catch(error => {
-  console.error(new Date().toISOString(), '[v12.0.7] fatal startup error', error && error.stack || error);
+  console.error(new Date().toISOString(), '[v12.0.7.1] fatal startup error', error && error.stack || error);
   process.exitCode = 1;
 });
