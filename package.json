@@ -1,7 +1,7 @@
 {
   "name": "alps-generation2-multi-market-command-center",
-  "version": "12.0.7-3.1",
-  "description": "ALPS Generation 2 paper-only multi-market research core with certified v12.0.5.1 control, deterministic v12.0.6 evidence scoring, frozen v12.0.5.2 policy shadow, v12.0.7.2 witness authority, and v12.0.7.3 source-divergence taxonomy plus bounded reporting and memory integrity, with v12.0.7.3.1 canonical null materialization for optional engine state fields.",
+  "version": "12.0.7-3.2",
+  "description": "ALPS Generation 2 paper-only multi-market research core with certified v12.0.5.1 control, deterministic v12.0.6 evidence scoring, frozen v12.0.5.2 policy shadow, v12.0.7.3 source-divergence taxonomy, v12.0.7.3.1 canonical null materialization, and v12.0.7.3.2 cooperative event-loop yielding for Render health-check continuity.",
   "main": "runner.js",
   "scripts": {
     "start": "node runner.js",

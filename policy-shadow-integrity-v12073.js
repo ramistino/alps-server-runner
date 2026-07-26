@@ -16,7 +16,7 @@ const {
   ARM_DEFS,
 } = prior;
 
-const INTEGRITY_PATCH_VERSION = 'v12.0.7.3.1-canonical-null-materialization-hotfix';
+const INTEGRITY_PATCH_VERSION = 'v12.0.7.3.2-cooperative-event-loop-yield-hotfix';
 const PREVIOUS_INTEGRITY_PATCH_VERSION = prior.INTEGRITY_PATCH_VERSION;
 const CLASSIFICATION_ALGORITHM_VERSION = 'v12.0.7.3';
 const TAXONOMY_SCHEMA = 'alps.gen2.sourceDivergenceTaxonomy.v12073';
@@ -28,6 +28,8 @@ const QUARANTINE_WATCH_MIN_SCOPE_N = 30;
 const A2_LOW_MAGNITUDE_ATR_THRESHOLD = 0.05;
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
+const DEFAULT_COOPERATIVE_YIELD_CLUSTER_BATCH = 2;
+const DEFAULT_COOPERATIVE_YIELD_MAX_BLOCK_MS = 20;
 
 const TAXONOMY_MANIFEST_BODY = Object.freeze({
   schema:TAXONOMY_SCHEMA,
@@ -120,6 +122,14 @@ function boolParam(params, key, fallback = false) {
   if (value == null || value === '') return fallback;
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 }
+function shouldCooperativeYield({ processedSinceYield, elapsedMs, batchSize, maxBlockMs }) {
+  const processed = Math.max(0, Number(processedSinceYield) || 0);
+  const elapsed = Math.max(0, Number(elapsedMs) || 0);
+  const batch = clampInt(batchSize, 1, 1000, DEFAULT_COOPERATIVE_YIELD_CLUSTER_BATCH);
+  const maximum = clampInt(maxBlockMs, 1, 5000, DEFAULT_COOPERATIVE_YIELD_MAX_BLOCK_MS);
+  return processed >= batch || elapsed >= maximum;
+}
+function eventLoopYield() { return new Promise(resolve => setImmediate(resolve)); }
 
 
 function normalizeCandleRow(row, intervalMs) {
@@ -667,6 +677,48 @@ class PolicyShadowEngine extends prior.PolicyShadowEngine {
       policyStateUndefinedMaterializations:0,
       policyStateUndefinedPaths:[],
     };
+    this.cooperativeYield = {
+      enabled:true,
+      strategy:'SET_IMMEDIATE_COUNT_OR_WALL_CLOCK_BUDGET',
+      clusterBatchSize:clampInt(process.env.ALPS_POLICY_SHADOW_YIELD_CLUSTER_BATCH, 1, 50, DEFAULT_COOPERATIVE_YIELD_CLUSTER_BATCH),
+      maxBlockMs:clampInt(process.env.ALPS_POLICY_SHADOW_YIELD_MAX_BLOCK_MS, 5, 250, DEFAULT_COOPERATIVE_YIELD_MAX_BLOCK_MS),
+      inProgress:false,
+      phase:'IDLE',
+      runReason:null,
+      runStartedAt:null,
+      runCompletedAt:null,
+      frameKey:null,
+      revisionIndex:null,
+      revisionCount:null,
+      clusterIndex:null,
+      clusterCount:null,
+      processedClusterEvaluations:0,
+      totalClusterEvaluations:0,
+      yieldCount:0,
+      lastYieldAt:null,
+      lastYieldReason:null,
+      lastProgressAt:null,
+      maxYieldLatencyMs:0,
+      lastCompletedFrameKey:null,
+    };
+  }
+
+  async yieldForHealth(reason, progress = {}) {
+    const requestedAt = Date.now();
+    Object.assign(this.cooperativeYield, progress, {
+      enabled:true,
+      lastYieldReason:String(reason || 'COOPERATIVE_YIELD'),
+      lastProgressAt:iso(this.now()),
+    });
+    await eventLoopYield();
+    const completedAt = Date.now();
+    this.cooperativeYield.yieldCount++;
+    this.cooperativeYield.lastYieldAt = iso(this.now());
+    this.cooperativeYield.lastProgressAt = this.cooperativeYield.lastYieldAt;
+    this.cooperativeYield.maxYieldLatencyMs = Math.max(
+      Number(this.cooperativeYield.maxYieldLatencyMs || 0),
+      completedAt - requestedAt,
+    );
   }
 
   async init() {
@@ -770,67 +822,163 @@ class PolicyShadowEngine extends prior.PolicyShadowEngine {
   async processFrameClusters(frameClusters, source, controlStates, controlCutoffMs, witnessEvents) {
     const outcomes = await super.processFrameClusters(frameClusters, source, controlStates, controlCutoffMs, witnessEvents);
     const frameKey = `${frameClusters[0].symbolKey}|${frameClusters[0].timeframe}`;
+    await this.yieldForHealth('FRAME_BASE_PROCESS_COMPLETE', {
+      phase:'FRAME_BASE_PROCESS_COMPLETE',
+      frameKey,
+      clusterCount:frameClusters.length,
+    });
     const revisions = this.witnessRevisionRecordsByFrame.get(frameKey) || [];
-    if (!revisions.length) return outcomes;
+    if (!revisions.length) {
+      this.cooperativeYield.lastCompletedFrameKey = frameKey;
+      return outcomes;
+    }
 
     const rowsRaw = await this.storage.readCrypto(this.config.crypto.cleanDir, frameClusters[0].symbolKey, frameClusters[0].timeframe);
     const authoritativeCandles = this.frameCandles(frameClusters[0].symbolKey, frameClusters[0].timeframe, frameClusters[0].intervalMs, rowsRaw, controlCutoffMs);
     const outcomeById = new Map(outcomes.map(outcome => [outcome.baseEvidenceClusterId, outcome]));
+    const totalClusterEvaluations = revisions.length * frameClusters.length;
+    let processedClusterEvaluations = 0;
+    let processedSinceYield = 0;
+    let lastYieldAt = Date.now();
 
-    for (const revision of revisions) {
-      const revisedCandles = authoritativeCandles.map(row => row.t === revision.row.t ? { ...revision.row } : { ...row });
-      const affectedClusterIds = [];
-      const scopeKeys = new Set(['GLOBAL|GLOBAL']);
-      let decisionChanged = false;
-      for (const cluster of frameClusters) {
-        const outcome = outcomeById.get(cluster.baseEvidenceClusterId);
-        if (!outcome || outcome.sourceStatus !== 'PASS' || !outcome.arms) continue;
-        const revisedArms = this.simulateClusterArmsForCandles(cluster, revisedCandles, controlStates, outcome.candleWitnessSegmentHash || stableHash({ frameKey, revision:revision.revisedRowHash }));
-        if (!revisedArms) {
-          decisionChanged = true;
-          affectedClusterIds.push(cluster.baseEvidenceClusterId);
-          for (const key of scopeKeysForOutcome(this, outcome)) scopeKeys.add(key);
-          outcome.sourceStatus = 'CLASS_C_DECISION_CHANGING_EXCLUSION_VERIFIED';
-          outcome.sourceDivergence = unique([...(outcome.sourceDivergence || []), 'WITNESS_REVISION_RECOMPUTE_CHANGED_OR_UNAVAILABLE']);
-          continue;
-        }
-        const armIds = unique([...Object.keys(outcome.arms), ...Object.keys(revisedArms)]);
-        const equal = armIds.every(armId => {
-          if (!outcome.arms[armId] || !revisedArms[armId]) return false;
-          const authoritativeVector = canonicalPolicyStateVectorFromEngineState(outcome.arms[armId]);
-          const revisedVector = canonicalPolicyStateVectorFromEngineState(revisedArms[armId]);
-          const undefinedPaths = [...authoritativeVector.undefinedMaterializationPaths, ...revisedVector.undefinedMaterializationPaths];
-          this.reportingMetrics.policyStateUndefinedMaterializations += undefinedPaths.length;
-          if (undefinedPaths.length) {
-            this.reportingMetrics.policyStateUndefinedPaths = unique([
-              ...this.reportingMetrics.policyStateUndefinedPaths,
-              ...undefinedPaths,
-            ]).slice(0, 64);
-          }
-          return authoritativeVector.canonicalPolicyStateHash === revisedVector.canonicalPolicyStateHash;
+    this.cooperativeYield.inProgress = true;
+    this.cooperativeYield.phase = 'WITNESS_REVISION_RECOMPUTE';
+    this.cooperativeYield.frameKey = frameKey;
+    this.cooperativeYield.revisionCount = revisions.length;
+    this.cooperativeYield.clusterCount = frameClusters.length;
+    this.cooperativeYield.processedClusterEvaluations = 0;
+    this.cooperativeYield.totalClusterEvaluations = totalClusterEvaluations;
+    this.cooperativeYield.lastProgressAt = iso(this.now());
+
+    try {
+      for (let revisionIndex = 0; revisionIndex < revisions.length; revisionIndex++) {
+        const revision = revisions[revisionIndex];
+        await this.yieldForHealth('WITNESS_REVISION_BEGIN', {
+          phase:'WITNESS_REVISION_RECOMPUTE',
+          frameKey,
+          revisionIndex:revisionIndex + 1,
+          revisionCount:revisions.length,
+          clusterIndex:0,
+          clusterCount:frameClusters.length,
+          processedClusterEvaluations,
+          totalClusterEvaluations,
         });
-        if (!equal) {
-          decisionChanged = true;
-          affectedClusterIds.push(cluster.baseEvidenceClusterId);
-          for (const key of scopeKeysForOutcome(this, outcome)) scopeKeys.add(key);
-          outcome.sourceStatus = 'CLASS_C_DECISION_CHANGING_EXCLUSION_VERIFIED';
-          outcome.sourceDivergence = unique([...(outcome.sourceDivergence || []), 'WITNESS_REVISION_DECISION_CHANGING']);
+        lastYieldAt = Date.now();
+        processedSinceYield = 0;
+
+        const revisedCandles = authoritativeCandles.map(row => row.t === revision.row.t ? { ...revision.row } : { ...row });
+        const affectedClusterIds = [];
+        const scopeKeys = new Set(['GLOBAL|GLOBAL']);
+        let decisionChanged = false;
+
+        for (let clusterIndex = 0; clusterIndex < frameClusters.length; clusterIndex++) {
+          if (processedSinceYield > 0 && shouldCooperativeYield({
+            processedSinceYield,
+            elapsedMs:Date.now() - lastYieldAt,
+            batchSize:this.cooperativeYield.clusterBatchSize,
+            maxBlockMs:this.cooperativeYield.maxBlockMs,
+          })) {
+            await this.yieldForHealth('WITNESS_REVISION_CLUSTER_BATCH', {
+              phase:'WITNESS_REVISION_RECOMPUTE',
+              frameKey,
+              revisionIndex:revisionIndex + 1,
+              revisionCount:revisions.length,
+              clusterIndex:clusterIndex + 1,
+              clusterCount:frameClusters.length,
+              processedClusterEvaluations,
+              totalClusterEvaluations,
+            });
+            processedSinceYield = 0;
+            lastYieldAt = Date.now();
+          }
+
+          const cluster = frameClusters[clusterIndex];
+          try {
+            const outcome = outcomeById.get(cluster.baseEvidenceClusterId);
+            if (!outcome || outcome.sourceStatus !== 'PASS' || !outcome.arms) continue;
+            const revisedArms = this.simulateClusterArmsForCandles(cluster, revisedCandles, controlStates, outcome.candleWitnessSegmentHash || stableHash({ frameKey, revision:revision.revisedRowHash }));
+            if (!revisedArms) {
+              decisionChanged = true;
+              affectedClusterIds.push(cluster.baseEvidenceClusterId);
+              for (const key of scopeKeysForOutcome(this, outcome)) scopeKeys.add(key);
+              outcome.sourceStatus = 'CLASS_C_DECISION_CHANGING_EXCLUSION_VERIFIED';
+              outcome.sourceDivergence = unique([...(outcome.sourceDivergence || []), 'WITNESS_REVISION_RECOMPUTE_CHANGED_OR_UNAVAILABLE']);
+              continue;
+            }
+            const armIds = unique([...Object.keys(outcome.arms), ...Object.keys(revisedArms)]);
+            const equal = armIds.every(armId => {
+              if (!outcome.arms[armId] || !revisedArms[armId]) return false;
+              const authoritativeVector = canonicalPolicyStateVectorFromEngineState(outcome.arms[armId]);
+              const revisedVector = canonicalPolicyStateVectorFromEngineState(revisedArms[armId]);
+              const undefinedPaths = [...authoritativeVector.undefinedMaterializationPaths, ...revisedVector.undefinedMaterializationPaths];
+              this.reportingMetrics.policyStateUndefinedMaterializations += undefinedPaths.length;
+              if (undefinedPaths.length) {
+                this.reportingMetrics.policyStateUndefinedPaths = unique([
+                  ...this.reportingMetrics.policyStateUndefinedPaths,
+                  ...undefinedPaths,
+                ]).slice(0, 64);
+              }
+              return authoritativeVector.canonicalPolicyStateHash === revisedVector.canonicalPolicyStateHash;
+            });
+            if (!equal) {
+              decisionChanged = true;
+              affectedClusterIds.push(cluster.baseEvidenceClusterId);
+              for (const key of scopeKeysForOutcome(this, outcome)) scopeKeys.add(key);
+              outcome.sourceStatus = 'CLASS_C_DECISION_CHANGING_EXCLUSION_VERIFIED';
+              outcome.sourceDivergence = unique([...(outcome.sourceDivergence || []), 'WITNESS_REVISION_DECISION_CHANGING']);
+            }
+          } finally {
+            processedClusterEvaluations++;
+            processedSinceYield++;
+            this.cooperativeYield.clusterIndex = clusterIndex + 1;
+            this.cooperativeYield.processedClusterEvaluations = processedClusterEvaluations;
+            this.cooperativeYield.lastProgressAt = iso(this.now());
+          }
         }
+
+        const terminalClass = decisionChanged ? 'C_DECISION_CHANGING' : 'C_NO_CHANGE';
+        const status = decisionChanged ? 'EXCLUSION_VERIFIED' : 'INFORMATIONAL';
+        this.currentWitnessClassifications.push(witnessClassificationEvent({
+          revision,
+          terminalClass,
+          status,
+          affectedClusterIds,
+          scopeKeys:[...scopeKeys],
+          nowAt:iso(this.now()),
+          decisionChanged,
+        }));
+        revisedCandles.length = 0;
+        await this.yieldForHealth('WITNESS_REVISION_COMPLETE', {
+          phase:'WITNESS_REVISION_RECOMPUTE',
+          frameKey,
+          revisionIndex:revisionIndex + 1,
+          revisionCount:revisions.length,
+          clusterIndex:frameClusters.length,
+          clusterCount:frameClusters.length,
+          processedClusterEvaluations,
+          totalClusterEvaluations,
+        });
+        processedSinceYield = 0;
+        lastYieldAt = Date.now();
       }
-      const terminalClass = decisionChanged ? 'C_DECISION_CHANGING' : 'C_NO_CHANGE';
-      const status = decisionChanged ? 'EXCLUSION_VERIFIED' : 'INFORMATIONAL';
-      this.currentWitnessClassifications.push(witnessClassificationEvent({
-        revision,
-        terminalClass,
-        status,
-        affectedClusterIds,
-        scopeKeys:[...scopeKeys],
-        nowAt:iso(this.now()),
-        decisionChanged,
-      }));
+    } finally {
+      rowsRaw.length = 0;
+      authoritativeCandles.length = 0;
+      this.cooperativeYield.inProgress = false;
+      this.cooperativeYield.phase = 'FRAME_COMPLETE';
+      this.cooperativeYield.lastCompletedFrameKey = frameKey;
+      this.cooperativeYield.lastProgressAt = iso(this.now());
+      await this.yieldForHealth('WITNESS_FRAME_RECOMPUTE_COMPLETE', {
+        phase:'FRAME_COMPLETE',
+        frameKey,
+        revisionIndex:revisions.length,
+        revisionCount:revisions.length,
+        clusterIndex:frameClusters.length,
+        clusterCount:frameClusters.length,
+        processedClusterEvaluations,
+        totalClusterEvaluations,
+      });
     }
-    rowsRaw.length = 0;
-    authoritativeCandles.length = 0;
     return outcomes;
   }
 
@@ -953,22 +1101,37 @@ class PolicyShadowEngine extends prior.PolicyShadowEngine {
     }
     this.memoryGuards.memoryGuardState = 'READY';
     this.currentWitnessClassifications = [];
-    const result = await super.run(reason);
-    if (this.state.latestSnapshot && Array.isArray(this.state.latestSnapshot.armScores)) this.latestFullSnapshot = this.state.latestSnapshot;
-    await this.flushClassificationEvents();
-    this.state.integrityPatchVersion = INTEGRITY_PATCH_VERSION;
-    this.state.taxonomyHash = TAXONOMY_HASH;
-    this.state.classificationAlgorithmVersion = CLASSIFICATION_ALGORITHM_VERSION;
-    this.state.sourceDivergenceTaxonomy = this.latestTaxonomySummary ? {
-      sourceDivergenceCountHistoricalTotal:this.latestTaxonomySummary.sourceDivergenceCountHistoricalTotal,
-      historicalReplayVarianceDiagnosticOnlyCount:this.latestTaxonomySummary.historicalReplayVarianceDiagnosticOnlyCount,
-      economicSourceDivergenceCount:this.latestTaxonomySummary.economicSourceDivergenceCount,
-      unresolvedEconomicDivergenceCount:this.latestTaxonomySummary.unresolvedEconomicDivergenceCount,
-      permanentlyExcludedClusterCount:this.latestTaxonomySummary.permanentlyExcludedClusterCount,
-      temporarilyQuarantinedClusterCount:this.latestTaxonomySummary.temporarilyQuarantinedClusterCount,
-    } : null;
-    await this.persistState();
-    return this.view();
+    this.cooperativeYield.runReason = String(reason || 'scheduled');
+    this.cooperativeYield.runStartedAt = iso(this.now());
+    this.cooperativeYield.runCompletedAt = null;
+    this.cooperativeYield.phase = 'POLICY_SHADOW_RUN_START';
+    this.cooperativeYield.lastProgressAt = this.cooperativeYield.runStartedAt;
+    await this.yieldForHealth('POLICY_SHADOW_RUN_START', { phase:'POLICY_SHADOW_RUN_START' });
+    try {
+      const result = await super.run(reason);
+      await this.yieldForHealth('POLICY_SHADOW_BASE_RUN_COMPLETE', { phase:'POLICY_SHADOW_BASE_RUN_COMPLETE' });
+      if (this.state.latestSnapshot && Array.isArray(this.state.latestSnapshot.armScores)) this.latestFullSnapshot = this.state.latestSnapshot;
+      await this.flushClassificationEvents();
+      this.state.integrityPatchVersion = INTEGRITY_PATCH_VERSION;
+      this.state.taxonomyHash = TAXONOMY_HASH;
+      this.state.classificationAlgorithmVersion = CLASSIFICATION_ALGORITHM_VERSION;
+      this.state.sourceDivergenceTaxonomy = this.latestTaxonomySummary ? {
+        sourceDivergenceCountHistoricalTotal:this.latestTaxonomySummary.sourceDivergenceCountHistoricalTotal,
+        historicalReplayVarianceDiagnosticOnlyCount:this.latestTaxonomySummary.historicalReplayVarianceDiagnosticOnlyCount,
+        economicSourceDivergenceCount:this.latestTaxonomySummary.economicSourceDivergenceCount,
+        unresolvedEconomicDivergenceCount:this.latestTaxonomySummary.unresolvedEconomicDivergenceCount,
+        permanentlyExcludedClusterCount:this.latestTaxonomySummary.permanentlyExcludedClusterCount,
+        temporarilyQuarantinedClusterCount:this.latestTaxonomySummary.temporarilyQuarantinedClusterCount,
+      } : null;
+      await this.persistState();
+      return this.view();
+    } finally {
+      this.cooperativeYield.inProgress = false;
+      this.cooperativeYield.phase = 'IDLE';
+      this.cooperativeYield.runCompletedAt = iso(this.now());
+      this.cooperativeYield.lastProgressAt = this.cooperativeYield.runCompletedAt;
+      await this.yieldForHealth('POLICY_SHADOW_RUN_RELEASED', { phase:'IDLE' });
+    }
   }
 
   snapshotForViews() {
@@ -1046,6 +1209,7 @@ class PolicyShadowEngine extends prior.PolicyShadowEngine {
       temporarilyQuarantinedClusterCount:Number(taxonomy.temporarilyQuarantinedClusterCount || 0),
       memoryGuards:{ ...this.memoryGuards },
       reportingMetrics:{ ...this.reportingMetrics },
+      cooperativeYield:{ ...this.cooperativeYield },
       policyStateCanonicalization:{
         schemaVersion:POLICY_STATE_SCHEMA_VERSION,
         source:'FULL_POLICY_ARM_STATE_OBJECT_WITH_FROZEN_METADATA_EXCLUSIONS',
@@ -1089,6 +1253,10 @@ module.exports = {
   POLICY_STATE_SCHEMA_VERSION,
   QUARANTINE_WATCH_THRESHOLD,
   QUARANTINE_WATCH_MIN_SCOPE_N,
+  DEFAULT_COOPERATIVE_YIELD_CLUSTER_BATCH,
+  DEFAULT_COOPERATIVE_YIELD_MAX_BLOCK_MS,
+  shouldCooperativeYield,
+  eventLoopYield,
   materializePolicyState,
   canonicalPolicyStateVector,
   canonicalPolicyStateVectorFromEngineState,

@@ -6,6 +6,10 @@ const {
   TAXONOMY_HASH,
   POLICY_STATE_SCHEMA_VERSION,
   QUARANTINE_WATCH_THRESHOLD,
+  DEFAULT_COOPERATIVE_YIELD_CLUSTER_BATCH,
+  DEFAULT_COOPERATIVE_YIELD_MAX_BLOCK_MS,
+  shouldCooperativeYield,
+  eventLoopYield,
   materializePolicyState,
   canonicalPolicyStateVector,
   canonicalPolicyStateVectorFromEngineState,
@@ -180,6 +184,15 @@ function arm({ entered = false, status = 'PENDING', hold = 0, resultR = null } =
   assert.strictEqual(rows[0].timeStopExitCountDifference, 1);
 })();
 
+
+(function cooperativeYieldDecisionTests() {
+  assert.strictEqual(DEFAULT_COOPERATIVE_YIELD_CLUSTER_BATCH, 2);
+  assert.strictEqual(DEFAULT_COOPERATIVE_YIELD_MAX_BLOCK_MS, 20);
+  assert.strictEqual(shouldCooperativeYield({ processedSinceYield:2, elapsedMs:1, batchSize:2, maxBlockMs:20 }), true);
+  assert.strictEqual(shouldCooperativeYield({ processedSinceYield:1, elapsedMs:20, batchSize:2, maxBlockMs:20 }), true);
+  assert.strictEqual(shouldCooperativeYield({ processedSinceYield:1, elapsedMs:19, batchSize:2, maxBlockMs:20 }), false);
+})();
+
 (function paginationTests() {
   const rows = Array.from({ length:125 }, (_, index) => ({ id:index + 1 }));
   const result = paginateRows(rows, { page:'2', pageSize:'50' });
@@ -196,4 +209,13 @@ assert.strictEqual(typeof TAXONOMY_HASH, 'string');
 assert.strictEqual(TAXONOMY_HASH.length, 64);
 assert.strictEqual(QUARANTINE_WATCH_THRESHOLD, 0.20);
 
-console.log('v12.0.7.3 taxonomy/reporting/memory integrity tests passed');
+(async function cooperativeYieldRuntimeTest() {
+  let immediateObserved = false;
+  setImmediate(() => { immediateObserved = true; });
+  await eventLoopYield();
+  assert.strictEqual(immediateObserved, true, 'cooperative yield must release the event loop to queued immediates');
+  console.log('v12.0.7.3.2 taxonomy/reporting/memory/event-loop integrity tests passed');
+})().catch(error => {
+  console.error(error && error.stack || error);
+  process.exitCode = 1;
+});
