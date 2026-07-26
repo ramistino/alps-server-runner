@@ -16,13 +16,13 @@ const {
   ARM_DEFS,
 } = prior;
 
-const INTEGRITY_PATCH_VERSION = 'v12.0.7.3-source-divergence-reporting-memory-integrity';
+const INTEGRITY_PATCH_VERSION = 'v12.0.7.3.1-canonical-null-materialization-hotfix';
 const PREVIOUS_INTEGRITY_PATCH_VERSION = prior.INTEGRITY_PATCH_VERSION;
 const CLASSIFICATION_ALGORITHM_VERSION = 'v12.0.7.3';
 const TAXONOMY_SCHEMA = 'alps.gen2.sourceDivergenceTaxonomy.v12073';
 const CLASSIFICATION_SCHEMA = 'alps.gen2.sourceDivergenceClassificationEvent.v12073';
 const PATCH_BOUNDARY_AT = '2026-07-25T18:24:51.000Z';
-const POLICY_STATE_SCHEMA_VERSION = 'v12073-canonical-policy-state-1';
+const POLICY_STATE_SCHEMA_VERSION = 'v12073-canonical-policy-state-1.1';
 const QUARANTINE_WATCH_THRESHOLD = 0.20;
 const QUARANTINE_WATCH_MIN_SCOPE_N = 30;
 const A2_LOW_MAGNITUDE_ATR_THRESHOLD = 0.05;
@@ -246,6 +246,38 @@ function shapeOf(value) {
   return typeof value;
 }
 
+function materializePolicyState(value) {
+  const undefinedPaths = [];
+  const seen = new WeakSet();
+  const visit = (current, pathValue) => {
+    if (current === undefined) {
+      undefinedPaths.push(pathValue);
+      return null;
+    }
+    if (current === null) return null;
+    const type = typeof current;
+    if (type !== 'object') return current;
+    if (current instanceof Date || current instanceof Map || current instanceof Set || current instanceof RegExp) return current;
+    if (seen.has(current)) throw new TypeError('POLICY_STATE_CYCLE_FORBIDDEN');
+    seen.add(current);
+    if (Array.isArray(current)) {
+      const out = current.map((item, index) => visit(item, `${pathValue}[${index}]`));
+      seen.delete(current);
+      return out;
+    }
+    const proto = Object.getPrototypeOf(current);
+    if (proto !== Object.prototype && proto !== null) {
+      seen.delete(current);
+      return current;
+    }
+    const out = {};
+    for (const key of Object.keys(current)) out[key] = visit(current[key], `${pathValue}.${key}`);
+    seen.delete(current);
+    return out;
+  };
+  return { policyState:visit(value, '$'), undefinedPaths };
+}
+
 function canonicalPolicyStateVector(policyState) {
   const canonical = canonicalizeValue(policyState);
   const bytes = stableStringify(canonical);
@@ -256,6 +288,15 @@ function canonicalPolicyStateVector(policyState) {
     canonicalPolicyStateHash:stableHash(canonical),
     policyStateShapeHash:stableHash(shape),
     canonical,
+  };
+}
+
+function canonicalPolicyStateVectorFromEngineState(policyState) {
+  const materialized = materializePolicyState(policyState);
+  return {
+    ...canonicalPolicyStateVector(materialized.policyState),
+    undefinedMaterializationCount:materialized.undefinedPaths.length,
+    undefinedMaterializationPaths:materialized.undefinedPaths,
   };
 }
 
@@ -623,6 +664,8 @@ class PolicyShadowEngine extends prior.PolicyShadowEngine {
       classifierDurationMs:0,
       classifierPeakHeapMb:0,
       classifierPeakRssMb:0,
+      policyStateUndefinedMaterializations:0,
+      policyStateUndefinedPaths:[],
     };
   }
 
@@ -754,7 +797,17 @@ class PolicyShadowEngine extends prior.PolicyShadowEngine {
         const armIds = unique([...Object.keys(outcome.arms), ...Object.keys(revisedArms)]);
         const equal = armIds.every(armId => {
           if (!outcome.arms[armId] || !revisedArms[armId]) return false;
-          return canonicalPolicyStateVector(outcome.arms[armId]).canonicalPolicyStateHash === canonicalPolicyStateVector(revisedArms[armId]).canonicalPolicyStateHash;
+          const authoritativeVector = canonicalPolicyStateVectorFromEngineState(outcome.arms[armId]);
+          const revisedVector = canonicalPolicyStateVectorFromEngineState(revisedArms[armId]);
+          const undefinedPaths = [...authoritativeVector.undefinedMaterializationPaths, ...revisedVector.undefinedMaterializationPaths];
+          this.reportingMetrics.policyStateUndefinedMaterializations += undefinedPaths.length;
+          if (undefinedPaths.length) {
+            this.reportingMetrics.policyStateUndefinedPaths = unique([
+              ...this.reportingMetrics.policyStateUndefinedPaths,
+              ...undefinedPaths,
+            ]).slice(0, 64);
+          }
+          return authoritativeVector.canonicalPolicyStateHash === revisedVector.canonicalPolicyStateHash;
         });
         if (!equal) {
           decisionChanged = true;
@@ -996,6 +1049,9 @@ class PolicyShadowEngine extends prior.PolicyShadowEngine {
       policyStateCanonicalization:{
         schemaVersion:POLICY_STATE_SCHEMA_VERSION,
         source:'FULL_POLICY_ARM_STATE_OBJECT_WITH_FROZEN_METADATA_EXCLUSIONS',
+        undefinedHandling:'ENGINE_BOUNDARY_MATERIALIZE_OWN_UNDEFINED_AS_EXPLICIT_NULL_STRICT_CANONICALIZER_REMAINS_FAIL_CLOSED',
+        undefinedMaterializationCount:Number(this.reportingMetrics.policyStateUndefinedMaterializations || 0),
+        undefinedMaterializationPaths:[...(this.reportingMetrics.policyStateUndefinedPaths || [])],
         metadataExclusionHash:stableHash([...POLICY_STATE_METADATA_EXCLUSIONS].sort()),
       },
     };
@@ -1033,7 +1089,9 @@ module.exports = {
   POLICY_STATE_SCHEMA_VERSION,
   QUARANTINE_WATCH_THRESHOLD,
   QUARANTINE_WATCH_MIN_SCOPE_N,
+  materializePolicyState,
   canonicalPolicyStateVector,
+  canonicalPolicyStateVectorFromEngineState,
   buildTaxonomySummary,
   rekeyComparisonRows,
   paginateRows,

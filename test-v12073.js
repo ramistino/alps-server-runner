@@ -6,7 +6,9 @@ const {
   TAXONOMY_HASH,
   POLICY_STATE_SCHEMA_VERSION,
   QUARANTINE_WATCH_THRESHOLD,
+  materializePolicyState,
   canonicalPolicyStateVector,
+  canonicalPolicyStateVectorFromEngineState,
   buildTaxonomySummary,
   rekeyComparisonRows,
   paginateRows,
@@ -73,6 +75,35 @@ function arm({ entered = false, status = 'PENDING', hold = 0, resultR = null } =
 
   assert.throws(() => canonicalPolicyStateVector({ entryStatus:undefined }), /UNDEFINED_FORBIDDEN/);
   assert.throws(() => canonicalPolicyStateVector({ resultR:NaN }), /NON_FINITE_NUMBER/);
+
+  const engineOptional = canonicalPolicyStateVectorFromEngineState({
+    entryStatus:'PENDING',
+    entry:undefined,
+    legs:{ R1:{ status:'OPEN', resultR:undefined } },
+  });
+  assert.strictEqual(engineOptional.canonical.entry, null, 'engine-boundary undefined must materialize as explicit null');
+  assert.strictEqual(engineOptional.canonical.legs.R1.resultR, null, 'nested engine-boundary undefined must materialize as explicit null');
+  assert.deepStrictEqual(engineOptional.undefinedMaterializationPaths, ['$.entry', '$.legs.R1.resultR']);
+
+  const explicitNull = canonicalPolicyStateVectorFromEngineState({
+    entryStatus:'PENDING',
+    entry:null,
+    legs:{ R1:{ status:'OPEN', resultR:null } },
+  });
+  assert.strictEqual(engineOptional.canonicalPolicyStateHash, explicitNull.canonicalPolicyStateHash, 'undefined materialization must match explicit null');
+
+  const newUndefinedField = canonicalPolicyStateVectorFromEngineState({
+    entryStatus:'PENDING',
+    entry:undefined,
+    newEconomicStateField:undefined,
+    legs:{ R1:{ status:'OPEN', resultR:undefined } },
+  });
+  assert.notStrictEqual(engineOptional.policyStateShapeHash, newUndefinedField.policyStateShapeHash, 'new undefined state field must remain visible in canonical shape');
+  assert.ok(newUndefinedField.undefinedMaterializationPaths.includes('$.newEconomicStateField'));
+
+  const materialized = materializePolicyState({ a:undefined, nested:{ b:undefined } });
+  assert.deepStrictEqual(materialized.policyState, { a:null, nested:{ b:null } });
+  assert.deepStrictEqual(materialized.undefinedPaths, ['$.a', '$.nested.b']);
 })();
 
 (function taxonomyTests() {
