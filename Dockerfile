@@ -1,6 +1,6 @@
 FROM node:22.16.0-bookworm-slim
 WORKDIR /app
-COPY package.json runner.js v1207-main.js policy-shadow-v12052.js policy-shadow-integrity-v12071.js policy-shadow-integrity-v12072.js v1202-bundle.js evidence-scoring-v1206.js test-v12043.js test-v12044.js test-v12044-1.js test-v12044-2.js test-v12044-persistence-ordering-race.js test-v12051.js test-v1206.js test-v1207.js test-v12071.js test-v12072.js /app/
+COPY package.json runner.js v1207-main.js policy-shadow-v12052.js policy-shadow-integrity-v12071.js policy-shadow-integrity-v12072.js policy-shadow-integrity-v12073.js v1202-bundle.js evidence-scoring-v1206.js test-v12043.js test-v12044.js test-v12044-1.js test-v12044-2.js test-v12044-persistence-ordering-race.js test-v12051.js test-v1206.js test-v1207.js test-v12071.js test-v12072.js test-v12073.js /app/
 RUN node --version && npm --version && npm run validate
 ENV HOST=0.0.0.0
 ENV PORT=8787
