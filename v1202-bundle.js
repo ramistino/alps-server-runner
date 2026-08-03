@@ -241,12 +241,18 @@ class SafeStorage {
   async readJson(file, fallback = null) {
     try { return JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) { return fallback; }
   }
-  async writeJsonAtomic(file, payload) {
+  async writeJsonAtomic(file, payload, { serialized = false } = {}) {
     this.assertV12Write(file);
     await fsp.mkdir(path.dirname(file), { recursive:true });
     const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
-    await fsp.writeFile(temp, JSON.stringify(payload, null, 2));
-    await fsp.rename(temp, file);
+    const text = serialized === true ? String(payload) : JSON.stringify(payload, null, 2);
+    try {
+      await fsp.writeFile(temp, text, 'utf8');
+      await fsp.rename(temp, file);
+    } catch (error) {
+      await fsp.unlink(temp).catch(() => {});
+      throw error;
+    }
   }
   async readNdjson(file) {
     const rows = [];
@@ -581,10 +587,40 @@ class PersistenceQueue {
     const revision = e.revision;
     if (e.pending) e.writesCoalesced += 1; // obsolete pending revision replaced by the newest snapshot
     const inheritedDurable = durable || (e.pending && e.pending.durable === true);
-    e.pending = { revision, snapshot:this.snapshot(state), durable:inheritedDurable };
+    e.pending = { revision, snapshot:this.snapshot(state), durable:inheritedDurable, serialized:false };
     if (e.retryTimer) { clearTimeout(e.retryTimer); e.retryTimer = null; }
     const done = new Promise(resolve => e.waiters.push({ revision, resolve }));
     this.drain(file, e);
+    return { revision, done };
+  }
+  enqueueSerializedJson(file, serialized, { durable = false } = {}) {
+    const e = this.entry(file);
+    e.revision += 1;
+    const revision = e.revision;
+    if (e.pending) e.writesCoalesced += 1;
+    const inheritedDurable = durable || (e.pending && e.pending.durable === true);
+    e.pending = {
+      revision,
+      snapshot:String(serialized),
+      durable:inheritedDurable,
+      serialized:true,
+    };
+    if (e.retryTimer) {
+      clearTimeout(e.retryTimer);
+      e.retryTimer = null;
+    }
+    const done = new Promise(resolve => e.waiters.push({ revision, resolve }));
+    this.drain(file, e);
+    return { revision, done };
+  }
+  enqueueAppendSerialized(file, lines, { durable = true } = {}) {
+    const e = this.appendEntry(file);
+    e.revision += 1;
+    const revision = e.revision;
+    const immutable = (Array.isArray(lines) ? lines : [lines]).map(line => String(line));
+    e.queue.push({ revision, lines:immutable, durable:durable === true });
+    const done = new Promise(resolve => e.waiters.push({ revision, resolve }));
+    this.drainAppend(file, e);
     return { revision, done };
   }
   resolveCommitted(e) {
@@ -605,7 +641,7 @@ class PersistenceQueue {
     e.writing = true;
     const job = e.pending; e.pending = null; // always the single latest snapshot
     e.writesStarted += 1;
-    this.storage.writeJsonAtomic(file, job.snapshot)
+    this.storage.writeJsonAtomic(file, job.snapshot, { serialized:job.serialized === true })
       .then(() => {
         e.committedRevision = Math.max(e.committedRevision, job.revision);
         e.lastCommittedAt = new Date().toISOString();

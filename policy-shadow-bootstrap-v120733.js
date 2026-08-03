@@ -9,7 +9,7 @@ const base = require('./policy-shadow-integrity-v120733');
 const v12072 = require('./policy-shadow-integrity-v12072');
 const originalLoad = Module._load;
 
-const MEMORY_FIX_VERSION = 'v12.0.7.3.3-m3-heap-retry-timer-lifecycle';
+const MEMORY_FIX_VERSION = 'v12.0.7.3.3-m4-bounded-persistence-snapshot';
 const TELEMETRY_LIMIT = 16;
 const HEAP_CHECK_BATCH = 16;
 const SOFT_HEAP_MB = 196;
@@ -40,7 +40,7 @@ function guards(engine) {
     productionHeapLimitMb:heapLimitMb,
     heapSoftLimitMb:Math.max(96, soft),
     heapHardLimitMb:Math.max(Math.max(96, soft) + 8, hard),
-    heapGuardMode:'STREAMING_CANONICAL_HASH_FRAME_RELEASE',
+    heapGuardMode:'STREAMING_CANONICAL_HASH_BOUNDED_PERSISTENCE_SNAPSHOT',
     heapGuardChecks:Number(value.heapGuardChecks || 0),
     heapSoftLimitCrossings:Number(value.heapSoftLimitCrossings || 0),
     heapHardLimitDeferrals:Number(value.heapHardLimitDeferrals || 0),

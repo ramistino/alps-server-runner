@@ -25,6 +25,7 @@ COPY package.json \
   test-v12073.js \
   test-v120733.js \
   test-v120733-heap-retry.js \
+  test-v120733-m4.js \
   /app/
 RUN node --version && npm --version && npm run validate
 ENV HOST=0.0.0.0

@@ -97,7 +97,7 @@ const proto = patched.PolicyShadowEngine.prototype;
 
     assert.strictEqual(
       patched.MEMORY_FIX_VERSION,
-      'v12.0.7.3.3-m3-heap-retry-timer-lifecycle',
+      'v12.0.7.3.3-m4-bounded-persistence-snapshot',
     );
 
     console.log(
