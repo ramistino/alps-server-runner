@@ -9,7 +9,7 @@ const base = require('./policy-shadow-integrity-v120733');
 const v12072 = require('./policy-shadow-integrity-v12072');
 const originalLoad = Module._load;
 
-const MEMORY_FIX_VERSION = 'v12.0.7.3.3-m1-memory-bounded-policy-shadow-catchup';
+const MEMORY_FIX_VERSION = 'v12.0.7.3.3-m2-resumable-heap-guard';
 const TELEMETRY_LIMIT = 16;
 const HEAP_CHECK_BATCH = 16;
 const SOFT_HEAP_MB = 196;
@@ -47,6 +47,9 @@ function guards(engine) {
     releasedSnapshotCacheCount:Number(value.releasedSnapshotCacheCount || 0),
     releasedWitnessFrameCount:Number(value.releasedWitnessFrameCount || 0),
     telemetryRecordLimit:TELEMETRY_LIMIT,
+    heapRetryScheduled:Boolean(value.heapRetryScheduled),
+    heapRetryCount:Number(value.heapRetryCount || 0),
+    heapRetryDelayMs:Number(value.heapRetryDelayMs || 0),
   });
   return value;
 }
@@ -258,26 +261,93 @@ class MemoryBoundedPolicyShadowEngine extends base.PolicyShadowEngine {
     return outcomes;
   }
 
+  scheduleHeapRetry(reason = 'heap-guard-retry') {
+    const guard = guards(this);
+    guard.heapRetryScheduled = true;
+    guard.heapRetryCount = Number(guard.heapRetryCount || 0) + 1;
+    const delayMs = Math.min(120000, 15000 * (2 ** Math.min(3, Math.max(0, guard.heapRetryCount - 1))));
+    guard.heapRetryDelayMs = delayMs;
+    guard.heapRetryScheduledAt = iso(this.now ? this.now() : Date.now());
+    if (this.heapGuardRetryTimer) return;
+    this.heapGuardRetryTimer = setTimeout(() => {
+      this.heapGuardRetryTimer = null;
+      guard.heapRetryScheduled = false;
+      if (this.inFlight) return this.scheduleHeapRetry(reason);
+      Promise.resolve(this.run(reason)).catch(error => {
+        this.state.lastError = String(error && error.stack || error).slice(0, 2400);
+      });
+    }, delayMs);
+    if (typeof this.heapGuardRetryTimer.unref === 'function') this.heapGuardRetryTimer.unref();
+  }
+
+  async settleHeapDeferral(reason, error) {
+    const completedAt = iso(this.now ? this.now() : Date.now());
+    this.inFlight = false;
+    this.pendingReason = null;
+    if (this.cooperativeYield && typeof this.cooperativeYield === 'object') {
+      Object.assign(this.cooperativeYield, {
+        inProgress:false,
+        phase:'HEAP_GUARD_DEFERRED_RETRY_PENDING',
+        runCompletedAt:completedAt,
+        lastYieldReason:'HEAP_GUARD_DEFERRED',
+        lastProgressAt:completedAt,
+      });
+    }
+    Object.assign(this.policyBoundaryTelemetry, {
+      currentRunId:null,
+      currentRunStartedAt:null,
+      lastErrorAt:null,
+      lastErrorRunId:null,
+      lastError:null,
+      lastRunOutcome:'DEFERRED_HEAP_GUARD',
+    });
+    this.state.status = 'POLICY_SHADOW_HEAP_GUARD_DEFERRED_RETRY_PENDING';
+    this.state.lastError = null;
+    this.state.lastRunCompletedAt = completedAt;
+    this.state.lastRunReason = reason;
+    this.state.policyBoundaryTelemetry = {
+      lastSuccessfulRunId:this.policyBoundaryTelemetry.lastSuccessfulRunId || null,
+      lastSuccessfulRunCompletedAt:this.policyBoundaryTelemetry.lastSuccessfulRunCompletedAt || null,
+      lastErrorAt:null,
+      lastErrorRunId:null,
+      lastError:null,
+      lastRunOutcome:'DEFERRED_HEAP_GUARD',
+    };
+    if (Array.isArray(this.currentWitnessClassifications)) this.currentWitnessClassifications.length = 0;
+    if (this.latestFullSnapshot) { this.latestFullSnapshot = null; guards(this).releasedSnapshotCacheCount += 1; }
+    await this.yieldForHealth('POLICY_SHADOW_HEAP_GUARD_SETTLED', {
+      phase:'HEAP_GUARD_DEFERRED_RETRY_PENDING',
+      reason,
+      error:error && error.message || null,
+    }).catch(() => {});
+    await this.persistState().catch(() => {});
+    this.scheduleHeapRetry('heap-guard-retry');
+    return this.view();
+  }
+
   async run(reason = 'scheduled') {
     if (!this.inFlight) {
       try { await checkHeap(this, `RUN_PREFLIGHT:${reason}`); }
       catch (error) {
-        if (error && error.code === 'POLICY_SHADOW_HEAP_GUARD_DEFERRED') {
-          Object.assign(this.policyBoundaryTelemetry, { currentRunId:null,currentRunStartedAt:null,lastErrorAt:null,lastErrorRunId:null,lastError:null,lastRunOutcome:'DEFERRED_HEAP_GUARD' });
-          this.state.lastError = null;
-          return this.view();
-        }
+        if (error && error.code === 'POLICY_SHADOW_HEAP_GUARD_DEFERRED') return this.settleHeapDeferral(reason, error);
         throw error;
       }
     }
-    try { return await base.PolicyShadowEngine.prototype.run.call(this, reason); }
-    catch (error) {
-      if (error && error.code === 'POLICY_SHADOW_HEAP_GUARD_DEFERRED') {
-        Object.assign(this.policyBoundaryTelemetry, { currentRunId:null,currentRunStartedAt:null,lastErrorAt:null,lastErrorRunId:null,lastError:null,lastRunOutcome:'DEFERRED_HEAP_GUARD' });
-        this.state.lastError = null;
-        return this.view();
+    try {
+      const result = await base.PolicyShadowEngine.prototype.run.call(this, reason);
+      const telemetry = this.policyBoundaryTelemetry || {};
+      if (telemetry.lastRunOutcome === 'SUCCESS') {
+        const guard = guards(this);
+        guard.heapRetryCount = 0;
+        guard.heapRetryScheduled = false;
+        guard.heapRetryDelayMs = 0;
       }
+      return result;
+    } catch (error) {
+      if (error && error.code === 'POLICY_SHADOW_HEAP_GUARD_DEFERRED') return this.settleHeapDeferral(reason, error);
       throw error;
+    } finally {
+      if ((this.policyBoundaryTelemetry || {}).lastRunOutcome === 'DEFERRED_HEAP_GUARD') this.inFlight = false;
     }
   }
 
