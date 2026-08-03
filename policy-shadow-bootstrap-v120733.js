@@ -9,7 +9,7 @@ const base = require('./policy-shadow-integrity-v120733');
 const v12072 = require('./policy-shadow-integrity-v12072');
 const originalLoad = Module._load;
 
-const MEMORY_FIX_VERSION = 'v12.0.7.3.3-m2-resumable-heap-guard';
+const MEMORY_FIX_VERSION = 'v12.0.7.3.3-m3-heap-retry-timer-lifecycle';
 const TELEMETRY_LIMIT = 16;
 const HEAP_CHECK_BATCH = 16;
 const SOFT_HEAP_MB = 196;
@@ -261,23 +261,48 @@ class MemoryBoundedPolicyShadowEngine extends base.PolicyShadowEngine {
     return outcomes;
   }
 
+  cancelHeapRetry() {
+    const guard = guards(this);
+    if (this.heapGuardRetryTimer) {
+      clearTimeout(this.heapGuardRetryTimer);
+      this.heapGuardRetryTimer = null;
+    }
+    guard.heapRetryScheduled = false;
+    guard.heapRetryCount = 0;
+    guard.heapRetryDelayMs = 0;
+    guard.heapRetryScheduledAt = null;
+  }
+
   scheduleHeapRetry(reason = 'heap-guard-retry') {
     const guard = guards(this);
+    if (this.heapGuardRetryTimer) {
+      guard.heapRetryScheduled = true;
+      return;
+    }
+
     guard.heapRetryScheduled = true;
     guard.heapRetryCount = Number(guard.heapRetryCount || 0) + 1;
-    const delayMs = Math.min(120000, 15000 * (2 ** Math.min(3, Math.max(0, guard.heapRetryCount - 1))));
+    const delayMs = Math.min(
+      120000,
+      15000 * (2 ** Math.min(3, Math.max(0, guard.heapRetryCount - 1))),
+    );
     guard.heapRetryDelayMs = delayMs;
     guard.heapRetryScheduledAt = iso(this.now ? this.now() : Date.now());
-    if (this.heapGuardRetryTimer) return;
+
     this.heapGuardRetryTimer = setTimeout(() => {
       this.heapGuardRetryTimer = null;
       guard.heapRetryScheduled = false;
+
       if (this.inFlight) return this.scheduleHeapRetry(reason);
+
       Promise.resolve(this.run(reason)).catch(error => {
         this.state.lastError = String(error && error.stack || error).slice(0, 2400);
       });
     }, delayMs);
-    if (typeof this.heapGuardRetryTimer.unref === 'function') this.heapGuardRetryTimer.unref();
+
+    if (typeof this.heapGuardRetryTimer.unref === 'function') {
+      this.heapGuardRetryTimer.unref();
+    }
   }
 
   async settleHeapDeferral(reason, error) {
@@ -337,10 +362,7 @@ class MemoryBoundedPolicyShadowEngine extends base.PolicyShadowEngine {
       const result = await base.PolicyShadowEngine.prototype.run.call(this, reason);
       const telemetry = this.policyBoundaryTelemetry || {};
       if (telemetry.lastRunOutcome === 'SUCCESS') {
-        const guard = guards(this);
-        guard.heapRetryCount = 0;
-        guard.heapRetryScheduled = false;
-        guard.heapRetryDelayMs = 0;
+        this.cancelHeapRetry();
       }
       return result;
     } catch (error) {
